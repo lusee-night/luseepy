@@ -2,7 +2,7 @@
 # A set of utilities to perform calendar calculations
 #
 import numpy as np
-
+from scipy.optimize import minimize_scalar
 import astropy as ap
 import astropy.coordinates as coord
 from astropy.time import Time
@@ -18,17 +18,16 @@ def get_sun_alt(loc, times):
         for a set of times """
 
     loc = lunarsky.MoonLocation.from_selenodetic (180.,0)
-    #altaz = lunarsky.LunarTopo(location=loc, obstime=lt)
-    #sun = coord.get_sun(lt)
-    #print(sun[0].transform_to(altaz))
 
+
+    # how I think it should be
+    coord.get_sun(times).transform_to(lunarsky.LunarTopo(location=loc, obstime=times))
     # This is really inefficient -- there should be a better way, but thing above crashes
 
     alts = [float(coord.get_sun(time_).transform_to(lunarsky.LunarTopo(location=loc, obstime=time_)).alt/u.deg)
                                       for time_ in times]
     return alts
     
-
 
 def get_lunar_nights (year=2025):
     """ 
@@ -52,45 +51,15 @@ def get_lunar_nights (year=2025):
     # now count transits and finetune them
     transits = []
     cvlast=0
-    print (" Fix this maximizer. You cannot bisect to maximum!!")
-    stop()
     for i in range(1,len(alts)-1):
         if ((alts[i]>alts[i-1]) and (alts[i]>alts[i+1])):
-            # we have a local maximum, let's do bisection to max
-            a = lt[i-1]
-            av = alts[i-1]
-            b = lt[i+1]
-            bv = alts[i+1]
-            #if  lt[i-1]>lt[i+1]:
-            #     a=lt[i-1]
-            #     av=alts[i-1]
-            #     b=lt[i]
-            #     bv=alts[i]
-            #else:
-            #     a=lt[i]
-            #     av=alts[i]
-            #     b=lt[i+1]
-            #     bv=alts[i+1]
-            print ('----------')
-            while True:
-                c=a+0.5*(b-a)
-                print (a,c,b)
-                cv = (get_sun_alt(loc,[c]))[0]
-                print (av,cv,bv)
-                assert(cv>min(av,bv))
-                assert(max(av,bv)<cv)
-                assert(b>a)
-                
-                if (b-a<1/(24*60)): ## get it to a minute
-                    break
-                if av<bv:
-                    a=c
-                    av=cv
-                else:
-                    b=c
-                    bv=cv
-            print (c,cv)
-            transits.append(c)
+            ## need to convert to a float func we can minimize
+            bracket_l = lt[i-1]
+            delta_t = lt[i+1]-lt[i-1]
+            objf = lambda t_: 90.-get_sun_alt(loc,[bracket_l + t_*delta_t])[0]
+            res=minimize_scalar (objf, bracket=(0,0.5,1.0), tol=1e-4)
+            assert(res.success)
+            transits.append(bracket_l + res.x*delta_t)
 
     result = []
     for st,en in zip(transits[:-1], transits[1:]):
