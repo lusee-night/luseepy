@@ -21,7 +21,7 @@ def get_sun_alt(loc, times):
 
 
     # how I think it should be
-    coord.get_sun(times).transform_to(lunarsky.LunarTopo(location=loc, obstime=times))
+    # coord.get_sun(times).transform_to(lunarsky.LunarTopo(location=loc, obstime=times))
     # This is really inefficient -- there should be a better way, but thing above crashes
 
     alts = [float(coord.get_sun(time_).transform_to(lunarsky.LunarTopo(location=loc, obstime=time_)).alt/u.deg)
