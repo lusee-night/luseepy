@@ -35,10 +35,18 @@ class LObservation:
 
         
     def get_track_solar (self, objid):
-        """ get a track in alt,az coordinates for an object.
+        """ get a track in alt,az coordinates for an object in the solar system
+            on the self.times time stamps.
             objid can be 'sun', 'moon' (as debug, should be alt=-90),
             or plantes id (jupyter, etc)
         """
-        
         raise NotImplemented
-    
+
+    def get_track_ra_dec (self, objid):
+        """ get a track in alt,az coordinates for an object with celecstial coordinates
+            in ra,dec on the self.times time stamps.
+            objid can be 'sun', 'moon' (as debug, should be alt=-90),
+            or plantes id (jupyter, etc)
+        """
+        raise NotImplemented
+
