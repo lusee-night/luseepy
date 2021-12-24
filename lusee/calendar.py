@@ -70,6 +70,7 @@ def get_lunar_nights (year=2025):
     
             
 def get_lunar_start_end(lunar_night=2500):
+    """ Returns noon-noon dates for the lunar date """
     yr = lunar_night // 100
     cycle = lunar_night % 100
     nights = get_lunar_nights(2000+yr)
