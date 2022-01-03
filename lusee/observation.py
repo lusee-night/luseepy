@@ -69,20 +69,36 @@ class LObservation:
             .transform_to(lunarsky.LunarTopo(location=self.loc, obstime=time_))
             for time_ in self.times ]
 
-        alt = [np.float(altaz_.alt/u.rad) for altaz_ in altaz]
-        az = [np.float(altaz_.az/u.rad) for altaz_ in altaz]
+        alt = np.array([np.float(altaz_.alt/u.rad) for altaz_ in altaz])
+        az = np.array([np.float(altaz_.az/u.rad) for altaz_ in altaz])
         track = (alt,az)
         self._cache[cache_key] = track
         return track
     
 
-
-        raise NotImplemented
-
-    def get_track_ra_dec(self, objid):
+    def get_track_ra_dec(self, ra, dec):
         """ get a track in alt,az coordinates for an object with celecstial coordinates
             in ra,dec on the self.times time stamps.
             objid can be 'sun', 'moon' (as debug, should be alt=-90),
             or plantes id (jupyter, etc)
         """
-        raise NotImplemented
+        cache_key = f"track_ra_dec_{ra}_{dec}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        if type(ra) == float:
+            c = coord.SkyCoord(ra=ra, dec=dec, frame='icrs', unit='deg')
+        elif type(ra) == str:
+            c = coord.SkyCoord(ra=ra, dec=dec, frame='icrs')
+
+            
+        altaz = [
+            c.transform_to(lunarsky.LunarTopo(location=self.loc, obstime=time_))
+            for time_ in self.times ]
+
+        alt = np.array([np.float(altaz_.alt/u.rad) for altaz_ in altaz])
+        az = np.array([np.float(altaz_.az/u.rad) for altaz_ in altaz])
+        track = (alt,az)
+        self._cache[cache_key] = track
+        return track
+
