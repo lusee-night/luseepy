@@ -11,10 +11,7 @@ import astropy.units as u
 from datetime import datetime
 from datetime import timedelta
 import lunarsky
-import shelve
-
-_cache = shelve.open(".lusee_cache", writeback=True)
-
+from .cache import db as _cache
 
 def get_sun_alt(loc, times):
     """ returns Sun altitude at a given Moon location 
