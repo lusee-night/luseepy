@@ -13,7 +13,7 @@ from datetime import timedelta
 import lunarsky
 from .cache import db as _cache
 
-def get_sun_alt(loc, times):
+def get_sun_alt(times):
     """ returns Sun altitude at a given Moon location 
         for a set of times """
 
@@ -54,12 +54,11 @@ def get_lunar_nights(year=2025):
     # is
 
     # let's do the rough resolution first
-    loc = lunarsky.MoonLocation.from_selenodetic(180.0, 0)
     t = np.arange(
         datetime(year, 1, 1, 0), datetime(year + 1, 1, 31, 0), timedelta(days=1)
     ).astype(datetime)
-    lt = LTime.Time(t, location=loc)
-    alts = get_sun_alt(loc, lt)
+    lt = LTime.Time(t)
+    alts = get_sun_alt(lt)
     # now count transits and finetune them
     transits = []
     cvlast = 0
@@ -68,7 +67,7 @@ def get_lunar_nights(year=2025):
             ## need to convert to a float func we can minimize
             bracket_l = lt[i - 1]
             delta_t = lt[i + 1] - lt[i - 1]
-            objf = lambda t_: 90.0 - get_sun_alt(loc, [bracket_l + t_ * delta_t])[0]
+            objf = lambda t_: 90.0 - get_sun_alt([bracket_l + t_ * delta_t])[0]
             res = minimize_scalar(objf, bracket=(0, 0.5, 1.0), tol=1e-4)
             assert res.success
             transits.append(bracket_l + res.x * delta_t)
@@ -87,7 +86,6 @@ def get_lunar_start_end(lunar_night=2500):
     yr = lunar_night // 100
     cycle = lunar_night % 100
     nights = get_lunar_nights(2000 + yr)
-    print(len(nights), cycle, yr)
     if cycle >= len(nights):
         raise IndexError
     return nights[cycle]

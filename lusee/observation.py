@@ -1,8 +1,8 @@
 import numpy as np
 import astropy as ap
 import astropy.time as apt
-from astropy.time import Time, TimeDelta
-import lunarsky.time as LTime
+from lunarsky.time import Time
+from astropy.time import TimeDelta
 from datetime import datetime
 from datetime import timedelta
 import astropy.units as u
@@ -27,11 +27,11 @@ class LObservation:
             deltaT specifies the time resolution of observations
 
         """
-        cache_key = f"LObservation_{lunar_day}_{lun_lat_deg}_{lun_long_deg}_{lun_height_m}_{deltaT_sec}" 
-        if cache_key not in _cache:
-            _cache[cache_key] = {}
-        self._cache= _cache[cache_key]
- 
+        self.master_key = f"LObservation_{lunar_day}_{lun_lat_deg}_{lun_long_deg}_{lun_height_m}_{deltaT_sec}" 
+        if self.master_key not in _cache:
+            _cache[self.master_key] = {}
+        self.cache = _cache[self.master_key]
+
         self.lunar_day = lunar_day
         self.lun_lat = lun_lat_deg / 180 * np.pi
         self.lun_long = lun_long_deg / 180 * np.pi
@@ -44,7 +44,7 @@ class LObservation:
         self.deltaT = TimeDelta(deltaT_sec * u.s)
         self.times = np.arange(
             self.time_start, self.time_end + self.deltaT, self.deltaT
-        ).astype(LTime.Time)
+        ).astype(Time)
 
         
 
@@ -55,15 +55,14 @@ class LObservation:
             or plantes id (jupyter, etc)
         """
         cache_key = f"track_solar_{objid}"
-        if cache_key in self._cache:
-            return self._cache[cache_key]
+        if cache_key in self.cache:
+            return self.cache[cache_key]
 
         valid_bodies = coord.solar_system_ephemeris.bodies
         if objid not in valid_bodies:
             print (f"{objid} not a valid body name. Use :",valid_bodies)
             raise ValueError
-        
-        #        with coord.solar_system_ephemeris.set('de432s'):
+
         altaz = [
              coord.get_body(objid, time_)
             .transform_to(lunarsky.LunarTopo(location=self.loc, obstime=time_))
@@ -72,7 +71,7 @@ class LObservation:
         alt = np.array([np.float(altaz_.alt/u.rad) for altaz_ in altaz])
         az = np.array([np.float(altaz_.az/u.rad) for altaz_ in altaz])
         track = (alt,az)
-        self._cache[cache_key] = track
+        self.cache[cache_key] = track
         return track
     
 
@@ -83,8 +82,8 @@ class LObservation:
             or plantes id (jupyter, etc)
         """
         cache_key = f"track_ra_dec_{ra}_{dec}"
-        if cache_key in self._cache:
-            return self._cache[cache_key]
+        if cache_key in self.cache:
+            return self.cache[cache_key]
 
         if type(ra) == float:
             c = coord.SkyCoord(ra=ra, dec=dec, frame='icrs', unit='deg')
@@ -99,6 +98,5 @@ class LObservation:
         alt = np.array([np.float(altaz_.alt/u.rad) for altaz_ in altaz])
         az = np.array([np.float(altaz_.az/u.rad) for altaz_ in altaz])
         track = (alt,az)
-        self._cache[cache_key] = track
+        self.cache[cache_key] = track
         return track
-
