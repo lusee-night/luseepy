@@ -11,7 +11,7 @@ on:
 jobs:
   hello-world:
     runs-on: ubuntu-latest
-    container: buddhasystem/lusee-night-luseepy-ci:tagname # ubuntu-latest
+    container: buddhasystem/lusee-night-luseepy-ci:0.1 # ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - run: ls -l
