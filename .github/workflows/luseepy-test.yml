@@ -14,4 +14,4 @@ jobs:
     container: buddhasystem/lusee-night-luseepy-ci:0.1 # ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - run: ls -l
+      - run: python tests/test_calendar.py
