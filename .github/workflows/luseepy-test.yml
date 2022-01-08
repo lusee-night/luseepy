@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 jobs:
   hello-world:
-    runs-on: ubuntu-latest
+    runs-on: buddhasystem/lusee-night-luseepy-ci:tagname # ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - run: ls -l
