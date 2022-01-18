@@ -13,6 +13,7 @@ from datetime import timedelta
 import lunarsky
 from .cache import db as _cache
 
+
 def get_sun_alt(times):
     """ returns Sun altitude at a given Moon location 
         for a set of times """
