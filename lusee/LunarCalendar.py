@@ -30,13 +30,14 @@ class LunarCalendar:
     def close_db(self):
         if self.db:
             self.db.close()
-            if self.cleanup: os.remove(self.cache)
+            if self.cleanup: os.remove(self.cache+'.db')
     
     #######################################
-    def __init__(self, cache='', cleanup=True):
+    def __init__(self, cache='', cleanup=True, verbose=False):
         self.db         = None
         self.cache      = cache
         self.cleanup    = cleanup
+        self.verbose    = verbose
 
         if(self.cache!=''):
             self.db = shelve.open(cache, writeback=True)
@@ -78,9 +79,12 @@ class LunarCalendar:
         '''
 
         # check if we use cache
-        if self.db:
+
+        if self.db!=None:
+            if self.verbose: print('Using cache file ', self.cache+'.db')
             cache_key = f"lunar_{year}"
             if cache_key in self.db:
+                if self.verbose: print('Cache key ', cache_key, 'found')
                 return self.db[cache_key]
 
         # we do this from a point at the center of far side, a matter of nigth cycle definition,
@@ -109,7 +113,7 @@ class LunarCalendar:
             if st < datetime(year + 1, 1, 1, 0):
                 result.append((st, en))
 
-        if self.db:
+        if self.db!=None:
             self.db[cache_key] = result
         
         return result
@@ -119,6 +123,9 @@ class LunarCalendar:
         '''
         Returns noon-noon dates for the lunar date
         '''
+        
+        if self.verbose:
+            print('Verbose mode activated')
         yr = lunar_night // 100
         cycle = lunar_night % 100
         
