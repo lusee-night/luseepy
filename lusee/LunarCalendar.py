@@ -34,7 +34,8 @@ class LunarCalendar:
                 try:
                     os.remove(self.cache)
                 except:
-                    if self.verbose: print(f'''Could not remove cache file "{self.cache}"''')
+                    if self.verbose:
+                        print(f'''Could not remove cache file "{self.cache}"''')
     
     #######################################
     def __init__(self, cache='', cleanup=True, verbose=False):
@@ -85,7 +86,8 @@ class LunarCalendar:
         # check if we use cache
 
         if self.db!=None:
-            if self.verbose: print(f'''Using cache file "{self.cache}"''')
+            if self.verbose:
+                print(f'''Using cache file "{self.cache}"''')
             cache_key = f"lunar_{year}"
             if cache_key in self.db:
                 if self.verbose: print(f'''Cache key "{cache_key}" found''')
