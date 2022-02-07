@@ -23,7 +23,7 @@ timer_start = time.time()
 timer_end = time.time()
 
 if verb:
-    print("Lunar start/end calculation time %5.2f seconds" % (timer_end - timer_start))
+    print("Lunar start/end calculation time: %5.2f seconds" % (timer_end - timer_start))
 
 start.precision, end.precision = (6, 6)
 
