@@ -8,5 +8,13 @@ to be close to the SDCC environment.
 
 # Build
 
-The build is supposed to be run from a folder one level above
-this one, in order to pick packages with less typing.
+It is suggested that the build is from a folder one level above
+this "docker" location. Under this assumption, this example will build
+a ```luseepy-jupyter``` image designed to be hosted on Docker Hub in the
+_buddhasystem_ account (hence the name of the tag used). Any tag naming
+conventions can be used as needed, of course.
+
+
+```bash
+docker build -f docker/Dockerfile-jupyter -t buddhasystem/lusee-night-luseepy-jupyter:0.1 .
+```
