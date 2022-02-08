@@ -1,47 +1,47 @@
-import numpy as np
-import astropy as ap
-import astropy.time as apt
-from lunarsky.time import Time
-from astropy.time import TimeDelta
-from datetime import datetime
-from datetime import timedelta
-import astropy.units as u
-import lunarsky
-import astropy.coordinates as coord
+import  numpy           as np
 
-# from . import calendar
+import  astropy         as ap
+import  astropy.time    as apt
+import  astropy.units   as u
+import  astropy.coordinates as coord
+from    astropy.time    import TimeDelta
 
-from .LunarCalendar import LunarCalendar
-# from .cache import db as _cache
 
-lc = LunarCalendar()
+
+import  lunarsky
+from    lunarsky.time   import Time
+from    lunarsky        import MoonLocation
+
+
+from    datetime        import datetime
+from    datetime        import timedelta
+
+
+from    .LunarCalendar  import LunarCalendar
+
 class LObservation:
     def __init__(
         self,
-        lunar_day=2500,
-        lun_lat_deg=-10.0,
-        lun_long_deg=180.0,
-        lun_height_m=0,
-        deltaT_sec=15 * 60,
+        lunar_day       =   2500,
+        lun_lat_deg     =   -10.0,
+        lun_long_deg    =   180.0,
+        lun_height_m    =   0,
+        deltaT_sec      =   15*60,
     ):
-        """ Initializes a basic Lunar Observation object for
-            an observatory in selenographic coordinates. 
-            deltaT specifies the time resolution of observations
-
         """
-        self.master_key = f"LObservation_{lunar_day}_{lun_lat_deg}_{lun_long_deg}_{lun_height_m}_{deltaT_sec}"
-#        if self.master_key not in _cache:
-#            _cache[self.master_key] = {}
-#        self.cache = _cache[self.master_key]
+        Initializes a basic Lunar Observation object for
+        an observatory in selenographic coordinates. 
+        deltaT specifies the time resolution of observations
+        """
+        self.lunar_day  = lunar_day
+        self.lun_lat    = lun_lat_deg   / 180*np.pi
+        self.lun_long   = lun_long_deg  / 180*np.pi
+        self.lun_heigh  = lun_height_m
 
-        self.lunar_day = lunar_day
-        self.lun_lat = lun_lat_deg / 180 * np.pi
-        self.lun_long = lun_long_deg / 180 * np.pi
-        self.lun_heigh = lun_height_m
-        self.loc = lunarsky.MoonLocation.from_selenodetic(lon=lun_long_deg, lat=lun_lat_deg, height=lun_height_m
-        )
+        self.loc = MoonLocation.from_selenodetic(lon=lun_long_deg, lat=lun_lat_deg, height=lun_height_m)
 
         lc = LunarCalendar()
+
         self.time_start, self.time_end = lc.get_lunar_start_end(lunar_day)
         self.deltaT = TimeDelta(deltaT_sec * u.s)
         self.times = np.arange(
