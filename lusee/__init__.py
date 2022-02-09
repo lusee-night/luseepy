@@ -7,5 +7,5 @@
 # gracefully e.g. optionally cleaned up, has db name capability etc.
 
 #from . import lunar_calendar as calendar
-#from .observation import LObservation
-#from .lunar_satellite import LSatellite, ObservedSatellite
+from .observation import LObservation
+from .lunar_satellite import LSatellite, ObservedSatellite
