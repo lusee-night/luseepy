@@ -21,7 +21,7 @@ git clone git@github.com:lusee-night/luseepy.git
 Next, source the `setup_env.sh` script inside luseepy dir:
 
 ```
-source lusee_evn.sh
+source lusee_env.sh
 ```
 
 Now you have 4 utility functions:
