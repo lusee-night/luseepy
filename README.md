@@ -11,7 +11,7 @@ To develop on your laptop, the easiest thing is to use the latest docker environ
 Please install docker and pull the image
 
 ```
-docker pull uddhasystem/lusee-night-luseepy-jupyter:0.1 
+docker pull buddhasystem/lusee-night-luseepy-jupyter:0.1 
 ```
 Next, checkout the lusee repo
 ```
