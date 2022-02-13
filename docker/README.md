@@ -18,3 +18,11 @@ conventions can be used as needed, of course.
 ```bash
 docker build -f docker/Dockerfile-jupyter -t buddhasystem/lusee-night-luseepy-jupyter:0.1 .
 ```
+
+# Misc dependencies
+
+```bash
+# For fitsio
+pip install wheel
+sudo apt-get install libbz2-dev
+```

@@ -1,12 +1,11 @@
 #
-# Basic Dockerfile for lusee-night/luuseepy, to establish
-# baseline testing before adding test elements to CI.
+# An example of a Dockerfile for lusee-night/luuseepy,
+# kept of illustration purposes only.
+#
+# Please refer to other Dockerfiles in this folder
+# for working examples.
 # 
 # This file is to be referenced when building the luseepy
-# images from a folder one level above. Example:
-#
-# sudo docker build -f docker/Dockerfile -t lusee:0.1 .
-# 
 
 FROM python:3.10.1-bullseye
 

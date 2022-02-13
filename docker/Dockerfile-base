@@ -7,17 +7,14 @@
 #
 # sudo docker build -f docker/Dockerfile-base -t MYTAGNAME .
 #
-# Example of a tag name --
-# buddhasystem/lusee-night-luseepy-base:0.1
-# 
+# Example utilizing the recommended tag name --
+#
 
 FROM python:3.10.1-bullseye
 
 WORKDIR /app
 
-COPY docker/requirements.txt requirements.txt
-RUN pip install -r requirements.txt
+COPY docker/requirements.txt requirements_updated.txt
 
 WORKDIR /user
 
-CMD ["python"]
