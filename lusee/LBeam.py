@@ -1,0 +1,78 @@
+#
+# LuSEE Beam
+#
+import fitsio
+import numpy as np
+import copy
+import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+class LBeam:
+    def __init__ (self, fname):
+        header = fitsio.read_header(fname)
+        fits = fitsio.FITS(fname,'r')
+        self.E = fits[0].read() + 1j*fits[1].read()
+        self.freq_start = header['freq_start']
+        self.freq_end = header['freq_end']
+        self.freq_step = header['freq_step']
+        self.phi_start = header['phi_start']
+        self.phi_end = header['phi_end']
+        self.phi_step = header['phi_step']
+        self.theta_start = header['theta_start']
+        self.theta_end = header['theta_end']
+        self.theta_step = header['theta_step']
+        self. Nfreq = int((self.freq_end - self.freq_start)/self.freq_step) + 1
+        self. Ntheta = int((self.theta_end - self.theta_start)/self.theta_step) + 1
+        self. Nphi = int((self.phi_end - self.phi_start)/self.phi_step) + 1
+        self.freq = np.linspace(self.freq_start, self.freq_end,self.Nfreq)
+        self.theta_deg = np.linspace(self.theta_start, self.theta_end,self.Ntheta)
+        self.phi_deg = np.linspace(self.phi_start, self.phi_end,self.Nphi)
+        self.theta = self.theta_deg/180*np.pi
+        self.phi = self.phi_deg/180*np.pi
+        self.direction= np.array([np.sin(self.theta[None,:])*np.cos(self.phi[:,None]),
+                     np.sin(self.theta[None,:])*np.sin(self.phi[:,None]),
+                     np.cos(self.theta[None,:])*np.ones(self.Nphi)[:,None]]).T
+    
+    def rotate(self,deg):
+        assert (deg in [45,-45,90,-90,135,-135,270,-270,180,-180])
+        rad = deg/180*np.pi
+        cosrad = np.cos(rad)
+        sinrad = np.sin(rad)
+        assert (deg%self.phi_step==0)
+        m = int(deg // self.phi_step)
+        E = np.concatenate ((self.E[:,:,m:,:],self.E[:,:,1:m+1,:]),axis=2)
+        rotmat = np.array(([[cosrad, sinrad, 0],[-sinrad,cosrad,0],[0,0,1]]))
+        E = np.einsum('fabj,ij->fabi',E,rotmat)
+        return self.copy (E=E)
+     
+    def flip_over_yz(self):
+        m = int(90 // self.phi_step)
+        n = int(180 // self.phi_step)
+        o = int(270 // self.phi_step)
+        E = np.concatenate ((self.E[:,:,n:0:-1,:],self.E[:,:,self.Nphi:n-1:-1,:]),axis=2)
+        E[:,:,:,0]*=-1 ## X flips over
+        return self.copy (E=E)
+
+    def power(self):
+        P = np.sum(np.abs(self.E**2),axis=3)
+        return P
+
+    def copy(self,E=None):
+        ret = copy.deepcopy(self)
+        if E is not None:
+            ret.E = E
+        return ret
+
+    
+    def plotE(self, freqndx, toplot = None, noabs=False):
+        plt.figure(figsize=(15,10))
+        for i in range(3):
+            plt.subplot(1,3,i+1)
+            ax = plt.gca()
+            plt.title ('XYZ'[i])
+            toshow = toplot if toplot is not None else self.E
+            toshow = np.real(toshow[freqndx,:,:,i]) if noabs else np.abs(toshow[freqndx,:,:,i]) 
+            im=ax.imshow(toshow,interpolation='nearest',extent=[0,360,180,0],origin='upper')
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="5%", pad=0.05)
+            plt.colorbar(im, cax=cax)
