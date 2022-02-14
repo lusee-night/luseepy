@@ -14,7 +14,8 @@ FROM python:3.10.1-bullseye
 
 WORKDIR /app
 
-COPY docker/requirements.txt requirements_updated.txt
+COPY docker/requirements_updated.txt requirements.txt
+RUN pip install -r requirements.txt
 
 WORKDIR /user
 
