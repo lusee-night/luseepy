@@ -6,6 +6,54 @@ import numpy as np
 import copy
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+from scipy.special import sph_harm
+import healpy as hp
+
+def grid2healpix_alm(theta,phi, img, lmax):
+    dphi = phi[1]-phi[0]
+    dtheta = theta[1]-theta[0]
+    img_flat = img.flatten()
+    dA_theta = np.sin(theta)*dtheta*dphi
+    #alm = np.zeros((lmax,lmax),complex)
+    ell = np.arange(lmax)
+    theta_list, phi_list = np.meshgrid(theta,2*np.pi-phi)
+    mmax = lmax
+    alm = []
+    ell = []
+    emm = []
+    for m in range(lmax):
+        for l in range(m,lmax):        
+            harm = sph_harm (m,l, phi_list, theta_list) #yes idiotic convention
+            assert(not np.any(np.isnan(harm)))
+            alm.append((img*harm.T*dA_theta[:,None]).sum())
+            ell.append(ell)
+            emm.append(emm)
+    alm = np.array(alm)
+
+def grid2healpix(theta,phi, img, lmax, Nside):
+    alm,_,_ = grid2healpix_alm(theta,phiu,img,lmax)
+    return hp.sphtfunc.alm2map (alm,Nside)
+
+
+def grid2healpix(theta,phi,img, lmax, Nside):
+    dphi = phi[1]-phi[0]
+    dtheta = theta[1]-theta[0]
+    img_flat = img.flatten()
+    dA_theta = np.sin(theta)*dtheta*dphi
+    #alm = np.zeros((lmax,lmax),complex)
+    ell = np.arange(lmax)
+    theta_list, phi_list = np.meshgrid(theta,2*np.pi-phi)
+    mmax = lmax
+    alm = []
+    for m in range(lmax):
+        for l in range(m,lmax):        
+            harm = sph_harm (m,l, phi_list, theta_list) #yes idiotic convention
+            assert(not np.any(np.isnan(harm)))
+            alm.append((img*harm.T*dA_theta[:,None]).sum())
+    alm = np.array(alm)
+    return hp.sphtfunc.alm2map (alm,Nside)
+
+
 
 class LBeam:
     def __init__ (self, fname):
@@ -54,9 +102,21 @@ class LBeam:
         return self.copy (E=E)
 
     def power(self):
+        """ return power in the beam """
         P = np.sum(np.abs(self.E**2),axis=3)
         return P
 
+    def power_hp(self, ellmax, Nside, freq_ndx=None):
+        """ returns healpix rendering of the power """
+        P = self.power()
+        take_zero = False
+        
+        flist = range(self.Nfreq) if freq_ndx is None else np.atleast_1d(freq_ndx)
+        result =  [grid2healpix(self.theta,self.phi[:-1], P[i,:,:-1], ellmax, Nside) for i in flist]
+        if type(freq_ndx)==int:
+            result = result[0]
+        return result
+    
     def copy(self,E=None):
         ret = copy.deepcopy(self)
         if E is not None:
