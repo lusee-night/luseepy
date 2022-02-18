@@ -32,6 +32,13 @@ class LObservation:
         Initializes a basic Lunar Observation object for
         an observatory in selenographic coordinates. 
         deltaT specifies the time resolution of observations
+
+        lunar day can be specified as:
+           int = lunar day as per LunarCalendar
+           "CY##" or "CY####"  = full calendar year 1/1 to 12/31
+           "FY##" or "FY####"  = full fiscale year  10/1 to 9/30
+           "UTC to UTC", i.e. '2025-02-01 13:00:00 to 2025-04-01 16:00:00'
+
         """
         self.lunar_day  = lunar_day
         self.lun_lat    = lun_lat_deg   / 180*np.pi
@@ -40,9 +47,33 @@ class LObservation:
 
         self.loc = MoonLocation.from_selenodetic(lon=lun_long_deg, lat=lun_lat_deg, height=lun_height_m)
 
-        lc = LunarCalendar()
 
-        self.time_start, self.time_end = lc.get_lunar_start_end(lunar_day)
+        if type(lunar_day) == int:
+            lc = LunarCalendar()
+            self.time_start, self.time_end = lc.get_lunar_start_end(lunar_day)
+        else:
+            assert(type(lunar_day)==str)
+            ## we allow two possible syntaxes
+            if lunar_day[0:2]=='CY':
+                year = int(lunar_day[2:])
+                if year<100:
+                    year+=2000
+                self.time_start = Time(datetime(year, 1, 1, 1))
+                self.time_end = Time(datetime(year + 1, 1, 1))
+            elif lunar_day[0:2]=='FY':
+                year = int(lunar_day[2:])
+                if year<100:
+                    year+=2000
+                self.time_start = Time(datetime(year-1, 10, 1))
+                self.time_end = Time(datetime(year , 10, 1))
+            elif " to " in lunar_day:
+                start, end = lunar_day.split(" to ")
+                self.time_start = Time(start)
+                self.time_end =  Time(end)
+            else:
+                raise NotImplementedError
+                    
+
         self.deltaT = TimeDelta(deltaT_sec * u.s)
         self.times = np.arange(
             self.time_start, self.time_end + self.deltaT, self.deltaT
