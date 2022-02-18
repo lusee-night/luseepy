@@ -2,8 +2,16 @@
 ## About
 A set of python utilities for performing various LuSEE Night related calculations.
 
-## Packaging
-Currently in the process of setting up packaging for PyPi, please stay tuned.
+## Docker
+We build images for "vanilla" luseepy and also for Jupyter notebooks, based on same.
+
+ARES and PERSES are being added and are in the process of testing. These dependencies
+need to be set for the PERSES to load. SymPy was added to the environment,
+and ```pylinex``` was checked out of GitHub.
+
+```bash
+/home/maxim/projects/lusee-night/distpy/:/home/maxim/projects/lusee-night/ares:/home/maxim/projects/lusee-night/pylinex
+```
 
 ## Developing
 
@@ -39,6 +47,4 @@ To start jupyter, simply say
 ljupyter
 ```
 and then connect to the address given in the terminal output.
-
-
 
