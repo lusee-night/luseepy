@@ -9,6 +9,8 @@ ARES and PERSES are being added and are in the process of testing. These depende
 need to be set for the PERSES to load. SymPy was added to the environment,
 and ```pylinex``` was checked out of GitHub.
 
+Example of the provisional setup, will automate later:
+
 ```bash
 /home/maxim/projects/lusee-night/distpy/:/home/maxim/projects/lusee-night/ares:/home/maxim/projects/lusee-night/pylinex
 ```
