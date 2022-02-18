@@ -8,12 +8,15 @@
 # sudo docker build -f docker/Dockerfile -t lusee:0.1 .
 # 
 
-FROM python:3.10.1-bullseye
+FROM buddhasystem/lusee-night-luseepy-base:0.1
+
+# We build on top of the newly updated base, the original
+# one was simply adding stuff to:
+# FROM python:3.10.1-bullseye
 
 WORKDIR /app
 
-COPY docker/requirements.txt requirements.txt
-RUN pip install -r requirements.txt
+
 RUN pip install jupyterlab
 
 COPY lusee lusee
@@ -21,3 +24,7 @@ COPY tests tests
 COPY notebooks notebooks/
 
 CMD ["python"]
+
+# Retired since we are now building on "base"
+# COPY docker/requirements.txt requirements.txt
+# RUN pip install -r requirements.txt
