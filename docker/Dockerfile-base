@@ -1,30 +1,20 @@
 #
-# Basic Dockerfile used to build a Debian image
-# containing the packages required by lusee-night/luseepy.
-# 
-# This file is to be referenced when building the luseepy
-# images from a folder one level above. Example:
+# Adding layers to the "foundation" image
 #
-# sudo docker build -f docker/Dockerfile-base -t MYTAGNAME .
+# -----
+# ARES is not pip-installable
+# This will clone the master but won't be necessarily reproducible:
+# RUN git clone https://github.com/mirochaj/ares.git && cd ares && python setup.py install
 #
-# Example utilizing the recommended tag name --
-#
+# So we are using "ARG" to define its tag, download and set it up
 
-FROM python:3.10.1-bullseye
+FROM buddhasystem/lusee-night-foundation:0.1
+ARG ARES_TAG=0.7
 
 WORKDIR /app
+RUN wget https://github.com/mirochaj/ares/archive/refs/tags/v${ARES_TAG}.zip && unzip v${ARES_TAG}.zip && cd ares-${ARES_TAG} && python setup.py install
 
-# We may have a few versions of requirements.
-# Reference will be given by the name, to simplify
-# experiments with configuration.
-
-COPY docker/requirements_updated.txt requirements.txt
-RUN pip install -r requirements.txt
-
-# ARES is not pip-installable
-RUN git clone https://github.com/mirochaj/ares.git && cd ares && python setup.py install
-
-ENV PYTHONPATH "/app/ares"
+ENV PYTHONPATH "/app/ares-${ARES_TAG}"
 
 WORKDIR /user
 

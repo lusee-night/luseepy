@@ -1,0 +1,23 @@
+#
+# Basic Dockerfile used to build a Debian image
+# containing the packages required by lusee-night/luseepy.
+# 
+# This file is to be referenced when building the luseepy
+# images from a folder one level above. Example:
+#
+# sudo docker build -f docker/Dockerfile-myfile -t MYTAGNAME .
+#
+
+FROM python:3.10.1-bullseye
+
+WORKDIR /app
+
+# We may have a few versions of requirements.
+# Reference will be given by the name, to simplify
+# experiments with configuration.
+
+COPY docker/requirements_updated.txt requirements.txt
+RUN pip install -r requirements.txt
+
+WORKDIR /user
+
