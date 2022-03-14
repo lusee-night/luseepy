@@ -6,7 +6,7 @@ from scipy.interpolate import interp1d
 import astropy.constants as ac
 import astropy.units as u
 from scipy.spatial.transform import Rotation as R
-from lunarsky import LunarTopo, MoonLocation, SkyCoord
+from lunarsky import MCMF, SkyCoord, LunarTopo
 
 
 class LSatellite:
@@ -76,17 +76,14 @@ class ObservedSatellite:
         self.observation = observation
         self.satelite = satellite
         self.posxyz = satellite.predict_position_mcmf(observation.times)
-        self.satMoonLoc = MoonLocation.from_selenocentric(
-            self.posxyz[:, 0], self.posxyz[:, 1], self.posxyz[:, 2], unit=u.km
-        )
-        self.sky_coords = SkyCoord(self.satMoonLoc.mcmf)
+        self.sky_coords = SkyCoord(MCMF(*(self.posxyz.T)))
         self.satpos = self.sky_coords.transform_to(LunarTopo(location=observation.loc))
 
     def alt_rad(self):
-        return np.array(self.satpos.alt).astype(float)/180.*np.pi
+        return np.array(self.satpos.alt).astype(float) / 180.0 * np.pi
 
     def az_rad(self):
-        return np.array(self.satpos.az).astype(float)/180.*np.pi
+        return np.array(self.satpos.az).astype(float) / 180.0 * np.pi
 
     def dist_km(self):
         return np.array(self.satpos.distance / u.km).astype(float)
