@@ -16,8 +16,10 @@ WORKDIR /app
 # Reference will be given by the name, to simplify
 # experiments with configuration.
 
-COPY docker/requirements_updated.txt requirements.txt
+COPY docker/requirements_fresh.txt requirements.txt
 RUN pip install -r requirements.txt
+
+ADD .astropy /root/.astropy
 
 WORKDIR /user
 
