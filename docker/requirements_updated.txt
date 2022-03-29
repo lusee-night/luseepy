@@ -18,3 +18,4 @@ lunarsky==0.1.2
 healpy==1.15.2
 fitsio==1.1.7
 sympy==1.9
+psutil==5.9.0
