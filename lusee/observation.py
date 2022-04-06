@@ -5,12 +5,14 @@ import  astropy.time    as apt
 import  astropy.units   as u
 import  astropy.coordinates as coord
 from    astropy.time    import TimeDelta
-
+from astropy.coordinates.builtin_frames import icrs
 
 
 import  lunarsky
 from    lunarsky.time   import Time
 from    lunarsky        import MoonLocation
+from    lunarsky        import SkyCoord
+from    lunarsky        import LunarTopo
 
 
 from    datetime        import datetime
@@ -107,24 +109,25 @@ class LObservation:
 #        self.cache[cache_key] = track
         return track
 
-    def get_track_ra_dec(self, ra, dec):
+    def get_track_ra_dec(self, ra, dec, times= None):
         """ get a track in alt,az coordinates for an object with celecstial coordinates
             in ra,dec on the self.times time stamps.
-            objid can be 'sun', 'moon' (as debug, should be alt=-90),
-            or plantes id (jupyter, etc)
+            ra,dec are in degrees
         """
 #        cache_key = f"track_ra_dec_{ra}_{dec}"
 #        if cache_key in self.cache:
 #            return self.cache[cache_key]
 
+        if times == None:
+            times = self.times
         if type(ra) == float:
-            c = coord.SkyCoord(ra=ra, dec=dec, frame="icrs", unit="deg")
+            c = SkyCoord(ra=ra, dec=dec, frame="icrs", unit="deg")
         elif type(ra) == str:
-            c = coord.SkyCoord(ra=ra, dec=dec, frame="icrs")
+            c = SkyCoord(ra=ra, dec=dec, frame="icrs")
 
         altaz = [
             c.transform_to(lunarsky.LunarTopo(location=self.loc, obstime=time_))
-            for time_ in self.times
+            for time_ in times
         ]
 
         alt = np.array([np.float(altaz_.alt / u.rad) for altaz_ in altaz])
@@ -132,3 +135,36 @@ class LObservation:
         track = (alt, az)
 #           self.cache[cache_key] = track
         return track
+
+
+    def get_ra_dec_from_alt_az (self, alt, az, times = None):
+        """ get a track in ra_dec given alt, az.
+            alt, az are astro convention (from N towards E)
+            returns ra dec in *radians*
+        """
+
+        if times is None:
+            times = self.times
+        icrs = [LunarTopo(alt = alt*u.rad, az = az*u.rad, obstime = time_, 
+                 location = self.loc).transform_to(coord.ICRS()) for time_ in times]
+        
+        ra = np.array([float(x.ra/u.rad) for x in icrs])
+        dec = np.array([float(x.dec/u.rad) for x in icrs])
+        return ra, dec
+
+    def get_l_b_from_alt_az (self, alt, az, times = None):
+        """ get a track in l b given alt, az.
+            alt, az are astro convention (from N towards E)
+            returns ra dec in *radians*
+        """
+
+        if times is None:
+            times = self.times
+        galactic = [LunarTopo(alt = alt*u.rad, az = az*u.rad, obstime = time_, 
+                 location = self.loc).transform_to(coord.Galactic()) for time_ in times]
+        
+        l = np.array([float(x.l/u.rad) for x in galactic])
+        b = np.array([float(x.b/u.rad) for x in galactic])
+        return l,b
+
+        

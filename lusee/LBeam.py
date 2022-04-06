@@ -19,38 +19,16 @@ def grid2healpix_alm(theta,phi, img, lmax):
     theta_list, phi_list = np.meshgrid(theta,2*np.pi-phi)
     mmax = lmax
     alm = []
-    ell = []
-    emm = []
     for m in range(lmax):
         for l in range(m,lmax):        
             harm = sph_harm (m,l, phi_list, theta_list) #yes idiotic convention
             assert(not np.any(np.isnan(harm)))
             alm.append((img*harm.T*dA_theta[:,None]).sum())
-            ell.append(ell)
-            emm.append(emm)
     alm = np.array(alm)
+    return alm
 
 def grid2healpix(theta,phi, img, lmax, Nside):
-    alm,_,_ = grid2healpix_alm(theta,phiu,img,lmax)
-    return hp.sphtfunc.alm2map (alm,Nside)
-
-
-def grid2healpix(theta,phi,img, lmax, Nside):
-    dphi = phi[1]-phi[0]
-    dtheta = theta[1]-theta[0]
-    img_flat = img.flatten()
-    dA_theta = np.sin(theta)*dtheta*dphi
-    #alm = np.zeros((lmax,lmax),complex)
-    ell = np.arange(lmax)
-    theta_list, phi_list = np.meshgrid(theta,2*np.pi-phi)
-    mmax = lmax
-    alm = []
-    for m in range(lmax):
-        for l in range(m,lmax):        
-            harm = sph_harm (m,l, phi_list, theta_list) #yes idiotic convention
-            assert(not np.any(np.isnan(harm)))
-            alm.append((img*harm.T*dA_theta[:,None]).sum())
-    alm = np.array(alm)
+    alm,_,_ = grid2healpix_alm(theta,phi,img,lmax)
     return hp.sphtfunc.alm2map (alm,Nside)
 
 
@@ -90,7 +68,6 @@ class LBeam:
         sinrad = np.sin(rad)
         assert (deg%self.phi_step==0)
         m = int(deg // self.phi_step)
-        print (m,self.E.shape,'X')
         if (m<0):
             E = np.concatenate ((self.E[:,:,m-1:,:],self.E[:,:,1:m,:]),axis=2)
         else:
@@ -115,9 +92,17 @@ class LBeam:
         P = np.sum(np.abs(self.E**2),axis=3)
         return P
 
-    def power_hp(self, ellmax, Nside, freq_ndx=None):
+    def cross_power(self, other):
+        """ return power in the beam """
+        xP = np.sum(self.E*np.conj(other.E),axis=3)
+        return xP
+
+    
+    def power_hp(self, ellmax, Nside, freq_ndx=None, theta_tapr=None):
         """ returns healpix rendering of the power """
         P = self.power()
+        if tapr is not None:
+            P *= theta_tapr[None,:,None]
         take_zero = False
         
         flist = range(self.Nfreq) if freq_ndx is None else np.atleast_1d(freq_ndx)
