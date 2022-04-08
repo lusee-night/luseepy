@@ -4,7 +4,7 @@ import numpy  as np
 import healpy as hp
 import pickle
 
-O=lusee.LObservation('2025-02-01 13:00:00 to 2025-03-01 13:00:00',deltaT_sec=24*3600)
+O=lusee.LObservation('2025-02-01 13:00:00 to 2025-03-01 13:00:00',deltaT_sec=24*3600, lun_lat_deg=0.0)
 pickle.dump(O,open("obs.pickle","wb"))
 
 O=pickle.load(open("obs.pickle","rb"))
@@ -36,6 +36,7 @@ class GalCenter:
         self.Nside = Nside
         self.Npix = Nside**2 * 12
         theta,phi = hp.pix2ang(self.Nside,np.arange(self.Npix))
+        phi[phi>np.pi]-=2*np.pi ## let's have a nice phi around phi=0.
         Tmap = np.exp(-(phi)**2/0.1-(theta-np.pi/2)**2/0.1)
         self.mapalm = hp.map2alm(T*Tmap)
         self.frame = "galactic"
@@ -45,13 +46,13 @@ class GalCenter:
 
     
 #sky = ConstSkyAbove(16, 200)
-sky = GalCenter(16, 1e4)
+sky = GalCenter(32, 1e4)
 
 print ("Setting up object")
-#S = lusee.Simulator (O,beams, sky, freq_ndx=[0,1],combinations=[(0,0),(0,2)])
-#pickle.dump(S,open("Sim.pickle","wb"))
+S = lusee.Simulator (O,beams, sky, freq_ndx=[0,1,2],combinations=[(0,0),(0,2),(1,1),(1,3)])
+pickle.dump(S,open("Sim.pickle","wb"))
 S=pickle.load(open("Sim.pickle","rb"))
 print ("Simulating")
 WF = S.simulate(times=O.times)
-print (WF.shape)
-print (WF[:,0,0],len(WF[:,0,0]))
+for time,res in zip(O.times, WF):
+    print (time, np.real(res[:,0]))

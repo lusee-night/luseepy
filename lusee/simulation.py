@@ -1,5 +1,5 @@
 from .observation import LObservation
-from .LBeam import LBeam, grid2healpix_alm
+from .LBeam import LBeam, grid2healpix_alm_fast
 import numpy as np
 import healpy as hp
 
@@ -53,7 +53,7 @@ class Simulator:
         bomega = []
         for b in beams:
             P = b.power()[self.freq_ndx,:,:]
-            beamnorm =  np.array([grid2healpix_alm(b.theta,b.phi[:-1], np.real(P[fi,:,:-1]),
+            beamnorm =  np.array([grid2healpix_alm_fast(b.theta,b.phi[:-1], np.real(P[fi,:,:-1]),
                                                    lmax=1)[0]/np.sqrt(4*np.pi) for fi in self.freq_ndx])
             bomega.append(np.real(beamnorm))
 
@@ -65,16 +65,16 @@ class Simulator:
             beam = xP*tapr[None,:,None]/norm[:,None,None]
             ground = xP*gtapr[None,:,None]/norm[:,None,None]
             ## now need to transfrom this to healpy
-            beamreal =  np.array([grid2healpix_alm(bi.theta,bi.phi[:-1], np.real(beam[fi,:,:-1]),
+            beamreal =  np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.real(beam[fi,:,:-1]),
                                       self.lmax) for fi in self.freq_ndx])
             #groundPowerReal =  np.real(1-beamreal[:,0]/np.sqrt(4*np.pi))
-            groundPowerReal = np.array([np.real(grid2healpix_alm(bi.theta,bi.phi[:-1], np.real(ground[fi,:,:-1]),
+            groundPowerReal = np.array([np.real(grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.real(ground[fi,:,:-1]),
                                                          1)[0])/np.sqrt(4*np.pi) for fi in self.freq_ndx])
 
             if i!=j:
-                beamimag = np.array([grid2healpix_alm(bi.theta,bi.phi[:-1], np.imag(beam[fi,:,:-1]),
+                beamimag = np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(beam[fi,:,:-1]),
                                          self.lmax) for fi in self.freq_ndx])
-                groundPowerImag = np.array([np.real(grid2healpix_alm(bi.theta,bi.phi[:-1], np.imag(ground[fi,:,:-1]),
+                groundPowerImag = np.array([np.real(grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(ground[fi,:,:-1]),
                                                          1)[0]/np.sqrt(4*np.pi)) for fi in self.freq_ndx])
 
             else:
@@ -93,6 +93,7 @@ class Simulator:
             do_rot = True
             lzl,bzl = self.obs.get_l_b_from_alt_az(np.pi/2,0., times)
             lyl,byl = self.obs.get_l_b_from_alt_az(0.,0., times)  ## astronomical azimuth = 0 = N = our y coordinate
+
         elif self.sky_model.frame=="MCMF":
             do_rot = False
         else:
@@ -103,11 +104,10 @@ class Simulator:
             sky = self.sky_model.get_alm (self.freq_ndx)
             if do_rot:
                 lz,bz,ly,by = lzl[ti],bzl[ti],lyl[ti],byl[ti]
-                print (lz,bz,ly,by,'<')
-                zhat = np.array([np.sin(bz)*np.cos(lz), np.sin(bz)*np.sin(lz),np.cos(bz)])
-                yhat = np.array([np.sin(by)*np.cos(ly), np.sin(by)*np.sin(ly),np.cos(by)])
+                zhat = np.array([np.cos(bz)*np.cos(lz), np.cos(bz)*np.sin(lz),np.sin(bz)])
+                yhat = np.array([np.cos(by)*np.cos(ly), np.cos(by)*np.sin(ly),np.sin(by)])
                 xhat = np.cross(yhat,zhat)
-                print (np.dot(zhat,zhat),np.dot(zhat,yhat),np.dot(yhat,yhat),'X',yhat*zhat)
+                assert(np.abs(np.dot(zhat,yhat))<1e-10)
                 R = np.array([xhat,yhat,zhat]).T
                 a,b,g = rot2eul(R)
                 rot = hp.rotator.Rotator(rot=(g,-b,a),deg=False,eulertype='XYZ',inv=False)

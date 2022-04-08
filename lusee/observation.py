@@ -162,7 +162,6 @@ class LObservation:
             times = self.times
         galactic = [LunarTopo(alt = alt*u.rad, az = az*u.rad, obstime = time_, 
                  location = self.loc).transform_to(coord.Galactic()) for time_ in times]
-        
         l = np.array([float(x.l/u.rad) for x in galactic])
         b = np.array([float(x.b/u.rad) for x in galactic])
         return l,b

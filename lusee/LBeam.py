@@ -12,7 +12,6 @@ import healpy as hp
 def grid2healpix_alm(theta,phi, img, lmax):
     dphi = phi[1]-phi[0]
     dtheta = theta[1]-theta[0]
-    img_flat = img.flatten()
     dA_theta = np.sin(theta)*dtheta*dphi
     #alm = np.zeros((lmax,lmax),complex)
     ell = np.arange(lmax)
@@ -27,8 +26,31 @@ def grid2healpix_alm(theta,phi, img, lmax):
     alm = np.array(alm)
     return alm
 
-def grid2healpix(theta,phi, img, lmax, Nside):
-    alm,_,_ = grid2healpix_alm(theta,phi,img,lmax)
+
+def grid2healpix_alm_fast(theta,phi, img, lmax):
+    dtheta = theta[1]-theta[0]
+    dA_theta = np.sin(theta)*dtheta
+    Nphi = len(phi)
+    Ntheta = len(theta)
+    #alm = np.zeros((lmax,lmax),complex)
+    ell = np.arange(lmax)
+    rimg = np.fft.rfft(img,axis=1)
+    alm = []
+    for m in range(lmax):
+        for l in range(m,lmax):        
+            harm = sph_harm (m,l, np.zeros(Ntheta), theta) #yes idiotic convention
+            #print (m,l,np.any(np.isnan(harm)),theta)
+            assert(not np.any(np.isnan(harm)))
+            alm.append((rimg[:,m]*harm*dA_theta).sum()*2*np.pi/Nphi)
+    alm = np.array(alm)
+    return alm
+
+
+def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
+    if fast:
+        alm = grid2healpix_alm_fast(theta,phi,img,lmax)
+    else:
+        alm = grid2healpix_alm(theta,phi,img,lmax)
     return hp.sphtfunc.alm2map (alm,Nside)
 
 
@@ -101,7 +123,7 @@ class LBeam:
     def power_hp(self, ellmax, Nside, freq_ndx=None, theta_tapr=None):
         """ returns healpix rendering of the power """
         P = self.power()
-        if tapr is not None:
+        if theta_tapr is not None:
             P *= theta_tapr[None,:,None]
         take_zero = False
         
