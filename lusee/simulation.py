@@ -26,13 +26,12 @@ def eul2rot(theta) :
 
 class Simulator:
 
-    def __init__ (self, obs, beams, sky_model,
-                  combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)],
+    def __init__ (self, obs, beams, sky_model, 
+                  combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], lmax = 128,
                   taper = 0.03, Tground = 200.0, freq_ndx=None):
         self.obs = obs
         self.sky_model = sky_model
-        self.Nside = sky_model.Nside
-        self.lmax = self.Nside*3 #healpix convention
+        self.lmax = lmax
         self.taper = taper
         self.Tground = Tground
         if freq_ndx is None:

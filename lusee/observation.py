@@ -109,16 +109,12 @@ class LObservation:
 #        self.cache[cache_key] = track
         return track
 
-    def get_track_ra_dec(self, ra, dec, times= None):
+    def get_track_ra_dec(self, ra, dec, times = None):
         """ get a track in alt,az coordinates for an object with celecstial coordinates
             in ra,dec on the self.times time stamps.
             ra,dec are in degrees
         """
-#        cache_key = f"track_ra_dec_{ra}_{dec}"
-#        if cache_key in self.cache:
-#            return self.cache[cache_key]
-
-        if times == None:
+        if times is None:
             times = self.times
         if type(ra) == float:
             c = SkyCoord(ra=ra, dec=dec, frame="icrs", unit="deg")
@@ -133,9 +129,21 @@ class LObservation:
         alt = np.array([np.float(altaz_.alt / u.rad) for altaz_ in altaz])
         az = np.array([np.float(altaz_.az / u.rad) for altaz_ in altaz])
         track = (alt, az)
-#           self.cache[cache_key] = track
         return track
 
+    def get_track_l_b(self, l, b, times= None):
+        """ get a track in l,b coordinates for an object with celecstial coordinates
+            in l,b galactic on the self.times time stamps.
+            ra,dec are in degrees
+        """
+        if times is None:
+            times = self.times
+        if type(l) == float:
+            c = coord.SkyCoord(l=l, b=b, frame="galactic", unit="deg")
+        elif type(l) == str:
+            c = coord.SkyCoord(l=l, b=b, frame="galactic")
+            
+        return self.get_track_ra_dec(float(c.icrs.ra/u.deg), float(c.icrs.dec/u.deg), times=times)
 
     def get_ra_dec_from_alt_az (self, alt, az, times = None):
         """ get a track in ra_dec given alt, az.

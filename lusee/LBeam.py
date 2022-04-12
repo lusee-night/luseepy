@@ -6,10 +6,21 @@ import numpy as np
 import copy
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from scipy.special import sph_harm
 import healpy as hp
+from scipy.special import sph_harm
+from pyshtools.legendre import legendre
 
-def grid2healpix_alm(theta,phi, img, lmax):
+
+
+def getLegendre(lmax, theta):
+    L=legendre(lmax,np.cos(theta),normalization='ortho')
+    L[:,1:]/=np.sqrt(2) # m>0 divide by sqrt(2)
+    L[:,1::2]*=-1 # * (-1)**m
+    return L
+
+
+def grid2healpix_alm_reference(theta,phi, img, lmax):
+    lmax = lmax + 1 ## different conventions
     dphi = phi[1]-phi[0]
     dtheta = theta[1]-theta[0]
     dA_theta = np.sin(theta)*dtheta*dphi
@@ -28,6 +39,7 @@ def grid2healpix_alm(theta,phi, img, lmax):
 
 
 def grid2healpix_alm_fast(theta,phi, img, lmax):
+    # lmax has different definitions
     dtheta = theta[1]-theta[0]
     dA_theta = np.sin(theta)*dtheta
     Nphi = len(phi)
@@ -35,14 +47,15 @@ def grid2healpix_alm_fast(theta,phi, img, lmax):
     #alm = np.zeros((lmax,lmax),complex)
     ell = np.arange(lmax)
     rimg = np.fft.rfft(img,axis=1)
-    alm = []
-    for m in range(lmax):
-        for l in range(m,lmax):        
-            harm = sph_harm (m,l, np.zeros(Ntheta), theta) #yes idiotic convention
-            #print (m,l,np.any(np.isnan(harm)),theta)
-            assert(not np.any(np.isnan(harm)))
-            alm.append((rimg[:,m]*harm*dA_theta).sum()*2*np.pi/Nphi)
-    alm = np.array(alm)
+    mmax = rimg.shape[1]
+    if mmax<lmax:
+        rimg = np.hstack((rimg,np.zeros((Ntheta,lmax-mmax+1),complex)))
+    alm = np.zeros(lmax*(lmax+1)//2+lmax+1,complex)
+    for th_data, th, dA in zip(rimg,theta,dA_theta):
+        L = getLegendre(lmax+1,th)
+        contr = np.hstack([th_data[m]*L[m:lmax+1,m]*dA for m in range(lmax+1)])
+        alm += contr
+    alm*=(2*np.pi/Nphi)
     return alm
 
 
@@ -50,7 +63,7 @@ def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
     if fast:
         alm = grid2healpix_alm_fast(theta,phi,img,lmax)
     else:
-        alm = grid2healpix_alm(theta,phi,img,lmax)
+        alm = grid2healpix_alm_reference(theta,phi,img,lmax)
     return hp.sphtfunc.alm2map (alm,Nside)
 
 
