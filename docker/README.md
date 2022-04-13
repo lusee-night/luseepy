@@ -8,9 +8,19 @@ to be close to the SDCC environment.
 
 # The "foundation"
 
-The basic set of packages is contained in the "foundation" image
-defined in ```Dockerfile-foundation```. ARES, PERSES and everything
-else goes on top, to save on build time.
+The main "Dockerfile" now takes a ```build-arg``` argument:
+
+```bash
+docker build . -f docker/Dockerfile -t test:0.1 --build-arg reqs=requirements_short.txt
+```
+
+...which allows to use any ```requirements``` file depending on needs.
+For example, the "foundation" image includes base packages
+described in ```requirements_short.txt```. It's normally published on Docjer Hub:
+
+* [buddhasystem/lusee-night-foundation:0.1](https://hub.docker.com/repository/docker/buddhasystem/lusee-night-foundation)
+
+NB. PERSES etc goes on top, to save on build time.
 
 # Build
 
@@ -27,7 +37,7 @@ docker build -f docker/Dockerfile-jupyter -t buddhasystem/lusee-night-luseepy-ju
 # Misc dependencies
 
 ```bash
-# For fitsio
+# Depending on the base system fitsio may need:
 pip install wheel
 sudo apt-get install libbz2-dev
 ```
