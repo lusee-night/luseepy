@@ -2,6 +2,7 @@ from .observation import LObservation
 from .LBeam import LBeam, grid2healpix_alm_fast
 import numpy as np
 import healpy as hp
+import fitsio
 
 def mean_alm(alm1, alm2, lmax):
     prod = alm1*np.conj(alm2)
@@ -41,6 +42,7 @@ class Simulator:
         self.freq=beams[0].freq[self.freq_ndx]
 
         self.prepare_beams (beams, combinations)
+        self.result = None
 
 
     def prepare_beams(self,beams, combinations):
@@ -50,6 +52,7 @@ class Simulator:
         gtapr = (np.arctan((thetas-np.pi/2)/self.taper)/np.pi+0.5)**2
         tapr = 1.0 - gtapr
         bomega = []
+        self.combinations = combinations
         for b in beams:
             P = b.power()[self.freq_ndx,:,:]
             beamnorm =  np.array([grid2healpix_alm_fast(b.theta,b.phi[:-1], np.real(P[fi,:,:-1]),
@@ -100,7 +103,7 @@ class Simulator:
 
         wfall = []
         for ti, t in enumerate(times):
-            sky = self.sky_model.get_alm (self.freq_ndx)
+            sky = self.sky_model.get_alm (self.freq_ndx, self.freq[self.freq_ndx])
             if do_rot:
                 lz,bz,ly,by = lzl[ti],bzl[ti],lyl[ti],byl[ti]
                 zhat = np.array([np.cos(bz)*np.cos(lz), np.cos(bz)*np.sin(lz),np.sin(bz)])
@@ -115,11 +118,24 @@ class Simulator:
             for ci,cj,beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
                 T = np.array([mean_alm(br_,sky_,self.lmax) for br_,sky_ in zip(beamreal,sky)])
                 T += np.array([self.Tground*gP for gP in groundPowerReal])
+                res.append(T)
                 if ci!=cj:
                     Timag = np.array([mean_alm(bi_,sky_,self.lmax) for bi_,sky_ in zip(beamimag,sky)])
                     Timag += np.array([self.Tground*gP for gP in groundPowerImag])
-                    T = T+1j*Timag
-                res.append(T)
+                    res.append(Timag)
             wfall.append(res)
-        return np.array(wfall)
+        self.result = np.array(wfall)
+        return self.result
+            
+    def write(self, out_file):
+        if self.result is None:
+            print ("Nothing to write")
+            raise RunTimeError
+        header = {
+            "freq":self.freq[self.freq_ndx]#,
+            #"combinations":self.combinations
+            }
+        fits = fitsio.FITS(out_file,'rw',clobber=True)
+        fits.write(self.result, header=header)
+        
             
