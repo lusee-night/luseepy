@@ -50,3 +50,8 @@ ljupyter
 ```
 and then connect to the address given in the terminal output.
 
+## Tests
+
+The ```tests``` folder contains CI-related and other testing scripts.
+
+
