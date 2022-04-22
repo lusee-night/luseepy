@@ -50,8 +50,10 @@ ljupyter
 ```
 and then connect to the address given in the terminal output.
 
-## Tests
+## Tests and Singularity
 
-The ```tests``` folder contains CI-related and other testing scripts.
-
+The ```tests``` folder contains CI-related and other testing scripts. Here's an example of a simple test run with Singularity, on a SDCC/BNL node, from the ```luseepy``` folder:
+```bash
+singularity exec -B /direct/phenix+u/mxmp/projects/luseepy --env PYTHONPATH=/direct/phenix+u/mxmp/projects/luseepy docker://buddhasystem/lusee-night-foundation:0.1 ./tests/LunarCalendarTest.py
+```
 
