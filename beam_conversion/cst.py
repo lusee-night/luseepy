@@ -3,7 +3,8 @@ import argparse
 import numpy as np
 import sys
 from converter_base import BeamConverter
-
+import glob
+from scipy.interpolate import interp1d
 
 try:
     import lusee
@@ -11,55 +12,47 @@ try:
 except:
     have_lusee = False
     
-class Feko2LBeam(BeamConverter):
+class CST2LBeam(BeamConverter):
 
-    def __init__ (self, root, farfield, thetamax = 90):
+    def __init__ (self, root, thetamax = 90, maxfreq = None):
         BeamConverter.__init__(self,root,thetamax)
-        self.farfield = farfield
-
+        self.maxfreq = 1e30 if maxfreq is None else maxfreq
 
     def load(self):
-        fname = self.root+".out"
-        data = open(fname).readlines()
-        skip = True
+        glob_pattern=self.root+'/ffs/*.ffs'
+        flist = glob.glob(glob_pattern)
+        if len(flist)==0:
+            print ("Cannot find files in {glob_pattern}")
+            assert(False)
+            
         beam_data = []
-        freq = -1.0
-        farfields = []
-        farfield = ""
         print ("Loading frequencies: ", end = "")
-        for line in data:
-            if skip:
-                if ("   THETA    PHI      magn.    phase  " in line) and (farfield == self.farfield):
-                    skip = False
-                if "FREQ =" in line:
-                    cfreq=float(line.split()[-1])/1e6
-                    if cfreq!=freq:
-                        print (f"{cfreq} ... ", end = "")
-                        sys.stdout.flush()
-                    freq=cfreq
-                if "Far field request with name:" in line:
-                    farfield = line[:-1].split()[-1]
-                    if farfield not in farfields:
-                        farfields.append(farfield)
-                    
-            else:
-                if line == "\n":
-                    skip = True
+        for fname in flist:
+            freq=fname.split("_")[-2]
+            assert("khz" in freq)
+            freq=float(freq[:-3])/1e3
+            if (freq>self.maxfreq):
+                continue
+            print (f"{freq} ... ", end = "")
+            sys.stdout.flush()
+            lines=open(fname).readlines()
+            skip = True
+            for line in lines:
+                if skip:
+                    if ("// >> Phi, Theta, Re(E_Theta), Im(E_Theta), Re(E_Phi), Im(E_Phi):" in line):
+                        skip = False
                 else:
                     line  = line.split()
-                    if len(line)==12:
+                    if len(line)==6:
                         line = [float(x) for x in line[:6]]
-                        if line[0]<0:
-                            print (line,freq)
                         beam_data.append([freq]+line)
-        print()
-        print ("Farfields seen:",farfields)
+        print('done.')    
         beam = np.array(beam_data)
         print (f"{beam.shape[0]} rows loaded.")
         plist = []
         for i in range(3):
             plist.append(sorted(list(set(beam[:,i]))))
-        freq, theta, phi = plist
+        freq, phi, theta = plist
         freq_min, freq_max, Nfreq = freq[0], freq[-1], len(freq)
         theta_min, theta_max, Ntheta = theta[0], theta[-1], len(theta)
         phi_min, phi_max, Nphi = phi[0], phi[-1], len(phi)
@@ -76,8 +69,8 @@ class Feko2LBeam(BeamConverter):
         Etheta = np.zeros((Nfreq,Ntheta,Nphi),complex)+np.nan
         Ephi = np.zeros((Nfreq,Ntheta,Nphi),complex)+np.nan
         freqL = ((beam[:,0]-freq_min)/dfreq+1e-6).astype(int)
-        thetaL = ((beam[:,1]-theta_min)/dtheta+1e-6).astype(int)
-        phiL = ((beam[:,2]-phi_min)/dphi+1e-6).astype(int)
+        phiL = ((beam[:,1]-phi_min)/dphi+1e-6).astype(int)
+        thetaL = ((beam[:,2]-theta_min)/dtheta+1e-6).astype(int)
         EthetaL = beam[:,3]*np.exp(1j*2*np.pi/360*beam[:,4])
         EphiL = beam[:,5]*np.exp(1j*2*np.pi/360*beam[:,6])
 
@@ -103,13 +96,16 @@ class Feko2LBeam(BeamConverter):
         ZRe = np.zeros(Nfreq)+np.nan
         ZIm =np.zeros(Nfreq)+np.nan
 
-        data = np.loadtxt(self.root+"_Z_Re.dat", skiprows=2)
-        freqL = ((data[:,0]/1e6-freq_min)/dfreq+1e-6).astype(int)
-        ZRe [freqL] = data[:,1]
-
-        data = np.loadtxt(self.root+"_Z_Im.dat", skiprows=2)
-        freqL = ((data[:,0]/1e6-freq_min)/dfreq+1e-6).astype(int)
-        ZIm [freqL] = data[:,1]
+        fname = glob.glob(self.root+"/*s11_port1.txt")[0]
+        data = np.loadtxt(fname, skiprows=2)
+        S11_freq = data[:,0]
+        S11 = data[:,1]*np.exp(1j*data[:,2]*2*np.pi/360.)
+        print ("Assuming 50Ohm for impendance calculation")
+        Z = 50*(1-S11)/(1+S11)
+        Zint = interp1d(S11_freq,Z)
+        Z = np.array([Zint(f) for f in freq])
+        ZRe = np.real(Z)
+        ZIm = np.imag(Z)
 
         assert(not np.any(np.isnan(ZRe)))
         assert(not np.any(np.isnan(ZIm)))
@@ -127,20 +123,20 @@ class Feko2LBeam(BeamConverter):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Convert FEKO Beam to LBEAM.')
+    parser = argparse.ArgumentParser(description='Convert CST Beam to LBEAM.')
     parser.add_argument('root_name', nargs=1, help='root name, ')
-    parser.add_argument('--farfield', nargs=1, default = "FarField1", help='farfield to pick')
+    parser.add_argument('--maxfreq', nargs=1, default = 50, help='do not include frequencies beyond this freq [MHz]')
     parser.add_argument('--thetamax', nargs=1, default = 90, help='do not include data beyond this theta')
-    parser.add_argument('-o', '--output_file', nargs=1, default = "feko_converted.fits", help='output filename')
+    parser.add_argument('-o', '--output_file', nargs=1, default = "cst_converted.fits", help='output filename')
     args = parser.parse_args()
-    O = Feko2LBeam(args.root_name[0],farfield = args.farfield, thetamax = args.thetamax)
+    O = CST2LBeam(args.root_name[0], thetamax = args.thetamax, maxfreq=args.maxfreq)
     return O, args
 
 
 if __name__=="__main__":
-    F2B, args = parse_args()
-    F2B.load()
-    F2B.save_fits(args.output_file)
+    C2B, args = parse_args()
+    C2B.load()
+    C2B.save_fits(args.output_file)
     if have_lusee:
         print ("Attempting to reread the file ... ",end="")
         sys.stdout.flush()
