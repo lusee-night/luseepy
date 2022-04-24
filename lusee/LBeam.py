@@ -68,34 +68,62 @@ def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
 
 
 
+def project_to_theta_phi(theta_rad,phi_rad, E):
+    #create projection matrices
+    theta = theta
+    phi= phi
+    sin = np.sin
+    cos = np.cos
+    rad = np.array([ sin(theta[:,None])*cos(phi[None,:]), sin(theta[:,None])*sin(phi[None,:]),
+                     -cos(theta[:,None])*np.ones(self.Nphi)[None,:]])
+    tphi =  np.array([-sin(phi), +cos(phi)])
+    ttheta = np.array([ cos(theta[:,None])*cos(phi[None,:]), cos(theta[:,None])*sin(phi[None,:]),
+                     +sin(theta[:,None])*np.ones(self.Nphi)[None,:]])
+
+    Erad = np.einsum('fijk,kij->fij',E,rad)
+    Etheta = np.einsum('fijk,kij->fij',E,ttheta)
+    Ephi = np.einsum('fijk,kj->fij',E[:,:,:,:2],tphi)
+    Emag2 = (np.abs(self.E)**2).sum(axis=3)
+    assert(abs(Emag2-np.abs(Erad)**2-np.abs(Etheta)**2-np.abs(Ephi)**2).max()<1e-4)
+    #print ((np.abs(Erad)/np.sqrt(Emag2)).max())
+    assert(np.all(np.abs(Erad)/np.sqrt(Emag2)<1e-4))
+    return Etheta, Ephi
+
+
 class LBeam:
     def __init__ (self, fname):
         header = fitsio.read_header(fname)
         fits = fitsio.FITS(fname,'r')
-        self.E = fits[0].read() + 1j*fits[1].read()
-        self.freq_start = header['freq_start']
-        self.freq_end = header['freq_end']
-        self.freq_step = header['freq_step']
-        self.phi_start = header['phi_start']
-        self.phi_end = header['phi_end']
-        self.phi_step = header['phi_step']
-        self.theta_start = header['theta_start']
-        self.theta_end = header['theta_end']
-        self.theta_step = header['theta_step']
-        self.Nfreq = int((self.freq_end - self.freq_start)/self.freq_step) + 1
-        self.Ntheta = int((self.theta_end - self.theta_start)/self.theta_step) + 1
-        self.Nphi = int((self.phi_end - self.phi_start)/self.phi_step) + 1
-        self.freq = np.linspace(self.freq_start, self.freq_end,self.Nfreq)
-        self.theta_deg = np.linspace(self.theta_start, self.theta_end,self.Ntheta)
-        self.phi_deg = np.linspace(self.phi_start, self.phi_end,self.Nphi)
+        self.Etheta = fits['Etheta_real'].read() + 1j*fits['Etheta_imag'].read()
+        self.Ephi = fits['Ephi_real'].read() + 1j*fits['Ephi_imag'].read()
+        self.ZRe = fits['Z_real'].read()
+        self.ZIm = fits['Z_imag'].read()
+        self.Z = self.ZRe + 1j*self.ZIm
+        self.version = header['version']
+        self.freq_min = header['freq_min']
+        self.freq_max = header['freq_max']
+        self.Nfreq = header['freq_N']
+        self.theta_min = header['theta_min']
+        self.theta_max = header['theta_max']
+        self.Ntheta = header['theta_N']
+        self.phi_min = header['phi_min']
+        self.phi_max = header['phi_max']
+        self.Nphi = header['phi_N']
+        self.header = header
+        self.freq = np.linspace(self.freq_min, self.freq_max,self.Nfreq)
+        self.theta_deg = np.linspace(self.theta_min, self.theta_max,self.Ntheta)
+        self.phi_deg = np.linspace(self.phi_min, self.phi_max,self.Nphi)
         self.theta = self.theta_deg/180*np.pi
         self.phi = self.phi_deg/180*np.pi
-        self.direction= np.array([np.sin(self.theta[None,:])*np.cos(self.phi[:,None]),
-                     np.sin(self.theta[None,:])*np.sin(self.phi[:,None]),
-                     np.cos(self.theta[None,:])*np.ones(self.Nphi)[:,None]]).T
-    
+        if (self.phi_max != 360) or (self.phi_min != 0):
+            print ("Code might implicitly assume phi wraparound ... use with care.")
+        
     def rotate(self,deg):
         assert (deg in [0,45,-45,90,-90,135,-135,270,-270,180,-180])
+        if self.phi_max != 360:
+            print ("This really only works in you have full phi circle with repetition at the end")
+            raise NotImplemented
+        
         if deg==0:
             return self.copy()
         rad = deg/180*np.pi
@@ -104,32 +132,36 @@ class LBeam:
         assert (deg%self.phi_step==0)
         m = int(deg // self.phi_step)
         if (m<0):
-            E = np.concatenate ((self.E[:,:,m-1:,:],self.E[:,:,1:m,:]),axis=2)
+            Etheta = np.concatenate ((self.Etheta[:,:,m-1:],self.Etheta[:,:,1:m]),axis=2)
+            Ephi = np.concatenate ((self.Ephi[:,:,m-1:],self.Ephi[:,:,1:m]),axis=2)
         else:
-            E = np.concatenate ((self.E[:,:,m:,:],self.E[:,:,1:m+1,:]),axis=2)
-        #print (self.phi_deg,'A')
-        #print (self.phi_deg[m-1:],self.phi_deg[1:m])
-        #print (E.shape)
-        rotmat = np.array(([[cosrad, +sinrad, 0],[-sinrad,cosrad,0],[0,0,1]]))
-        E = np.einsum('fabj,ij->fabi',E,rotmat)
+            Etheta = np.concatenate ((self.Etheta[:,:,m:],self.Etheta[:,:,1:m+1]),axis=2)
+            Ephi = np.concatenate ((self.Ephi[:,:,m:],self.Ephi[:,:,1:m+1]),axis=2)
+
+        # No need to rotae in in theta  - phi
+        #rotmat = np.array(([[cosrad, +sinrad, 0],[-sinrad,cosrad,0],[0,0,1]]))
+        #E = np.einsum('fabj,ij->fabi',E,rotmat)
+
+
         return self.copy (E=E)
      
     def flip_over_yz(self):
+        assert (False)
         m = int(90 // self.phi_step)
         n = int(180 // self.phi_step)
         o = int(270 // self.phi_step)
-        E = np.concatenate ((self.E[:,:,n:0:-1,:],self.E[:,:,self.Nphi:n-1:-1,:]),axis=2)
-        E[:,:,:,0]*=-1 ## X flips over
+        Ephi = np.concatenate ((self.Ephi[:,:,n:0:-1],self.Ephi[:,:,self.Nphi:n-1:-1]),axis=2)
+        #E[:,:,:,0]*=-1 ## X flips over
         return self.copy (E=E)
 
     def power(self):
         """ return power in the beam """
-        P = np.sum(np.abs(self.E**2),axis=3)
+        P = np.abs(self.Etheta**2)+np.abs(self.Ephi**2)
         return P
 
     def cross_power(self, other):
         """ return power in the beam """
-        xP = np.sum(self.E*np.conj(other.E),axis=3)
+        xP = self.Etheta*np.conj(other.Etheta) + self.Ephi*np.conj(other.Ephi)
         return xP
 
     
@@ -146,45 +178,25 @@ class LBeam:
             result = result[0]
         return result
     
-    def copy(self,E=None):
+    def copy(self,Etheta=None, Ephi=None):
         ret = copy.deepcopy(self)
-        if E is not None:
-            ret.E = E
+        if Etheta is not None:
+            ret.Etheta = Etheta
+        if Ephi is not None:
+            ret.Ephi = Ephi
         return ret
 
     
     def plotE(self, freqndx, toplot = None, noabs=False):
         plt.figure(figsize=(15,10))
-        for i in range(3):
-            plt.subplot(1,3,i+1)
+        for i in range(2):
+            plt.subplot(1,2,i+1)
             ax = plt.gca()
-            plt.title ('XYZ'[i])
-            toshow = toplot if toplot is not None else self.E
+            plt.title (['theta','phi'][i])
+            toshow = toplot[i] if toplot is not None else [self.Etheta,self.Ephi][i]
             toshow = np.real(toshow[freqndx,:,:,i]) if noabs else np.abs(toshow[freqndx,:,:,i]) 
             im=ax.imshow(toshow,interpolation='nearest',extent=[0,360,180,0],origin='upper')
             divider = make_axes_locatable(ax)
             cax = divider.append_axes("right", size="5%", pad=0.05)
             plt.colorbar(im, cax=cax)
 
-    def project_to_phi_theta(self):
-        #create projection matrices
-        theta = self.theta
-        phi= self.phi
-        sin = np.sin
-        cos = np.cos
-        rad = np.array([ sin(theta[:,None])*cos(phi[None,:]), sin(theta[:,None])*sin(phi[None,:]),
-                         -cos(theta[:,None])*np.ones(self.Nphi)[None,:]])
-        tphi =  np.array([-sin(phi), +cos(phi)])
-        ttheta = np.array([ cos(theta[:,None])*cos(phi[None,:]), cos(theta[:,None])*sin(phi[None,:]),
-                         +sin(theta[:,None])*np.ones(self.Nphi)[None,:]])
-
-        Erad = np.einsum('fijk,kij->fij',self.E,rad)
-        Etheta = np.einsum('fijk,kij->fij',self.E,ttheta)
-        Ephi = np.einsum('fijk,kj->fij',self.E[:,:,:,:2],tphi)
-        Emag2 = (np.abs(self.E)**2).sum(axis=3)
-        assert(abs(Emag2-np.abs(Erad)**2-np.abs(Etheta)**2-np.abs(Ephi)**2).max()<1e-4)
-        #print ((np.abs(Erad)/np.sqrt(Emag2)).max())
-        assert(np.all(np.abs(Erad)/np.sqrt(Emag2)<1e-4))
-        Eout = np.array([Ephi,Etheta])
-        Eout = np.moveaxis(Eout,0,-1)
-        return Eout
