@@ -136,6 +136,7 @@ class Feko2LBeam:
                   'phi_min':self.phi_min,
                   'phi_max':self.phi_max,
                   'phi_N':self.Nphi,
+                  'ground_fraction':0.5, # placeholder
                   'source': 'FEKO',
                   'source_root': self.root
         }

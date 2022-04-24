@@ -109,6 +109,7 @@ class LBeam:
         self.phi_min = header['phi_min']
         self.phi_max = header['phi_max']
         self.Nphi = header['phi_N']
+        self.ground_fraction = header['ground_fraction']
         self.header = header
         self.freq = np.linspace(self.freq_min, self.freq_max,self.Nfreq)
         self.theta_deg = np.linspace(self.theta_min, self.theta_max,self.Ntheta)
