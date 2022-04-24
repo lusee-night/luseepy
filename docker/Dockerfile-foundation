@@ -1,3 +1,4 @@
+# DEPRECATED
 #
 # Basic Dockerfile used to build a Debian image
 # containing the packages required by lusee-night/luseepy.
@@ -12,9 +13,11 @@ FROM python:3.10.1-bullseye
 
 WORKDIR /app
 
-# We may have a few versions of requirements.
-# Reference will be given by the name, to simplify
-# experiments with configuration.
+# Apparently required by "fitsio"
+RUN apt-get install libbz2-dev
+
+# We may have a few versions of requirements,
+# hence a few custom names, to simplify experiments
 
 COPY docker/requirements_fresh.txt requirements.txt
 RUN pip install -r requirements.txt
