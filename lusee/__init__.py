@@ -10,4 +10,5 @@
 from .observation import LObservation
 from .lunar_satellite import LSatellite, ObservedSatellite
 from .LBeam import LBeam, grid2healpix
+from . import mono_sky_models as monosky 
 
