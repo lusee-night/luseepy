@@ -22,7 +22,7 @@ class CST2LBeam(BeamConverter):
         glob_pattern=self.root+'/ffs/*.ffs'
         flist = glob.glob(glob_pattern)
         if len(flist)==0:
-            print ("Cannot find files in {glob_pattern}")
+            print (f"Cannot find files in {glob_pattern}")
             assert(False)
             
         beam_data = []
@@ -101,7 +101,7 @@ class CST2LBeam(BeamConverter):
         S11_freq = data[:,0]
         S11 = data[:,1]*np.exp(1j*data[:,2]*2*np.pi/360.)
         print ("Assuming 50Ohm for impendance calculation")
-        Z = 50*(1-S11)/(1+S11)
+        Z = 50*(1+S11)/(1-S11)
         Zint = interp1d(S11_freq,Z)
         Z = np.array([Zint(f) for f in freq])
         ZRe = np.real(Z)
