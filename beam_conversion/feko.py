@@ -25,13 +25,14 @@ class Feko2LBeam(BeamConverter):
         beam_data = []
         freq = -1.0
         farfields = []
-        f_grounds = {}
-        reading_power_radiated = False
+        f_grounds = {}  # store a map for freq → f_ground
+        reading_power_radiated = False  # toggle whether we look for radiated power
         farfield = ""
         print ("Loading frequencies: ", end = "")
         for line in data:
             if skip:
-                if "radiated power" in line:
+                # if we find a header with radiated power, start looking
+                if "PHI       radiated power" in line:
                     reading_power_radiated = True
                     skip = False
 
@@ -54,11 +55,13 @@ class Feko2LBeam(BeamConverter):
                 else:
                     line  = line.split()
 
+                    # did we read a header line with radiated power? then record it.
                     if reading_power_radiated:
                         reading_power_radiated = False
-                        f_grounds[freq] = 1 - float(line[-2])
+                        skip = True
+                        f_grounds[freq] = 1 - float(line[-2])  # f_ground = 1 - f_sky
 
-                    if len(line)==12:
+                    elif len(line)==12:
                         line = [float(x) for x in line[:6]]
                         if line[0]<0:
                             print (line,freq)
@@ -135,8 +138,7 @@ class Feko2LBeam(BeamConverter):
         self.freq_min, self.freq_max, self.Nfreq = freq_min, freq_max, Nfreq
         self.theta_min, self.theta_max, self.Ntheta = theta_min, theta_max, Ntheta
         self.phi_min, self.phi_max, self.Nphi = phi_min, phi_max, Nphi
-        self.ground_fraction = 0.5 # placeholder
-        self.f_grounds = f_grounds
+        self.ground_fraction = f_grounds
 
 
 def parse_args():
