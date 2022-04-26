@@ -25,10 +25,16 @@ class Feko2LBeam(BeamConverter):
         beam_data = []
         freq = -1.0
         farfields = []
+        f_grounds = {}
+        reading_power_radiated = False
         farfield = ""
         print ("Loading frequencies: ", end = "")
         for line in data:
             if skip:
+                if "radiated power" in line:
+                    reading_power_radiated = True
+                    skip = False
+
                 if ("   THETA    PHI      magn.    phase  " in line) and (farfield == self.farfield):
                     skip = False
                 if "FREQ =" in line:
@@ -47,6 +53,11 @@ class Feko2LBeam(BeamConverter):
                     skip = True
                 else:
                     line  = line.split()
+
+                    if reading_power_radiated:
+                        reading_power_radiated = False
+                        f_grounds[freq] = 1 - float(line[-2])
+
                     if len(line)==12:
                         line = [float(x) for x in line[:6]]
                         if line[0]<0:
@@ -56,6 +67,7 @@ class Feko2LBeam(BeamConverter):
         print ("Farfields seen:",farfields)
         beam = np.array(beam_data)
         print (f"{beam.shape[0]} rows loaded.")
+        print("f_grounds", f_grounds)
         plist = []
         for i in range(3):
             plist.append(sorted(list(set(beam[:,i]))))
@@ -124,6 +136,7 @@ class Feko2LBeam(BeamConverter):
         self.theta_min, self.theta_max, self.Ntheta = theta_min, theta_max, Ntheta
         self.phi_min, self.phi_max, self.Nphi = phi_min, phi_max, Nphi
         self.ground_fraction = 0.5 # placeholder
+        self.f_grounds = f_grounds
 
 
 def parse_args():
