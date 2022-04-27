@@ -25,15 +25,16 @@ class Feko2LBeam(BeamConverter):
         beam_data = []
         freq = -1.0
         farfields = []
-        f_grounds = {}  # store a map for freq → f_ground
+        f_ground = {}  # store a map for freq → f_ground
         reading_power_radiated = False  # toggle whether we look for radiated power
         farfield = ""
         print ("Loading frequencies: ", end = "")
         for line in data:
             if skip:
                 # if we find a header with radiated power, start looking
-                if "PHI       radiated power" in line:
+                if "The directivity/gain is based on an active power of" in line:
                     reading_power_radiated = True
+                    radiated_power = float(line.split()[-2]) #normalization
                     skip = False
 
                 if ("   THETA    PHI      magn.    phase  " in line) and (farfield == self.farfield):
@@ -50,27 +51,25 @@ class Feko2LBeam(BeamConverter):
                         farfields.append(farfield)
                     
             else:
-                if line == "\n":
-                    skip = True
-                else:
-                    line  = line.split()
-
-                    # did we read a header line with radiated power? then record it.
-                    if reading_power_radiated:
+                if reading_power_radiated:
+                    if "0.00 .. 180.00 deg.       0.00 .. 360.00 deg.   " in line:
                         reading_power_radiated = False
                         skip = True
-                        f_grounds[freq] = 1 - float(line[-2])  # f_ground = 1 - f_sky
-
-                    elif len(line)==12:
-                        line = [float(x) for x in line[:6]]
-                        if line[0]<0:
-                            print (line,freq)
-                        beam_data.append([freq]+line)
+                        f_ground[freq] = 1 - float(line.split()[-2])/radiated_power  # f_ground = 1 - f_sky
+                else:
+                    if line == "\n":
+                        skip = True
+                    else:
+                        line  = line.split()
+                        if len(line)==12:
+                            line = [float(x) for x in line[:6]]
+                            if line[0]<0:
+                                print (line,freq)
+                            beam_data.append([freq]+line)
         print()
         print ("Farfields seen:",farfields)
         beam = np.array(beam_data)
         print (f"{beam.shape[0]} rows loaded.")
-        print("f_grounds", f_grounds)
         plist = []
         for i in range(3):
             plist.append(sorted(list(set(beam[:,i]))))
@@ -115,6 +114,12 @@ class Feko2LBeam(BeamConverter):
         assert(not np.any(np.isnan(Ephi)))
         print ("Beam loading successful.")
 
+        f_ground = np.array([f_ground[f] for f in freq])
+        print("f_ground = ", f_ground)
+        print ("f_ground parsing successful.")
+
+
+        
         ZRe = np.zeros(Nfreq)+np.nan
         ZIm =np.zeros(Nfreq)+np.nan
 
@@ -138,15 +143,15 @@ class Feko2LBeam(BeamConverter):
         self.freq_min, self.freq_max, self.Nfreq = freq_min, freq_max, Nfreq
         self.theta_min, self.theta_max, self.Ntheta = theta_min, theta_max, Ntheta
         self.phi_min, self.phi_max, self.Nphi = phi_min, phi_max, Nphi
-        self.ground_fraction = f_grounds
+        self.f_ground = f_ground
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Convert FEKO Beam to LBEAM.')
     parser.add_argument('root_name', nargs=1, help='root name, ')
-    parser.add_argument('--farfield', nargs=1, default = "FarField1", help='farfield to pick')
-    parser.add_argument('--thetamax', nargs=1, default = 90, help='do not include data beyond this theta')
-    parser.add_argument('-o', '--output_file', nargs=1, default = "feko_converted.fits", help='output filename')
+    parser.add_argument('--farfield', default = "FarField1", help='farfield to pick')
+    parser.add_argument('--thetamax', default = 90, type=float, help='do not include data beyond this theta')
+    parser.add_argument('-o', '--output_file', default = "feko_converted.fits", help='output filename')
     args = parser.parse_args()
     O = Feko2LBeam(args.root_name[0],farfield = args.farfield, thetamax = args.thetamax)
     return O, args

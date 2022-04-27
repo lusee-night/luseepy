@@ -99,6 +99,7 @@ class LBeam:
         self.ZRe = fits['Z_real'].read()
         self.ZIm = fits['Z_imag'].read()
         self.Z = self.ZRe + 1j*self.ZIm
+        self.f_ground = fits['f_ground'].read()
         self.version = header['version']
         self.freq_min = header['freq_min']
         self.freq_max = header['freq_max']
@@ -109,7 +110,6 @@ class LBeam:
         self.phi_min = header['phi_min']
         self.phi_max = header['phi_max']
         self.Nphi = header['phi_N']
-        self.ground_fraction = header['ground_fraction']
         self.header = header
         self.freq = np.linspace(self.freq_min, self.freq_max,self.Nfreq)
         self.theta_deg = np.linspace(self.theta_min, self.theta_max,self.Ntheta)

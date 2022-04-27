@@ -8,9 +8,9 @@ O=lusee.LObservation('2025-02-01 13:00:00 to 2025-03-01 13:00:00',deltaT_sec=24*
 #pickle.dump(O,open("obs.pickle","wb"))
 #O=pickle.load(open("obs.pickle","rb"))
     
-antenna_sim_path = "../AntennaSimResults/"
-fname = "004_Freq1-50MHz_Delta1MHz_AntennaLength1-6m_Delta1m_AntennaAngle75deg_LanderHeight2m/RadiatedElectricField_AntennaLength6m_AntennaAngle75deg_LanderHeight2m_LBoxZ70cm_monopole_Phase+0deg.fits"
-#fname = "003_Freq1-50MHz_Delta1MHz_AntennaLength6m_AntennaAngle30deg_LanderHeight2m/RadiatedElectricField_AntennaLength6m_AntennaAngle30deg_LanderHeight2m_monopole.fits"
+antenna_sim_path = "../Drive/AntennaResponse/Exported/"
+fname = "feko_bnl_monopole_1m_75deg.fits"
+
 
 B = lusee.LBeam(antenna_sim_path+'/'+fname)
 B.project_to_phi_theta()
@@ -23,11 +23,12 @@ for ofs,c in enumerate(["N","E","S","W"]):
     
 lmax = 64
 
-#sky = lusee.ConstSky(128, 200, lmax = lmax)
-sky = lusee.sky.GalCenter(32, lmax,50.)
+sky = lusee.ConstSky(128, 200, lmax = lmax)
+#sky = lusee.sky.GalCenter(32, lmax,50.)
 
 print ("Setting up object")
-S = lusee.Simulator (O,beams, sky, freq_ndx=[0,1,2], lmax = lmax, combinations=[(0,0),(0,2),(1,1),(1,3)], Tground = 0 )
+S = lusee.Simulator (O,beams, sky, freq_ndx=[0,1,2], lmax = lmax, combinations=[(0,0),(0,2),(1,1),(1,3)],
+                     Tground = 200 )
 #pickle.dump(S,open("Sim.pickle","wb"))
 #S=pickle.load(open("Sim.pickle","rb"))
 print ("Simulating")

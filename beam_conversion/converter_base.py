@@ -19,7 +19,6 @@ class BeamConverter:
                   'phi_min':self.phi_min,
                   'phi_max':self.phi_max,
                   'phi_N':self.Nphi,
-                  'ground_fraction':self.ground_fraction,
                   'source': 'FEKO',
                   'source_root': self.root
         }
@@ -33,5 +32,6 @@ class BeamConverter:
         fits.write(np.imag(self.Ephi), extname = 'EPhi_imag')
         fits.write(self.ZRe, extname = 'Z_real')
         fits.write(self.ZIm, extname = 'Z_imag')
+        fits.write(self.f_ground, extname = 'f_ground')
         fits.close()
         print ('Done.')

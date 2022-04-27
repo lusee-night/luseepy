@@ -119,15 +119,16 @@ class CST2LBeam(BeamConverter):
         self.freq_min, self.freq_max, self.Nfreq = freq_min, freq_max, Nfreq
         self.theta_min, self.theta_max, self.Ntheta = theta_min, theta_max, Ntheta
         self.phi_min, self.phi_max, self.Nphi = phi_min, phi_max, Nphi
-        self.ground_fraction = 0.5 # placeholder
+        self.f_ground = np.ones(Nfreq) * 0.5 # placeholder
+        print ("WARNING: Assuming placeholder ground fraction.")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Convert CST Beam to LBEAM.')
     parser.add_argument('root_name', nargs=1, help='root name, ')
-    parser.add_argument('--maxfreq', nargs=1, default = 50, help='do not include frequencies beyond this freq [MHz]')
-    parser.add_argument('--thetamax', nargs=1, default = 90, help='do not include data beyond this theta')
-    parser.add_argument('-o', '--output_file', nargs=1, default = "cst_converted.fits", help='output filename')
+    parser.add_argument('--maxfreq', default = 50, type = float, help='do not include frequencies beyond this freq [MHz]')
+    parser.add_argument('--thetamax', default = 90, type = float, help='do not include data beyond this theta')
+    parser.add_argument('-o', '--output_file', default = "cst_converted.fits", help='output filename')
     args = parser.parse_args()
     O = CST2LBeam(args.root_name[0], thetamax = args.thetamax, maxfreq=args.maxfreq)
     return O, args
