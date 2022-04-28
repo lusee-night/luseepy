@@ -13,7 +13,6 @@ fname = "feko_bnl_monopole_1m_75deg.fits"
 
 
 B = lusee.LBeam(antenna_sim_path+'/'+fname)
-B.project_to_phi_theta()
 
 beams = []
 for ofs,c in enumerate(["N","E","S","W"]):
@@ -23,12 +22,12 @@ for ofs,c in enumerate(["N","E","S","W"]):
     
 lmax = 64
 
-sky = lusee.ConstSky(128, 200, lmax = lmax)
+sky = lusee.sky.ConstSky(Nside = 32, lmax = lmax, T=200)
 #sky = lusee.sky.GalCenter(32, lmax,50.)
 
 print ("Setting up object")
-S = lusee.Simulator (O,beams, sky, freq_ndx=[0,1,2], lmax = lmax, combinations=[(0,0),(0,2),(1,1),(1,3)],
-                     Tground = 200 )
+S = lusee.Simulator (O,beams, sky, freq_ndx=[0,1,2], lmax = lmax, combinations=[(0,0),(1,1),(1,3)],
+                     Tground = 200. )
 #pickle.dump(S,open("Sim.pickle","wb"))
 #S=pickle.load(open("Sim.pickle","rb"))
 print ("Simulating")

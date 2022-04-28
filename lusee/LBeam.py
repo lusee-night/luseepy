@@ -130,8 +130,12 @@ class LBeam:
         rad = deg/180*np.pi
         cosrad = np.cos(rad)
         sinrad = np.sin(rad)
-        assert (deg%self.phi_step==0)
-        m = int(deg // self.phi_step)
+        # some sanity checks
+        assert (self.phi_max == 360)
+        assert (self.phi_min == 0)
+        phi_step = (self.phi_max-self.phi_min)/(self.Nphi-1)
+        assert (deg%phi_step == 0)
+        m = int(deg // phi_step)
         if (m<0):
             Etheta = np.concatenate ((self.Etheta[:,:,m-1:],self.Etheta[:,:,1:m]),axis=2)
             Ephi = np.concatenate ((self.Ephi[:,:,m-1:],self.Ephi[:,:,1:m]),axis=2)
@@ -144,7 +148,7 @@ class LBeam:
         #E = np.einsum('fabj,ij->fabi',E,rotmat)
 
 
-        return self.copy (E=E)
+        return self.copy (Etheta=Etheta, Ephi=Ephi)
      
     def flip_over_yz(self):
         assert (False)

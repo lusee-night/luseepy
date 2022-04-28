@@ -3,10 +3,14 @@ import healpy as hp
 import numpy as np
 
 class ConstSky:
-    def __init__ (self,Nside, lmax,T ):
+    def __init__ (self,Nside, lmax, T):
         self.Nside = Nside
         self.Npix = Nside**2 * 12
         Tmap = np.ones(self.Npix)
+        if type(T) == int:
+            T = float(T)
+        if type(T) == list:
+            T = np.array(T)
         self._T = T
         theta,phi = hp.pix2ang(self.Nside,np.arange(self.Npix))
         Tmap[theta>0.75*np.pi] = 0 

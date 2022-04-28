@@ -7,7 +7,8 @@ import sys
 
 cc = int(sys.argv[1])
 lat  = 0.0
-Tground = 0 
+Tground = 0
+Dt = 24*3600
 if cc==0:
     fname = 'output/sim_v1.fits'
 elif cc==1:
@@ -21,17 +22,19 @@ elif cc==4:
      fname = 'output/sim_v1_lmax32.fits'
 elif cc==5:
      fname = 'output/sim_v1_const200.fits'
+elif cc==6:
+    fname = 'output/sim_v1_rsig.fits'
 
-O=lusee.LObservation('2025-02-01 13:00:00 to 2025-02-28 13:00:00',deltaT_sec=24*3600, lun_lat_deg=lat)
-#pickle.dump(O,open("obs.pickle","wb"))
-#O=pickle.load(open("obs.pickle","rb"))
+elif cc==7:
+    fname = 'output/sim_v1_fine.fits'
+    Dt = 60
+
+O=lusee.LObservation('2025-02-01 13:00:00 to 2025-02-28 13:00:00',deltaT_sec=Dt, lun_lat_deg=lat)
     
-antenna_sim_path = "../../AntennaSimResults/"
-antenna_fname = "004_Freq1-50MHz_Delta1MHz_AntennaLength1-6m_Delta1m_AntennaAngle75deg_LanderHeight2m/RadiatedElectricField_AntennaLength6m_AntennaAngle75deg_LanderHeight2m_LBoxZ70cm_monopole_Phase+0deg.fits"
-#fname = "003_Freq1-50MHz_Delta1MHz_AntennaLength6m_AntennaAngle30deg_LanderHeight2m/RadiatedElectricField_AntennaLength6m_AntennaAngle30deg_LanderHeight2m_monopole.fits"
+antenna_sim_path = "../../Drive/AntennaResponse/Exported/"
+antenna_fname = "feko_bnl_monopole_1m_75deg.fits"
 
 B = lusee.LBeam(antenna_sim_path+'/'+antenna_fname)
-B.project_to_phi_theta()
 
 beams = []
 for ofs,c in enumerate(["N","E","S","W"]):
@@ -41,16 +44,20 @@ for ofs,c in enumerate(["N","E","S","W"]):
 lmax = 64 if cc!=4 else 32
 sky = lusee.sky.FitsSky ('sky_data/ULSA_32_ddi_smooth.fits', lmax = lmax)
 skymeans = sky.maps.mean(axis=1)
-if cc ==1:
+if cc == 1:
     sky = lusee.sky.ConstSky(32,lmax,skymeans)
-if cc==2:
+if cc == 2:
     sky = lusee.sky.GalCenter(32,lmax,skymeans*10)
-if cc==5:
+if cc == 5:
     sky = lusee.sky.ConstSky(32,lmax,200.)
     Tground=200.
+if cc == 6:
+    sky = lusee.sky.ConstSky(32,lmax,[lusee.monosky.T_DarkAges(f) for f in np.arange(1,51)])
 
+    
 print ("Setting up object")
-S = lusee.Simulator (O,beams, sky, freq_ndx=np.arange(50), lmax = lmax, combinations=[(0,0),(0,2),(2,2),(0,1),(1,1),(1,3),(3,3)], Tground = Tground )
+S = lusee.Simulator (O,beams, sky, freq_ndx=np.arange(50), lmax = lmax,
+        combinations=[(0,0),(0,2),(2,2),(0,1),(1,1),(1,3),(3,3),(0,3),(1,2),(2,3)], Tground = Tground )
 pickle.dump(S,open("Sim.pickle","wb"))
 S=pickle.load(open("Sim.pickle","rb"))
 

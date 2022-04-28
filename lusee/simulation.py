@@ -54,9 +54,10 @@ class Simulator:
         bomega = []
         self.combinations = combinations
         for b in beams:
-            P = b.power()[self.freq_ndx,:,:]
+            P = b.power()[self.freq_ndx,:,:]*tapr[None,:,None]
             beamnorm =  np.array([grid2healpix_alm_fast(b.theta,b.phi[:-1], np.real(P[fi,:,:-1]),
-                                                   lmax=1)[0]/np.sqrt(4*np.pi) for fi in self.freq_ndx])
+                                        lmax=1)[0]/np.sqrt(4*np.pi) for fi in self.freq_ndx])
+            beamnorm /= (1-b.f_ground[self.freq_ndx])
             bomega.append(np.real(beamnorm))
 
         
@@ -70,19 +71,19 @@ class Simulator:
             beamreal =  np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.real(beam[fi,:,:-1]),
                                       self.lmax) for fi in self.freq_ndx])
             #groundPowerReal =  np.real(1-beamreal[:,0]/np.sqrt(4*np.pi))
-            groundPowerReal = np.array([np.real(grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.real(ground[fi,:,:-1]),
-                                                         1)[0])/np.sqrt(4*np.pi) for fi in self.freq_ndx])
+            #groundPowerReal = np.array([np.real(grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.real(ground[fi,:,:-1]),
+            #                                             1)[0])/np.sqrt(4*np.pi) for fi in self.freq_ndx])
+            groundPowerReal = np.sqrt(bi.f_ground[self.freq_ndx]*bj.f_ground[self.freq_ndx])
 
             if i!=j:
                 beamimag = np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(beam[fi,:,:-1]),
                                          self.lmax) for fi in self.freq_ndx])
-                groundPowerImag = np.array([np.real(grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(ground[fi,:,:-1]),
-                                                         1)[0]/np.sqrt(4*np.pi)) for fi in self.freq_ndx])
+                #groundPowerImag = np.array([np.real(grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(ground[fi,:,:-1]),
+                #                                         1)[0]/np.sqrt(4*np.pi)) for fi in self.freq_ndx])
 
             else:
                 beamimag = None
-                groundPowerImag =0 
-
+                groundPowerImag = 0 
 
             self.efbeams.append((i,j,beamreal, beamimag, groundPowerReal,
                                  groundPowerImag))
@@ -93,7 +94,9 @@ class Simulator:
             times = self.obs.times
         if self.sky_model.frame=="galactic":
             do_rot = True
+            print ("Getting pole transformations...")
             lzl,bzl = self.obs.get_l_b_from_alt_az(np.pi/2,0., times)
+            print ("Getting horizon transformations...")
             lyl,byl = self.obs.get_l_b_from_alt_az(0.,0., times)  ## astronomical azimuth = 0 = N = our y coordinate
 
         elif self.sky_model.frame=="MCMF":
@@ -102,7 +105,10 @@ class Simulator:
             raise NotImplementedError
 
         wfall = []
+        Nt = len (times)
         for ti, t in enumerate(times):
+            if (ti%100==0):
+                print (f"{ti/Nt*100}% done ...")
             sky = self.sky_model.get_alm (self.freq_ndx, self.freq[self.freq_ndx])
             if do_rot:
                 lz,bz,ly,by = lzl[ti],bzl[ti],lyl[ti],byl[ti]
@@ -117,11 +123,11 @@ class Simulator:
             res = []
             for ci,cj,beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
                 T = np.array([mean_alm(br_,sky_,self.lmax) for br_,sky_ in zip(beamreal,sky)])
-                T += np.array([self.Tground*gP for gP in groundPowerReal])
+                T += self.Tground*groundPowerReal
                 res.append(T)
                 if ci!=cj:
                     Timag = np.array([mean_alm(bi_,sky_,self.lmax) for bi_,sky_ in zip(beamimag,sky)])
-                    Timag += np.array([self.Tground*gP for gP in groundPowerImag])
+                    Timag += self.Tground*groundPowerImag
                     res.append(Timag)
             wfall.append(res)
         self.result = np.array(wfall)
