@@ -41,3 +41,8 @@ docker build -f docker/Dockerfile-jupyter -t buddhasystem/lusee-night-luseepy-ju
 pip install wheel
 sudo apt-get install libbz2-dev
 ```
+
+# Notes
+
+Add pyshtools
+
