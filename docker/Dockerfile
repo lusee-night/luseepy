@@ -1,9 +1,8 @@
 #
-# NB. the "reqs" build argument can supply any
-# requirements file for the build, defaulting to the
-# common "requirements.txt"
+# NB. the "reqs" build argument can supply any  requirements file for
+# the build, defaulting to the common "requirements.txt"
 # 
-#
+# Also note a copy of the "astropy cache"
 
 FROM python:3.10.1-bullseye
 

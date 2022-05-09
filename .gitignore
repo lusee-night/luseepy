@@ -1,6 +1,9 @@
 # Cache - which is a byproduct of running these packages
 .lusee_cache.*
 
+# Standard location for the cache, it is not meant to go on GitHub
+.astropy/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

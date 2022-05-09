@@ -26,8 +26,14 @@ This image is published on __Docker Hub__:
 
 ## The "base" image
 
-The "base" image: Same as "foundation, but with added ARES package. Uses ```Dockerfile-base```. Docker Hub reference:
+The "base" image is based on "foundation, but with added ARES package. Uses ```Dockerfile-base```. Docker Hub reference:
 * [buddhasystem/lusee-night-base:0.1](https://hub.docker.com/repository/docker/buddhasystem/lusee-night-base)
+
+
+## The "pyshtools" image
+
+Based on "base", but with added ```pyshtools``` package. Uses ```Dockerfile-pyshtools```. Docker Hub reference:
+* [buddhasystem/lusee-night-pyshtools:0.1](https://hub.docker.com/repository/docker/buddhasystem/lusee-night-pyshtools)
 
 ---
 
