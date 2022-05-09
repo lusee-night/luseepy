@@ -14,7 +14,7 @@ and so dockerfiles need to be specified with the ```-f``` option.
 
 This is the minimal useable image based on ```requirements-foundation.txt```.
 The main "Dockerfile" in the "docker" folder now uses a ```build-arg``` argument,
-which allows to use any requirements file. For example, building the "foundation"
+which allows to use any initial requirements file. For example, building the "foundation"
 image is done like this (you would need to change that to reflect the tag associated with
 your own account):
 
@@ -26,14 +26,16 @@ This image is published on __Docker Hub__:
 
 ## The "base" image
 
-The "base" image is based on "foundation, but with added ARES package. Uses ```Dockerfile-base```. Docker Hub reference:
-* [buddhasystem/lusee-night-base:0.1](https://hub.docker.com/repository/docker/buddhasystem/lusee-night-base)
+* Based on "foundation", with added ```ARES``` package.
+* Uses ```Dockerfile-base```.
+* Docker Hub reference: [buddhasystem/lusee-night-base:0.1](https://hub.docker.com/repository/docker/buddhasystem/lusee-night-base)
 
 
 ## The "pyshtools" image
 
-Based on "base", but with added ```pyshtools``` package. Uses ```Dockerfile-pyshtools```. Docker Hub reference:
-* [buddhasystem/lusee-night-pyshtools:0.1](https://hub.docker.com/repository/docker/buddhasystem/lusee-night-pyshtools)
+* Based on "base", with added ```pyshtools``` package.
+*  Uses ```Dockerfile-pyshtools```.
+* Docker Hub reference: [buddhasystem/lusee-night-pyshtools:0.1](https://hub.docker.com/repository/docker/buddhasystem/lusee-night-pyshtools)
 
 ---
 
