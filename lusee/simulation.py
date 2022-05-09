@@ -137,11 +137,10 @@ class Simulator:
         if self.result is None:
             print ("Nothing to write")
             raise RunTimeError
-        header = {
-            "freq":self.freq[self.freq_ndx]#,
-            #"combinations":self.combinations
-            }
         fits = fitsio.FITS(out_file,'rw',clobber=True)
-        fits.write(self.result, header=header)
-        
-            
+        header = {
+            "version":0.1
+            }
+        fits.write(self.result, header=header, extname='data')
+        fits.write(self.freq[self.freq_ndx], extname='freq')
+        fits.write(np.array(self.combinations), extname='combinations')
