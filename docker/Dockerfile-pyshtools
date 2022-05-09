@@ -1,0 +1,8 @@
+# Adding "pyshtools" on top of base
+#
+
+FROM buddhasystem/lusee-night-base:0.1
+WORKDIR /app
+COPY docker/requirements-pyshtools.txt requirements-pyshtools.txt
+RUN pip install -r requirements-pyshtools.txt
+

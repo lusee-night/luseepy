@@ -1,19 +1,13 @@
-# DEPRECATED
 #
-# Basic Dockerfile used to build a Debian image
-# containing the packages required by lusee-night/luseepy.
-# 
-# This file is to be referenced when building the luseepy
-# images from a folder one level above. Example:
-#
-# sudo docker build -f docker/Dockerfile-myfile -t MYTAGNAME .
+####################### DEPRECATED #####################
+# Superceded by "Dockerfile" with an extra argument
 #
 
 FROM python:3.10.1-bullseye
 
 WORKDIR /app
 
-# Apparently required by "fitsio"
+# Apparently required by "fitsio" on some platforms
 RUN apt-get install libbz2-dev
 
 # We may have a few versions of requirements,

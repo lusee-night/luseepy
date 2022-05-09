@@ -1,10 +1,9 @@
 #
-# An example of a Dockerfile for lusee-night/luseepy,
-# kept of illustration purposes only.
-#
-# Please refer to other Dockerfiles in this folder
-# for working examples.
+# NB. the "reqs" build argument can supply any
+# requirements file for the build, defaulting to the
+# common "requirements.txt"
 # 
+#
 
 FROM python:3.10.1-bullseye
 
