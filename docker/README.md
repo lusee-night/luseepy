@@ -1,10 +1,9 @@
 # Docker setup for lusee-night
 
-A folder to manage images for the **lusee-night** CI and other
-applications that require containers.
-
-Choice of the Python version: the initial choice is 3.10.1 in order
-to be close to the SDCC environment.
+This folder helps create and manage Python-based images for the **lusee-night**
+CI and other containerized applications. The initial choice of the Python version
+is ```3.10.1```, and the base image is derived from __Debian bullseye__:
+```python:3.10.1-bullseye```.
 
 # The "foundation"
 
@@ -16,7 +15,7 @@ docker build . -f docker/Dockerfile -t test:0.1 --build-arg reqs=requirements_sh
 
 ...which allows to use any ```requirements``` file depending on needs.
 For example, the "foundation" image includes base packages
-described in ```requirements_short.txt```. It's normally published on Docjer Hub:
+described in ```requirements_short.txt```. It's normally published on Docker Hub:
 
 * [buddhasystem/lusee-night-foundation:0.1](https://hub.docker.com/repository/docker/buddhasystem/lusee-night-foundation)
 
