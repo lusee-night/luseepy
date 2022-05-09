@@ -5,12 +5,16 @@ CI and other containerized applications. The initial choice of the Python versio
 is ```3.10.1```, and the base image is derived from __Debian bullseye__:
 ```python:3.10.1-bullseye```.
 
+Building the images is done from the folder one level above the ```docker``` folder,
+and so dockerfiles need to be specified with the ```-f``` option.
+
 # The "foundation"
 
-The main "Dockerfile" now takes a ```build-arg``` argument:
+The main "Dockerfile" now takes a ```build-arg``` argument. For example, building
+the "foundation" image is done like this:
 
 ```bash
-docker build . -f docker/Dockerfile -t test:0.1 --build-arg reqs=requirements_short.txt
+docker build . -f docker/Dockerfile -t buddhasystem/lusee-night-foundation:0.1 --build-arg reqs=requirements-foundation.txt
 ```
 
 ...which allows to use any ```requirements``` file depending on needs.
@@ -43,5 +47,5 @@ sudo apt-get install libbz2-dev
 
 # Notes
 
-Add pyshtools
+May 9, 2022: Added pyshtools
 
