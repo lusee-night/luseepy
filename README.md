@@ -4,9 +4,8 @@ A set of python utilities for performing various LuSEE Night related calculation
 
 ## Docker
 We build images for "vanilla" luseepy and also for Jupyter notebooks, based on same.
-See [here](Docker/README.md)
+See [here](Docker/README.md).
 
-See 
 ## Developing
 
 To develop on your laptop, the easiest thing is to use the latest docker environment.
