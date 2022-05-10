@@ -4,16 +4,7 @@ A set of python utilities for performing various LuSEE Night related calculation
 
 ## Docker
 We build images for "vanilla" luseepy and also for Jupyter notebooks, based on same.
-
-ARES and PERSES are being added and are in the process of testing. These dependencies
-need to be set for the PERSES to load. SymPy was added to the environment,
-and ```pylinex``` was checked out of GitHub.
-
-Example of the provisional setup, will automate later:
-
-```bash
-/home/maxim/projects/lusee-night/distpy/:/home/maxim/projects/lusee-night/ares:/home/maxim/projects/lusee-night/pylinex
-```
+See [here](Docker/README.md).
 
 ## Developing
 
@@ -21,7 +12,7 @@ To develop on your laptop, the easiest thing is to use the latest docker environ
 Please install docker and pull the image
 
 ```
-docker pull buddhasystem/lusee-night-luseepy-jupyter:0.1 
+docker pull buddhasystem/lusee-night-pyshtools:0.1
 ```
 Next, checkout the lusee repo
 ```
