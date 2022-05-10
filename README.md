@@ -1,4 +1,6 @@
 # luseepy
+![workflow](https://github.com/lusee-night/luseepy/actions/workflows/luseepy-test.yml/badge.svg)
+
 ## About
 A set of python utilities for performing various LuSEE Night related calculations.
 
