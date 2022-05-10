@@ -13,6 +13,9 @@ def B_NB(f):
     tau = 3.28 * f**pltau
     return B0 * f**plB * np.exp(-1.*tau)
 
+def T_NB(f):
+    return B2T(B_NB(f),f)
+
 def B_C(f):
     ''' return sky brightness (W/m**2/Hz/sr) at frequency f(MHz) 
         according to the model of Cane 1979 MNRAS 189.3 (1979): 465-478.
@@ -24,6 +27,10 @@ def B_C(f):
     pltau = -2.1
     tau = 5 * f**pltau
     return Ig * f**plg * (1 - np.exp(-1.*tau))/tau + Ieg * f**pleg * np.exp(-1.0 * tau)
+
+def T_C(f):
+    return B2T(B_C(f),f)
+
 
 def T_J(f):
     ''' return sky brightness in K at frequency f(MHz) 
@@ -50,6 +57,7 @@ def B2V(B, f, leff, gamma):
     ''' return V^2/Hz for dipole of effective length leff [m] and preamp coupling efficiency gamma c.f. Zaslavsky (11) '''
     return 4*np.pi / 3. * 377 * B * (leff*gamma)**2
 
+# below are interpolants for dark ages, scroll to the end
 _DA_nu = np.array([0.0, 0.473642, 0.474109, 0.474577, 0.475045,
 0.475515, 0.475986, 0.476457, 0.47693, 0.477403, 0.477878, 0.478353,
 0.47883, 0.479307, 0.479785, 0.480264, 0.480744, 0.481225, 0.481708,

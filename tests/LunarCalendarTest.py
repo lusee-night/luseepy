@@ -27,6 +27,11 @@ if verb:
 
 start.precision, end.precision = (6, 6)
 
-fmt = "%Y %m %d %H %M %S %f"
-print(start.strftime(fmt))
-print(end.strftime(fmt))
+fmt = "%Y %m %d %H %M %S"
+starts = start.strftime(fmt)
+ends = end.strftime(fmt) 
+print(starts)
+print(ends)
+assert(starts == "2025 04 27 19 29 24")
+assert(ends == "2025 05 27 07 05 14")
+print ("Asserts passed.")

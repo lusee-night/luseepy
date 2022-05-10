@@ -1,0 +1,43 @@
+paths:
+  lusee_drive_dir: $LUSEE_DRIVE_DIR
+  sky_dir: Simulations/SkyModels
+  beam_dir: AntennaResponse/Exported/Example
+    
+sky:
+  file: ULSA_32_ddi_smooth.fits
+
+beams: 
+  N:
+    file: feko_bnl_monopole_1m_75deg.fits
+    angle: 0
+  E:
+    file: feko_bnl_monopole_1m_75deg.fits
+    angle: -90
+  S:
+    file: feko_bnl_monopole_1m_75deg.fits
+    angle: -180
+  W:
+    file: feko_bnl_monopole_1m_75deg.fits
+    angle: -270
+
+
+observation:
+  long: 180
+  lat: -10
+  beams: [ N, S, E, W ]
+  common_beam_angle: 0
+  lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
+  dt: 24*3600 
+  Tground: 0
+  lmax: 32
+  combinations: all
+  freq:
+    start: 1
+    end: 3
+    step: 1
+
+simulation:
+  output: output/sim_example.fits
+  
+  
+ 

@@ -9,9 +9,17 @@ on:
   # Enable manual activation, too
   workflow_dispatch:
 jobs:
-  hello-world:
+  luseepy-test:
     runs-on: ubuntu-latest
-    container: buddhasystem/lusee-night-luseepy-ci:0.1 # ubuntu-latest
+    env:
+       PYTHONPATH: .:..
+       LUSEE_DRIVE_DIR: Drive
+    container: buddhasystem/lusee-night-pyshtools:0.1 # ubuntu-latest
     steps:
       - uses: actions/checkout@v2
-      - run: python tests/test_calendar.py
+      - run: wget "https://drive.google.com/uc?export=download&id=18hlczRVOkt2bQI-j_WzsSgXeVWGZflgA"
+      - run: tar zxvf uc*
+      - run: python tests/LunarCalendarTest.py  -v
+      - run: python tests/CoordTest.py
+      - run: python tests/SimTest.py
+      - run: cd simulation; ln -s ../Drive .; python driver/run_sim.py config/example.yaml
