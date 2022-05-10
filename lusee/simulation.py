@@ -46,6 +46,7 @@ class Simulator:
 
 
     def prepare_beams(self,beams, combinations):
+        self.beams = beams
         self.efbeams = []
         thetas = beams[0].theta
         #gtapr = np.zeros(len(thetas))
@@ -144,3 +145,6 @@ class Simulator:
         fits.write(self.result, header=header, extname='data')
         fits.write(self.freq[self.freq_ndx], extname='freq')
         fits.write(np.array(self.combinations), extname='combinations')
+        for i,b in enumerate(self.beams):
+            fits.write(np.real(b.ZRe[self.freq_ndx]),extname=f'ZRe_{i}')
+            fits.write(np.imag(b.ZIm[self.freq_ndx]),extname=f'ZIm_{i}')

@@ -1,7 +1,7 @@
 paths:
   lusee_drive_dir: $LUSEE_DRIVE_DIR
   sky_dir: Simulations/SkyModels
-  beam_dir: AntennaResponse/Exported
+  beam_dir: AntennaResponse/Exported/Example
     
 sky:
   file: ULSA_32_ddi_smooth.fits
