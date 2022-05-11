@@ -1,5 +1,5 @@
 # Adding "pyshtools" on top of base
-#
+# Includes Jupyter
 
 FROM buddhasystem/lusee-night-base:0.1
 WORKDIR /app

@@ -12,9 +12,10 @@ WORKDIR /app
 COPY docker/${reqs} requirements.txt
 RUN pip install -r requirements.txt
 
+COPY lusee lusee
+COPY tests tests
+
 ADD .astropy /root/.astropy
 
-#COPY lusee lusee
-#COPY tests tests
 
 CMD ["python"]
