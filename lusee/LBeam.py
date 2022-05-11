@@ -94,13 +94,20 @@ class LBeam:
     def __init__ (self, fname):
         header = fitsio.read_header(fname)
         fits = fitsio.FITS(fname,'r')
+        version = header['version']
+        self.version = version
         self.Etheta = fits['Etheta_real'].read() + 1j*fits['Etheta_imag'].read()
-        self.Ephi = fits['Ephi_real'].read() + 1j*fits['Ephi_imag'].read()
+        self.Ephi = fits['Ephi_real'].read() + 1 j*fits['Ephi_imag'].read()
         self.ZRe = fits['Z_real'].read()
         self.ZIm = fits['Z_imag'].read()
         self.Z = self.ZRe + 1j*self.ZIm
-        self.f_ground = fits['f_ground'].read()
-        self.version = header['version']
+        #
+        if version==1:
+            self.f_ground = fits['f_ground'].read()
+        elif version==2:
+            self.gain_conv = fits['gain_conv'].read()
+            self.freq = fits['freq']
+            
         self.freq_min = header['freq_min']
         self.freq_max = header['freq_max']
         self.Nfreq = header['freq_N']
@@ -111,7 +118,8 @@ class LBeam:
         self.phi_max = header['phi_max']
         self.Nphi = header['phi_N']
         self.header = header
-        self.freq = np.linspace(self.freq_min, self.freq_max,self.Nfreq)
+        if version==1:
+            self.freq = np.linspace(self.freq_min, self.freq_max,self.Nfreq)
         self.theta_deg = np.linspace(self.theta_min, self.theta_max,self.Ntheta)
         self.phi_deg = np.linspace(self.phi_min, self.phi_max,self.Nphi)
         self.theta = self.theta_deg/180*np.pi

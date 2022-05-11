@@ -9,7 +9,13 @@ class BeamConverter:
       self.thetamax = thetamax
 
     def save_fits(self,outfile):
-        header = {'version':1,
+        ## version history:
+        # v1 initial version
+        # v2 
+        #    fground replaced with a gain_conv field (E^2*gain_conv is gain)
+        #    freq does not need to be on a regular grid
+
+        header = {'version':2,
                   'freq_min':self.freq_min,
                   'freq_max':self.freq_max,
                   'freq_N':self.Nfreq,
@@ -30,8 +36,9 @@ class BeamConverter:
         fits.write(np.imag(self.Etheta), extname = 'Etheta_imag')
         fits.write(np.real(self.Ephi), extname = 'EPhi_real')
         fits.write(np.imag(self.Ephi), extname = 'EPhi_imag')
+        fits.write(self.gainconv, extname = 'gain_conv')
+        fits.write(self.freq, extname = 'freq')
         fits.write(self.ZRe, extname = 'Z_real')
         fits.write(self.ZIm, extname = 'Z_imag')
-        fits.write(self.f_ground, extname = 'f_ground')
         fits.close()
         print ('Done.')
