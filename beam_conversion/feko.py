@@ -136,7 +136,7 @@ class Feko2LBeam(BeamConverter):
         print ("Finding gain conversion factors")
         mygain = np.abs(Etheta**2) + np.abs(Ephi**2)
         db2fact = lambda dB: 10**(dB/10)
-        ratio = db2fact(gain)/mygain
+        ratio = db2fact(gain)/(mygain+1e-100)
         gainmax = gain.max()
         gainconv = []
         for i,f in enumerate(freq):

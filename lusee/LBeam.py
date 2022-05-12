@@ -92,12 +92,12 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
 
 class LBeam:
     def __init__ (self, fname):
-        header = fitsio.read_header(fname)
+        header = dict(fitsio.read_header(fname))
         fits = fitsio.FITS(fname,'r')
-        version = header['version']
+        version = header['VERSION']
         self.version = version
         self.Etheta = fits['Etheta_real'].read() + 1j*fits['Etheta_imag'].read()
-        self.Ephi = fits['Ephi_real'].read() + 1 j*fits['Ephi_imag'].read()
+        self.Ephi = fits['Ephi_real'].read() + 1j*fits['Ephi_imag'].read()
         self.ZRe = fits['Z_real'].read()
         self.ZIm = fits['Z_imag'].read()
         self.Z = self.ZRe + 1j*self.ZIm
@@ -106,17 +106,17 @@ class LBeam:
             self.f_ground = fits['f_ground'].read()
         elif version==2:
             self.gain_conv = fits['gain_conv'].read()
-            self.freq = fits['freq']
+            self.freq = fits['freq'].read()
             
-        self.freq_min = header['freq_min']
-        self.freq_max = header['freq_max']
-        self.Nfreq = header['freq_N']
-        self.theta_min = header['theta_min']
-        self.theta_max = header['theta_max']
-        self.Ntheta = header['theta_N']
-        self.phi_min = header['phi_min']
-        self.phi_max = header['phi_max']
-        self.Nphi = header['phi_N']
+        self.freq_min = header['FREQ_MIN']
+        self.freq_max = header['FREQ_MAX']
+        self.Nfreq = header['FREQ_N']
+        self.theta_min = header['THETA_MIN']
+        self.theta_max = header['THETA_MAX']
+        self.Ntheta = header['THETA_N']
+        self.phi_min = header['PHI_MIN']
+        self.phi_max = header['PHI_MAX']
+        self.Nphi = header['PHI_N']
         self.header = header
         if version==1:
             self.freq = np.linspace(self.freq_min, self.freq_max,self.Nfreq)
@@ -177,6 +177,18 @@ class LBeam:
         xP = self.Etheta*np.conj(other.Etheta) + self.Ephi*np.conj(other.Ephi)
         return xP
 
+    def ground_fraction(self):
+        if self.version<2:
+            print ("Cannot do this on v1 files.")
+        xP=self.power()
+        gain = xP*self.gain_conv[:,None,None]
+        dphi = self.phi[1]-self.phi[0]
+        dtheta = self.theta[1]-self.theta[0]
+        dA_theta = np.sin(self.theta)*dtheta*dphi
+        f_sky = np.array([(dA_theta[:,None]*gain[i,:,:]).sum()/(4*np.pi) for i in range(self.Nfreq)])
+        f_ground = 1.0 - f_sky
+        return f_ground
+        
     
     def power_hp(self, ellmax, Nside, freq_ndx=None, theta_tapr=None):
         """ returns healpix rendering of the power """

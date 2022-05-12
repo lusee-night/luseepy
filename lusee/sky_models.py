@@ -3,7 +3,7 @@ import healpy as hp
 import numpy as np
 
 class ConstSky:
-    def __init__ (self,Nside, lmax, T):
+    def __init__ (self,Nside, lmax, T, freq=None):
         self.Nside = Nside
         self.Npix = Nside**2 * 12
         Tmap = np.ones(self.Npix)
@@ -16,6 +16,7 @@ class ConstSky:
         Tmap[theta>0.75*np.pi] = 0 
         self.mapalm = hp.map2alm(Tmap, lmax=lmax)
         self.frame = "MCMF"
+        self.freq=freq
 
     def T (self,ndx):
         return [self._T]*len(ndx) if type(self._T)==float else self._T[ndx]
@@ -26,7 +27,7 @@ class ConstSky:
 
 
 class GalCenter (ConstSky):
-    def __init__ (self,Nside, lmax, T):
+    def __init__ (self,Nside, lmax, T, freq=None):
         self.Nside = Nside
         self.Npix = Nside**2 * 12
         self._T = T
@@ -35,6 +36,7 @@ class GalCenter (ConstSky):
         Tmap = np.exp(-(phi)**2/0.1-(theta-np.pi/2)**2/0.1)
         self.mapalm = hp.map2alm(Tmap, lmax = lmax)
         self.frame = "galactic"
+        self.freq=freq
 
 
 class FitsSky:
@@ -46,13 +48,13 @@ class FitsSky:
         fstart = header['freq_start']
         fend = header['freq_end']
         fstep = header['freq_step']
-        self.freq_list = np.arange(fstart, fend+1e-3*fstep, fstep)
-        assert (len(self.freq_list) == maps.shape[0])
+        self.freq = np.arange(fstart, fend+1e-3*fstep, fstep)
+        assert (len(self.freq) == maps.shape[0])
         self.mapalm = np.array([hp.map2alm(m,lmax = lmax) for m in maps])
         self.frame = "galactic"
 
     def get_alm (self, ndx, freq):
-        assert (np.all(self.freq_list[ndx]==freq))
+        assert (np.all(self.freq[ndx]==freq))
         return self.mapalm[ndx]
 
 

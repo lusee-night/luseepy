@@ -6,7 +6,7 @@ import pickle
 import os
 
 O=lusee.LObservation('2025-02-01 13:00:00 to 2025-03-01 13:00:00',deltaT_sec=24*3600, lun_lat_deg=-00.0)
-B = lusee.LBeam(os.environ['LUSEE_DRIVE_DIR']+'/AntennaResponse/Exported/Example/feko_bnl_monopole_1m_75deg.fits')
+B = lusee.LBeam(os.environ['LUSEE_DRIVE_DIR']+'/AntennaResponse/Exported/Example/feko_monopole_3m_75deg_regolith.fits')
 
 beams = []
 for ofs,c in enumerate(["N","E","S","W"]):
@@ -15,11 +15,11 @@ for ofs,c in enumerate(["N","E","S","W"]):
 
     
 lmax = 64
-
-sky = lusee.sky.ConstSky(Nside = 32, lmax = lmax, T=200)
+freq=[1,5,10]
+sky = lusee.sky.ConstSky(Nside = 32, lmax = lmax, freq=freq, T=200)
 
 print ("Setting up object")
-S = lusee.Simulator (O,beams, sky, freq_ndx=[0,1,2], lmax = lmax, combinations=[(0,0),(1,1),(1,3)],
+S = lusee.Simulator (O,beams, sky, freq=freq, lmax = lmax, combinations=[(0,0),(1,1),(1,3)],
                      Tground = 200. )
 print ("Simulating")
 WF = S.simulate(times=O.times)

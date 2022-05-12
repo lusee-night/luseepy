@@ -50,17 +50,6 @@ class SimDriver(dict):
         O=lusee.LObservation(od['lunar_day'],deltaT_sec=dt,
                     lun_lat_deg=od['lat'], lun_long_deg = od['long'])
         freq = np.arange(od['freq']['start'],od['freq']['end'],od['freq']['step'])
-        print ("  locating frequency indices...")
-        freq_list = list(self.sky.freq_list)
-        freq_ndx = []
-        for f in freq:
-            try:
-                ndx = freq_list.index(f)
-            except ValueError:
-                print ("Error:")
-                print (f"Frequency {f} does not exist in sky list of frequencies ({freq_list})")
-                sys.exit(1)
-            freq_ndx.append(ndx)
         print ("  setting up combinations...")
         combs = od['combinations']
         if type(combs)==str:
@@ -71,7 +60,7 @@ class SimDriver(dict):
                         combs.append((i,j))
     
         print ("  setting up Simulation object...")
-        S = lusee.Simulator (O,self.beams, self.sky, freq_ndx=freq_ndx, lmax = self.lmax,
+        S = lusee.Simulator (O,self.beams, self.sky, freq=freq, lmax = self.lmax,
                              combinations=combs, Tground = od['Tground'] )
         print ("  Simulating...")
         S.simulate(times=O.times)
