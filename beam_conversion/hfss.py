@@ -29,6 +29,12 @@ class HFSS2LBeam(BeamConverter):
             for field in fname.split('_'):
                 if "MHz" in field:
                     cfreq=float(field.replace('MHz',''))
+                    if cfreq in freqfname:
+                        print ("We seem to have two files with the same frequency! ")
+                        print(freqfname[cfreq])
+                        print(fname)
+                        print ("Exiting")
+                        sys.exit(1)
                     freqfname[cfreq]=fname
                     freq.append(cfreq)
 
@@ -38,11 +44,18 @@ class HFSS2LBeam(BeamConverter):
                 if "MHz" in field:
                     cfreq=float(field.replace('MHz',''))
                     assert (cfreq in freq)
+                    if cfreq in freqgain:
+                        print ("We seem to have two files with the same frequency! ")
+                        print(freqgain[cfreq])
+                        print(fname)
+                        print ("Exiting")
+                        sys.exit(1)
+
                     freqgain[cfreq]=fname
 
         
 
-        freq = sorted(freq)
+        freq = np.array(sorted(freq))
         Nfreq = len(freq)
         freq_min, freq_max = freq[0], freq[-1]
         print ("Loading frequencies: ", end = "")
@@ -51,6 +64,7 @@ class HFSS2LBeam(BeamConverter):
             print (f"{cfreq} ... ", end = "")
             sys.stdout.flush()
             #Efield
+            #print (f"REading freq,{freqfname[cfreq]}, {freqgain[cfreq]}")
             data = open(freqfname[cfreq]).readlines()[1:]
             data = np.array([[float(x) for x in d.split(',')] for d in data])
             phi, theta, ExR, ExI, EyR, EyI, EzR, EzI = data.T
@@ -60,9 +74,6 @@ class HFSS2LBeam(BeamConverter):
             gphi, gtheta, gain = data.T
             assert(np.all(gphi==phi))
             assert(np.all(gtheta==theta))
-            
-            
-            
             
             E = np.array([ExR+1j*ExI,  EyR+1j*EyI,  EzR+1j*EzI])
             sin = np.sin
@@ -85,7 +96,7 @@ class HFSS2LBeam(BeamConverter):
             assert(np.abs(((ttheta*ttheta).sum(axis=0))-1).max()<1e-10)
             assert(np.abs(((trad*trad).sum(axis=0))-1).max()<1e-10)
 
-            E = np.sqrt(np.abs(Ephi**2)+np.abs(Erad**2)+np.abs(Etheta**2))
+            E = np.sqrt(np.abs(Ephi**2)+np.abs(Erad**2)+np.abs(Etheta**2))+1e-90
             check = np.where((np.abs(Erad)/E>0.01) & (E>E.max()/10))
             if len(check[0]>0):
                 print (" [ Warning, Erad exceeds 1% E at places! ]")
@@ -109,11 +120,11 @@ class HFSS2LBeam(BeamConverter):
                 gEtheta[i,thetaL, phiL] = Etheta
                 gEphi[i,thetaL, phiL] = Ephi
                 ggain[i,thetaL, phiL] = gain
+                have_size = True
             else:
                 gEtheta[i,thetaL, phiL] = Etheta
                 gEphi[i,thetaL, phiL] = Ephi
-                ggain[i,thetaL, phiL] = ggain
- 
+                ggain[i,thetaL, phiL] = gain
                 
         Etheta = gEtheta
         Ephi = gEphi
@@ -146,34 +157,32 @@ class HFSS2LBeam(BeamConverter):
         #print ("f_ground parsing successful.")
         print ("Finding gain conversion factors")
         mygain = np.abs(Etheta**2) + np.abs(Ephi**2)
-        db2fact = lambda dB: 10**(dB/10)
-        ratio = db2fact(gain)/mygain
+        #db2fact = lambda dB: 10**(dB/10)
+        # in hfss we have directity, which is already in gain units
+        ratio = gain/mygain
         gainmax = gain.max()
         gainconv = []
         for i,f in enumerate(freq):
             r = ratio[i,:,:]
-            w = np.where(gain[i,:,:]>gainmax-20)
+            w = np.where(gain[i,:,:]>gainmax/100)
             meanconv = r[w].mean()
             rms = np.sqrt(r[w].var())
+            print (f"    {f} MHz    {meanconv:0.3g} ({rms/meanconv*100:0.3f}% err)")
             assert (rms/meanconv<1e-3)
-            print (f"    {f} MHz    {meanconv:0.3f} ({rms/meanconv*100:0.3f}% err)")
             gainconv.append(meanconv)
         
-        ZRe = np.zeros(Nfreq)+np.nan
-        ZIm =np.zeros(Nfreq)+np.nan
-
-        data = np.loadtxt(self.root+"_Z_Re.dat", skiprows=2)
-
-        freqL = np.zeros(data.shape[0],int)-1
-        for i,f in enumerate(freq):
-            freqL[f==data[:,0]/1e6] = i
-        ZRe [freqL] = data[:,1]
-
-        data = np.loadtxt(self.root+"_Z_Im.dat", skiprows=2)
-        ZIm [freqL] = data[:,1]
-
-        assert(not np.any(np.isnan(ZRe)))
-        assert(not np.any(np.isnan(ZIm)))
+        flist = glob.glob(self.root+"/Impedance/*.csv")
+        if (len(flist)>1):
+            print ("Don't know which file to read.",flist)
+            sys.exit(1)
+        elif (len(flist)==0):
+            print ("Can't find impedance info.")
+            sys.exit(1)
+        
+        data = open(flist[0]).readlines()[1:]
+        data = np.array([[float(x) for x in d.split(',')] for d in data])
+        cfreq, ZRe, ZIm = data.T
+        assert(np.all(cfreq==freq))
         print ("Impedance loading successful.")
 
 
