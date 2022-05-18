@@ -163,8 +163,13 @@ class Simulator:
             raise RunTimeError
         fits = fitsio.FITS(out_file,'rw',clobber=True)
         header = {
-            "version":0.1
-            }
+            "version" : 0.1,
+            "lunar_day"  : self.obs.lunar_day,
+            "lun_lat_deg"   : self.obs.lun_lat_deg,
+            "lun_long_deg"   : self.obs.lun_long_deg,
+            "lun_height_m"  : self.obs.lun_height_m,
+            "deltaT_sec" : self.obs.deltaT_sec
+        }
         fits.write(self.result, header=header, extname='data')
         fits.write(self.freq, extname='freq')
         fits.write(np.array(self.combinations), extname='combinations')
