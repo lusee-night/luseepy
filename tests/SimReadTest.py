@@ -7,6 +7,6 @@ if (len(sys.argv)<=1):
 fname = sys.argv[1]
 print (f"Attempting to read {fname}...")
 d = lusee.LData(sys.argv[1])
-print (d[:,"12C",:].shape)
+subdata =-d[:,"12C",:]
 print ("OK.")
 
