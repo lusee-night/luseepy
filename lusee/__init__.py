@@ -8,6 +8,7 @@
 
 #from . import lunar_calendar as calendar
 from .observation import LObservation
+from .data import LData
 from .lunar_satellite import LSatellite, ObservedSatellite
 from .LBeam import LBeam, grid2healpix
 from .simulation import Simulator
