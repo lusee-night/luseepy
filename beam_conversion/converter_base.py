@@ -10,14 +10,17 @@ class BeamConverter:
       self.root = root
       self.thetamax = thetamax
 
-    def find_single_file(self,pattern, filt = None):
+    def find_single_file(self, pattern, filt = None, ok_if_not_found = False):
         pat = os.path.join(self.root,pattern)
         flist = glob.glob(pat)
         if filt is not None:
             flist = list(filter(lambda x:filt in x,flist))
         if (len(flist))==0:
-            print (f"Couldn't find matching file {pat}")
-            sys.exit(1)
+            if ok_if_not_found:
+                return None
+            else:
+                print (f"Couldn't find matching file {pat}")
+                sys.exit(1)
         if (len(flist)>1):
             print (f"Multiple file candidates:",flist)
             sys.exit(1)

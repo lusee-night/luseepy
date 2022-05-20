@@ -12,13 +12,22 @@ except:
     have_lusee = False
 
 
-def loadSData(data_file, z_load):     
-    n_ports = len(z_load)
+## the following two functions are stolenf from convert_s_to_z by Ben Saliwanchik
+    
+def loadSData(data_file, Nfreq, z_load = None, ):     
       
     with open(data_file) as file:
         #Skip header
-        lines = file.readlines()[6:]
+        lines = file.readlines()
+        z0 = float(lines[4].split()[-1])
+        print (f"Sim impedance: {z0} Ohm")
+        lines = lines[6:]
         n_lines = len(lines)
+        n_ports = n_lines//Nfreq
+        assert(n_lines%Nfreq ==0 )
+        print ("Sim ports:", n_ports)
+        z_load = [z0]*n_ports
+
         line_len = len(np.fromstring(lines[1], dtype=float, sep=' '))
         data = np.zeros((n_lines, line_len))
         #Remove extra leading column from every forth line (frequency)
@@ -40,7 +49,7 @@ def loadSData(data_file, z_load):
     for i in range(n_freqs):
         s_data_array[i, :, :] = complex_array[i*n_ports:(i+1)*n_ports,:] 
             
-    return s_data_array
+    return s_data_array, z_load
 
 def convertS2Z(s_data_array, z_load):
     n_ports = len(z_load)
@@ -199,16 +208,27 @@ class Feko2LBeam(BeamConverter):
         ZRe = np.zeros(Nfreq)+np.nan
         ZIm =np.zeros(Nfreq)+np.nan
 
-        data = np.loadtxt(self.find_single_file("*_Z_Re.dat"), skiprows=2)
+        ZRe_fname = self.find_single_file("*_Z_Re.dat", ok_if_not_found = True)
 
-        freqL = np.zeros(data.shape[0],int)-1
-        for i,f in enumerate(freq):
-            freqL[f==data[:,0]/1e6] = i
-        ZRe [freqL] = data[:,1]
+        if type(ZRe_fname)==str:
+            print ("Reading Z_Re / Z_Im style files...")
+            data = np.loadtxt(ZRe_fname, skiprows=2)
+            freqL = np.zeros(data.shape[0],int)-1
+            for i,f in enumerate(freq):
+                freqL[f==data[:,0]/1e6] = i
+                ZRe [freqL] = data[:,1]
 
-        data = np.loadtxt(self.find_single_file("*_Z_Im.dat"), skiprows=2)
-        ZIm [freqL] = data[:,1]
+            data = np.loadtxt(self.find_single_file("*_Z_Im.dat"), skiprows=2)
+            ZIm [freqL] = data[:,1]
 
+        else:
+            print ("Reading s4p style files...")
+            fname = self.find_single_file("*.s4p")
+            s_data, z_load = loadSData(fname,Nfreq)
+            z_data = convertS2Z(s_data, z_load)
+            ZRe = np.real(z_data[:,0,0])
+            ZIm = np.imag(z_data[:,0,0])
+            
         assert(not np.any(np.isnan(ZRe)))
         assert(not np.any(np.isnan(ZIm)))
         print ("Impedance loading successful.")
@@ -239,6 +259,9 @@ def parse_args():
 
 if __name__=="__main__":
     F2B, args = parse_args()
+    print (f"  FEKO beam converter  ")
+    print (f"-----------------------")
+    print (f" Loading: {F2B.root}\n")
     F2B.load()
     F2B.save_fits(args.output_file)
     if have_lusee:
