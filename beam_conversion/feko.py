@@ -10,6 +10,54 @@ try:
     have_lusee = True
 except:
     have_lusee = False
+
+
+def loadSData(data_file, z_load):     
+    n_ports = len(z_load)
+      
+    with open(data_file) as file:
+        #Skip header
+        lines = file.readlines()[6:]
+        n_lines = len(lines)
+        line_len = len(np.fromstring(lines[1], dtype=float, sep=' '))
+        data = np.zeros((n_lines, line_len))
+        #Remove extra leading column from every forth line (frequency)
+        for n, line in enumerate(lines):
+            if n%n_ports == 0:
+                data[n,:] += np.fromstring(line, dtype=float, sep=' ')[1:]
+            else:
+                data[n,:] += np.fromstring(line, dtype=float, sep=' ')
+    
+    n_freqs = np.size(data,0)//n_ports
+    
+    #Convert magnitude and angle to Re+Im
+    complex_array = np.empty((n_lines, n_ports), dtype=np.complex128)
+    for col in range(n_ports):
+        complex_array[:, col] = data[:, 2*col]*np.exp(1.0j*data[:, (2*col)+1]*np.pi/180.0)
+    
+    #Put into S matrix for each freq
+    s_data_array = np.empty((n_freqs, n_ports, n_ports), dtype=np.complex128)
+    for i in range(n_freqs):
+        s_data_array[i, :, :] = complex_array[i*n_ports:(i+1)*n_ports,:] 
+            
+    return s_data_array
+
+def convertS2Z(s_data_array, z_load):
+    n_ports = len(z_load)
+    n_freqs = np.size(s_data_array,0)
+    identity = np.identity(n_ports)
+    sqrt_z_load = np.matmul(identity, np.sqrt(z_load).T)
+    
+    z_data_array =  np.empty((n_freqs, n_ports, n_ports), dtype=np.complex128)
+    for freq in range(n_freqs):
+        s = s_data_array[freq, :, :]
+        # z = sqrt(z_load) * (1+s) * (1-s)^-1 *  sqrt(z)
+        z = np.matmul(np.matmul( np.matmul(sqrt_z_load, (identity + s)), np.linalg.inv(identity - s)), sqrt_z_load)
+        z_data_array[freq, :, :] = z
+    
+    return z_data_array
+
+
     
 class Feko2LBeam(BeamConverter):
 
@@ -17,9 +65,9 @@ class Feko2LBeam(BeamConverter):
         BeamConverter.__init__(self,root,thetamax)
         self.farfield = farfield
 
-
+        
     def load(self):
-        fname = self.root+".out"
+        fname = self.find_single_file("*.out")
         data = open(fname).readlines()
         skip = True
         beam_data = []
@@ -151,14 +199,14 @@ class Feko2LBeam(BeamConverter):
         ZRe = np.zeros(Nfreq)+np.nan
         ZIm =np.zeros(Nfreq)+np.nan
 
-        data = np.loadtxt(self.root+"_Z_Re.dat", skiprows=2)
+        data = np.loadtxt(self.find_single_file("*_Z_Re.dat"), skiprows=2)
 
         freqL = np.zeros(data.shape[0],int)-1
         for i,f in enumerate(freq):
             freqL[f==data[:,0]/1e6] = i
         ZRe [freqL] = data[:,1]
 
-        data = np.loadtxt(self.root+"_Z_Im.dat", skiprows=2)
+        data = np.loadtxt(self.find_single_file("*_Z_Im.dat"), skiprows=2)
         ZIm [freqL] = data[:,1]
 
         assert(not np.any(np.isnan(ZRe)))
