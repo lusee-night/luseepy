@@ -22,7 +22,14 @@ class HFSS2LBeam(BeamConverter):
         Efiles = glob.glob(Edir+'/*.csv')
         Gdir = self.root+"/Directivity/"
         Gfiles = glob.glob(Gdir+'/*.csv')
-
+        if (len(Efiles)==0):
+            print (f"Did not find any files in {Edir}. Giving up!")
+            sys.exit(1)
+        Gdir = self.root+"/Directivity/"
+        Gfiles = glob.glob(Gdir+'/*.csv')
+        if (len(Gfiles)==0):
+            print (f"Did not find any files in {Gdir}. Giving up!")
+            sys.exit(1)
         freq = []
         freqfname = {}
         for fname in Efiles:
@@ -210,6 +217,9 @@ def parse_args():
 
 if __name__=="__main__":
     H2B, args = parse_args()
+    print (f"  HFSS beam converter  ")
+    print (f"-----------------------")
+    print (f" Loading: {H2B.root}\n")
     H2B.load()
     H2B.save_fits(args.output_file)
     if have_lusee:

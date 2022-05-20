@@ -4,7 +4,11 @@
 #export ROOT=$LUSEE_DRIVE_DIR/AntennaResponse/SimulationFiles/ShortDipoleComparison/dipole_in_vacuum/
 
 export ROOT=$LUSEE_DRIVE_DIR/AntennaResponse/SimulationFiles/LuSEELanderRegolithComparison/eight_layer_regolith/ 
-export OUTROOT=$LUSEE_DRIVE_DIR/AntennaResponse/Exported/LuSEELanderRegolithComparison/eight_layer_regolith/
-lpython_dev beam_conversion/hfss.py $ROOT/monopole_1m_75deg/hfss_lbl/ -o $OUTROOT/lbl_monopole_1m_75deg.fits
-#lpython_dev beam_conversion/hfss.py $ROOT/monopole_3m_75deg/hfss_lbl/ -o $OUTROOT/lbl_monopole_3m_75deg.fits
+export OUTROOT=$LUSEE_DRIVE_DIR/Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith
+
+lpython_dev beam_conversion/hfss.py $ROOT/monopole_1m_75deg/hfss_lbl/monopole_Phase0deg/ -o $OUTROOT/hfss_lbl_1m_75deg.fits
+lpython_dev beam_conversion/hfss.py $ROOT/monopole_1m_75deg/hfss_lbl/dipole_Phase180deg/ -o $OUTROOT/hfss_lbl_1m_75deg.2port.fits
+lpython_dev beam_conversion/hfss.py $ROOT/monopole_1m_15deg/hfss_lbl/monopole_Phase0deg/ -o $OUTROOT/hfss_lbl_1m_15deg.fits
+lpython_dev beam_conversion/hfss.py $ROOT/monopole_1m_15deg/hfss_lbl/dipole_Phase180deg/ -o $OUTROOT/hfss_lbl_1m_15deg.2port.fits
+
 

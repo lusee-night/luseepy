@@ -1,6 +1,8 @@
 import fitsio
 import sys
+import os
 import numpy as np
+import glob
 
 class BeamConverter:
 
@@ -8,6 +10,24 @@ class BeamConverter:
       self.root = root
       self.thetamax = thetamax
 
+    def find_single_file(self, pattern, filt = None, ok_if_not_found = False):
+        pat = os.path.join(self.root,pattern)
+        flist = glob.glob(pat)
+        if filt is not None:
+            flist = list(filter(lambda x:filt in x,flist))
+        if (len(flist))==0:
+            if ok_if_not_found:
+                return None
+            else:
+                print (f"Couldn't find matching file {pat}")
+                sys.exit(1)
+        if (len(flist)>1):
+            print (f"Multiple file candidates:",flist)
+            sys.exit(1)
+        return flist[0]
+            
+    
+      
     def save_fits(self,outfile):
         ## version history:
         # v1 initial version
