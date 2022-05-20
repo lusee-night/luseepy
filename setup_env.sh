@@ -1,5 +1,7 @@
+
+
 export LUSEE_IMAGE=buddhasystem/lusee-night-pyshtools:0.1
-export LUSEEPY_PATH=$PWD
+export LUSEEPY_PATH=$(dirname $BASH_SOURCE)
 
 lpython() { docker run  -e HOME -e PYTHONPATH=/app -w $PWD -v $HOME:$HOME -e LUSEE_DRIVE_DIR --user $(id -u):$(id -g) -it  $LUSEE_IMAGE  python $@; }
 ljupyter() { port=9500; docker run  -e HOME -e PYTHONPATH=/app -w $PWD -v $HOME:$HOME -e LUSEE_DRIVE_DIR --user $(id -u):$(id -g) -itp $port:$port $LUSEE_IMAGE  /bin/bash -c "/usr/local/bin/jupyter notebook  --ip='*' --port=$port --no-browser  "; }

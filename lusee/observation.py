@@ -43,10 +43,14 @@ class LObservation:
 
         """
         self.lunar_day  = lunar_day
+        self.lun_lat_deg    = lun_lat_deg  
+        self.lun_long_deg   = lun_long_deg 
+        self.lun_height_m  = lun_height_m
+        self.deltaT_sec = deltaT_sec
+
         self.lun_lat    = lun_lat_deg   / 180*np.pi
         self.lun_long   = lun_long_deg  / 180*np.pi
-        self.lun_heigh  = lun_height_m
-
+        
         self.loc = MoonLocation.from_selenodetic(lon=lun_long_deg, lat=lun_lat_deg, height=lun_height_m)
 
 

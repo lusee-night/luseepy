@@ -135,6 +135,8 @@ def parse_args():
 
 
 if __name__=="__main__":
+    print ("This file has not been update for work with v2 beam files. Fix first!")
+    sys.exit(1)
     C2B, args = parse_args()
     C2B.load()
     C2B.save_fits(args.output_file)

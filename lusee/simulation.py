@@ -1,8 +1,11 @@
+
 from .observation import LObservation
 from .LBeam import LBeam, grid2healpix_alm_fast
+
 import numpy as np
 import healpy as hp
 import fitsio
+import sys
 
 def mean_alm(alm1, alm2, lmax):
     prod = alm1*np.conj(alm2)
@@ -29,18 +32,37 @@ class Simulator:
 
     def __init__ (self, obs, beams, sky_model, 
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], lmax = 128,
-                  taper = 0.03, Tground = 200.0, freq_ndx=None):
+                  taper = 0.03, Tground = 200.0, freq = None):
         self.obs = obs
         self.sky_model = sky_model
         self.lmax = lmax
         self.taper = taper
         self.Tground = Tground
-        if freq_ndx is None:
-            self.freq_ndx = np.arange(beams[0].Nfreq)
+        if freq is None:
+            self.freq = beams[0].freq
         else:
-            self.freq_ndx = freq_ndx
-        self.freq=beams[0].freq[self.freq_ndx]
-
+            self.freq = freq
+            
+        freq_ndx_beam = []
+        freq_ndx_sky = []
+        for f in self.freq:
+            try:
+                ndx = list(beams[0].freq).index(f)
+            except ValueError:
+                print ("Error:")
+                print (f"Frequency {f} does not exist in beams.")
+                sys.exit(1)
+            freq_ndx_beam.append(ndx)
+            try:
+                ndx = list(sky_model.freq).index(f)
+            except ValueError:
+                print ("Error:")
+                print (f"Frequency {f} does not exist in sky model.")
+                sys.exit(1)
+            freq_ndx_sky.append(ndx)
+            
+        self.freq_ndx_beam = freq_ndx_beam
+        self.freq_ndx_sky = freq_ndx_sky
         self.prepare_beams (beams, combinations)
         self.result = None
 
@@ -54,37 +76,41 @@ class Simulator:
         tapr = 1.0 - gtapr
         bomega = []
         self.combinations = combinations
+        f_grounds = []
         for b in beams:
-            P = b.power()[self.freq_ndx,:,:]*tapr[None,:,None]
+            f_ground = b.ground_fraction()
+            f_grounds.append(f_ground)
+            P = b.power()[self.freq_ndx_beam,:,:]*tapr[None,:,None]
             beamnorm =  np.array([grid2healpix_alm_fast(b.theta,b.phi[:-1], np.real(P[fi,:,:-1]),
-                                        lmax=1)[0]/np.sqrt(4*np.pi) for fi in self.freq_ndx])
-            beamnorm /= (1-b.f_ground[self.freq_ndx])
+                                                        lmax=1)[0]/np.sqrt(4*np.pi) for fi in self.freq_ndx_beam])
+            beamnorm /= (1-f_ground[self.freq_ndx_beam])
             bomega.append(np.real(beamnorm))
-
         
         for i,j in combinations:
             bi , bj = beams[i], beams[j]
-            xP = bi.cross_power(bj)[self.freq_ndx,:,:]
+            f_ground_i, f_ground_j = f_grounds[i], f_grounds[j]
+            xP = bi.cross_power(bj)[self.freq_ndx_beam,:,:]
             norm = np.sqrt(bomega[i]*bomega[j])
             beam = xP*tapr[None,:,None]/norm[:,None,None]
             ground = xP*gtapr[None,:,None]/norm[:,None,None]
             ## now need to transfrom this to healpy
             beamreal =  np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.real(beam[fi,:,:-1]),
-                                      self.lmax) for fi in self.freq_ndx])
+                                                        self.lmax) for fi in self.freq_ndx_beam])
             #groundPowerReal =  np.real(1-beamreal[:,0]/np.sqrt(4*np.pi))
             #groundPowerReal = np.array([np.real(grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.real(ground[fi,:,:-1]),
-            #                                             1)[0])/np.sqrt(4*np.pi) for fi in self.freq_ndx])
-            groundPowerReal = np.sqrt(bi.f_ground[self.freq_ndx]*bj.f_ground[self.freq_ndx])
+            #                                         1)[0])/np.sqrt(4*np.pi) for fi in self.freq_ndx])
+            groundPowerReal = np.sqrt(f_ground_i[self.freq_ndx_beam]*f_ground_j[self.freq_ndx_beam])
 
             if i!=j:
                 beamimag = np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(beam[fi,:,:-1]),
-                                         self.lmax) for fi in self.freq_ndx])
+                                                           self.lmax) for fi in self.freq_ndx_beam])
+                groundPowerImage = 0.
                 #groundPowerImag = np.array([np.real(grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(ground[fi,:,:-1]),
                 #                                         1)[0]/np.sqrt(4*np.pi)) for fi in self.freq_ndx])
 
             else:
                 beamimag = None
-                groundPowerImag = 0 
+                groundPowerImag = 0.
 
             self.efbeams.append((i,j,beamreal, beamimag, groundPowerReal,
                                  groundPowerImag))
@@ -110,7 +136,7 @@ class Simulator:
         for ti, t in enumerate(times):
             if (ti%100==0):
                 print (f"{ti/Nt*100}% done ...")
-            sky = self.sky_model.get_alm (self.freq_ndx, self.freq[self.freq_ndx])
+            sky = self.sky_model.get_alm (self.freq_ndx_sky, self.freq)
             if do_rot:
                 lz,bz,ly,by = lzl[ti],bzl[ti],lyl[ti],byl[ti]
                 zhat = np.array([np.cos(bz)*np.cos(lz), np.cos(bz)*np.sin(lz),np.sin(bz)])
@@ -140,11 +166,16 @@ class Simulator:
             raise RunTimeError
         fits = fitsio.FITS(out_file,'rw',clobber=True)
         header = {
-            "version":0.1
-            }
+            "version" : 0.1,
+            "lunar_day"  : self.obs.lunar_day,
+            "lun_lat_deg"   : self.obs.lun_lat_deg,
+            "lun_long_deg"   : self.obs.lun_long_deg,
+            "lun_height_m"  : self.obs.lun_height_m,
+            "deltaT_sec" : self.obs.deltaT_sec
+        }
         fits.write(self.result, header=header, extname='data')
-        fits.write(self.freq[self.freq_ndx], extname='freq')
+        fits.write(self.freq, extname='freq')
         fits.write(np.array(self.combinations), extname='combinations')
         for i,b in enumerate(self.beams):
-            fits.write(np.real(b.ZRe[self.freq_ndx]),extname=f'ZRe_{i}')
-            fits.write(np.imag(b.ZIm[self.freq_ndx]),extname=f'ZIm_{i}')
+            fits.write(np.real(b.ZRe[self.freq_ndx_beam]),extname=f'ZRe_{i}')
+            fits.write(np.imag(b.ZIm[self.freq_ndx_beam]),extname=f'ZIm_{i}')

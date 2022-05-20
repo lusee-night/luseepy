@@ -8,16 +8,16 @@ sky:
 
 beams: 
   N:
-    file: feko_bnl_monopole_1m_75deg.fits
+    file: feko_monopole_3m_75deg_regolith.fits 
     angle: 0
   E:
-    file: feko_bnl_monopole_1m_75deg.fits
+    file: feko_monopole_3m_75deg_regolith.fits 
     angle: -90
   S:
-    file: feko_bnl_monopole_1m_75deg.fits
+    file: feko_monopole_3m_75deg_regolith.fits 
     angle: -180
   W:
-    file: feko_bnl_monopole_1m_75deg.fits
+    file: feko_monopole_3m_75deg_regolith.fits 
     angle: -270
 
 
@@ -33,8 +33,8 @@ observation:
   combinations: all
   freq:
     start: 1
-    end: 3
-    step: 1
+    end: 6
+    step: 4
 
 simulation:
   output: output/sim_example.fits

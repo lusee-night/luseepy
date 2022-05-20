@@ -21,7 +21,7 @@ Next, checkout the lusee repo
 git clone git@github.com:lusee-night/luseepy.git
 ```
 
-Next, source the `setup_env.sh` script inside luseepy dir:
+Next, source the `setup_env.sh` script inside luseepy dir and even better, put it into your `.bashrc`.
 
 ```
 source setup_env.sh
@@ -42,6 +42,18 @@ To start jupyter, simply say
 ljupyter
 ```
 and then connect to the address given in the terminal output.
+
+## Environment variables
+
+The following environment variables are set up by the `setup_env.sh` script:
+
+ * `LUSEEPY_PATH` -- path to the luseepy checkout
+ * `LUSEE_IMAGE` -- docker image that has everything to run lusee
+
+Additionally you might want to set up:
+
+ *  `LUSEE_DRIVE_DIR` -- path to the checkout of the LuSEE-Night Google Drive
+
 
 ## Tests and Singularity
 
