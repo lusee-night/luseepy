@@ -66,7 +66,11 @@ class LData(LObservation):
         """
         
         day,comb,freq = req
+        fact = +1
         if type(comb) == str:
+            if comb[0]=="-":
+                fact=-1
+                comb=comb[1:]
             i = float(comb[0])
             j = float(comb[1])
             if len(comb)==3:
@@ -81,13 +85,13 @@ class LData(LObservation):
                 what = 'R' if (i==j) else 'C'
         ndx = self.comb2ndx[(i,j)]
         if what == "R":
-            return self.data[day,ndx,freq]
+            return fact*self.data[day,ndx,freq]
         if what == "I":
             assert (i!=j)
-            return self.data[day,ndx+1,freq]
+            return fact*self.data[day,ndx+1,freq]
         if what == "C":
             assert (i!=j)
-            return self.data[day,ndx,freq]+1j*self.data[day,ndx+1,freq]
+            return fact*self.data[day,ndx,freq]+1j*self.data[day,ndx+1,freq]
 
         # Should not get here.
         raise NotImplemented

@@ -13,10 +13,15 @@ except:
     
 class HFSS2LBeam(BeamConverter):
 
-    def __init__ (self, root, thetamax = 90):
-        BeamConverter.__init__(self,root,thetamax)
+    def __init__ (self):
+        BeamConverter.__init__(self, 'Convert HFSS Beam to LBEAM.', 'hfss_converted.fits')
 
+    def add_options(self):
+        pass
 
+    def process_options(self,args):
+        pass
+        
     def load(self):
         Edir = self.root+"/ElectricField/"
         Efiles = glob.glob(Edir+'/*.csv')
@@ -202,30 +207,22 @@ class HFSS2LBeam(BeamConverter):
         self.theta_min, self.theta_max, self.Ntheta = theta_min, theta_max, Ntheta
         self.phi_min, self.phi_max, self.Nphi = phi_min, phi_max, Nphi
         self.gainconv = np.array(gainconv)
+        self.gain = gain
         self.freq = freq
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description='Convert HFSS Beam to LBEAM.')
-    parser.add_argument('root_name', nargs=1, help='root name, ')
-    parser.add_argument('--thetamax', default = 90, type=float, help='do not include data beyond this theta')
-    parser.add_argument('-o', '--output_file', default = "hfss_converted.fits", help='output filename')
-    args = parser.parse_args()
-    O = HFSS2LBeam(args.root_name[0], thetamax = args.thetamax)
-    return O, args
-
 
 if __name__=="__main__":
-    H2B, args = parse_args()
+    H2B = HFSS2LBeam()
     print (f"  HFSS beam converter  ")
     print (f"-----------------------")
     print (f" Loading: {H2B.root}\n")
     H2B.load()
-    H2B.save_fits(args.output_file)
+    H2B.save_fits()
     if have_lusee:
         print ("Attempting to reread the file ... ",end="")
         sys.stdout.flush()
-        B = lusee.LBeam(args.output_file)
+        B = lusee.LBeam(H2B.output_file)
         print ("OK.")
     else:
         print ("No lusee module so no check.")

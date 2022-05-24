@@ -11,9 +11,9 @@ export OUTROOT=$LUSEE_DRIVE_DIR//Simulations/BeamModels/LanderRegolithComparison
 
 export ROOT=$LUSEE_DRIVE_DIR/AntennaResponse/SimulationFiles/LuSEELanderRegolithComparison/eight_layer_regolith
 export OUTROOT=$LUSEE_DRIVE_DIR//Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith
-lpython_dev beam_conversion/feko.py $ROOT/monopole_1m_15deg/feko_bnl/20220517_v5pt12_1m_15deg_2_port_1MHz -o $OUTROOT/feko_bnl_1m_15deg.2port.fits
-lpython_dev beam_conversion/feko.py $ROOT/monopole_1m_15deg/feko_bnl/20220518_v5pt15_1m_15deg_1_port_1MHz -o $OUTROOT/feko_bnl_1m_15deg.fits
-lpython_dev beam_conversion/feko.py $ROOT/monopole_1m_45deg/feko_bnl/20220517_v5pt13_1m_45deg_2_port_1MHz -o $OUTROOT/feko_bnl_1m_45deg.2port.fits
-lpython_dev beam_conversion/feko.py $ROOT/monopole_1m_45deg/feko_bnl/20220518_v5pt15_1m_45deg_1_port_1MHz -o $OUTROOT/feko_bnl_1m_45deg.fits
-lpython_dev beam_conversion/feko.py $ROOT/monopole_1m_75deg/feko_bnl/20220517_v5pt14_1m_75deg_2_port_1MHz -o $OUTROOT/feko_bnl_1m_75deg.2port.fits
-lpython_dev beam_conversion/feko.py $ROOT/monopole_1m_75deg/feko_bnl/20220518_v5pt17_1m_75deg_1_port_1MHz -o $OUTROOT/feko_bnl_1m_75deg.fits
+lpython_dev beam_conversion/feko.py -g $ROOT/monopole_1m_15deg/feko_bnl/20220517_v5pt12_1m_15deg_2_port_1MHz -o $OUTROOT/feko_bnl_1m_15deg.2port.fits
+lpython_dev beam_conversion/feko.py -g $ROOT/monopole_1m_15deg/feko_bnl/20220518_v5pt15_1m_15deg_1_port_1MHz -o $OUTROOT/feko_bnl_1m_15deg.fits
+lpython_dev beam_conversion/feko.py -g $ROOT/monopole_1m_45deg/feko_bnl/20220517_v5pt13_1m_45deg_2_port_1MHz -o $OUTROOT/feko_bnl_1m_45deg.2port.fits
+lpython_dev beam_conversion/feko.py -g $ROOT/monopole_1m_45deg/feko_bnl/20220518_v5pt15_1m_45deg_1_port_1MHz -o $OUTROOT/feko_bnl_1m_45deg.test.fits
+lpython_dev beam_conversion/feko.py -g $ROOT/monopole_1m_75deg/feko_bnl/20220517_v5pt14_1m_75deg_2_port_1MHz -o $OUTROOT/feko_bnl_1m_75deg.2port.fits
+lpython_dev beam_conversion/feko.py -g $ROOT/monopole_1m_75deg/feko_bnl/20220518_v5pt17_1m_75deg_1_port_1MHz -o $OUTROOT/feko_bnl_1m_75deg.test.fits
