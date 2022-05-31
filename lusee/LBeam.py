@@ -101,7 +101,7 @@ class LBeam:
         self.ZRe = fits['Z_real'].read()
         self.ZIm = fits['Z_imag'].read()
         self.Z = self.ZRe + 1j*self.ZIm
-        #
+        self.gain = fits['gain'].read() if 'gain' in fits else None
         if version==1:
             self.f_ground = fits['f_ground'].read()
         elif version==2:

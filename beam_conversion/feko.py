@@ -196,11 +196,11 @@ class Feko2LBeam(BeamConverter):
         mygain = np.abs(Etheta**2) + np.abs(Ephi**2)
         db2fact = lambda dB: 10**(dB/10)
         ratio = db2fact(gain)/(mygain+1e-100)
-        gainmax = gain.max()
+        gainmax = gain.max(axis=(1,2))
         gainconv = []
         for i,f in enumerate(freq):
             r = ratio[i,:,:]
-            w = np.where(gain[i,:,:]>gainmax-20)
+            w = np.where(gain[i,:,:]>gainmax[i]-20)
             meanconv = r[w].mean()
             rms = np.sqrt(r[w].var())
             assert (rms/meanconv<1e-3)

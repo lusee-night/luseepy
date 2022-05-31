@@ -25,12 +25,10 @@ class HFSS2LBeam(BeamConverter):
     def load(self):
         Edir = self.root+"/ElectricField/"
         Efiles = glob.glob(Edir+'/*.csv')
-        Gdir = self.root+"/Directivity/"
-        Gfiles = glob.glob(Gdir+'/*.csv')
         if (len(Efiles)==0):
             print (f"Did not find any files in {Edir}. Giving up!")
             sys.exit(1)
-        Gdir = self.root+"/Directivity/"
+        Gdir = self.root+"/Gain/"
         Gfiles = glob.glob(Gdir+'/*.csv')
         if (len(Gfiles)==0):
             print (f"Did not find any files in {Gdir}. Giving up!")
@@ -69,6 +67,7 @@ class HFSS2LBeam(BeamConverter):
 
         freq = np.array(sorted(freq))
         Nfreq = len(freq)
+        
         freq_min, freq_max = freq[0], freq[-1]
         print ("Loading frequencies: ", end = "")
         have_size = False
@@ -172,11 +171,11 @@ class HFSS2LBeam(BeamConverter):
         #db2fact = lambda dB: 10**(dB/10)
         # in hfss we have directity, which is already in gain units
         ratio = gain/mygain
-        gainmax = gain.max()
+        gainmax = gain.max(axis=(1,2))
         gainconv = []
         for i,f in enumerate(freq):
             r = ratio[i,:,:]
-            w = np.where(gain[i,:,:]>gainmax/100)
+            w = np.where(gain[i,:,:]>gainmax[i]/100)
             meanconv = r[w].mean()
             rms = np.sqrt(r[w].var())
             print (f"    {f} MHz    {meanconv:0.3g} ({rms/meanconv*100:0.3f}% err)")
