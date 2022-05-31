@@ -27,15 +27,23 @@ class SimDriver(dict):
         broot = os.path.join(self.root,self['paths']['beam_dir'])
         beams = []
         bd = self['beams']
+        default_file = bd.get('default_file')
         for b in self['observation']['beams']:
+            if "default_file" in b:
+                continue
             print ("Loading beam",b,":")
             cbeam = bd[b]
-            fname = os.path.join(broot,cbeam['file'])
+            filename = cbeam.get('file')
+            if filename is None:
+                filename = default_file
+                if filename is None:
+                    print ("Neither default not special file declare for beam",b)
+            fname = os.path.join(broot,filename)
             print ("  loading file: ",fname)
             B = lusee.LBeam (fname)
             angle = self['observation']['common_beam_angle']+cbeam['angle']
             print ("  rotating: ",angle)
-            B.rotate(angle)
+            B=B.rotate(angle)
             beams.append(B)
         self.beams = beams
         self.Nbeams = len(self.beams)
@@ -61,7 +69,8 @@ class SimDriver(dict):
     
         print ("  setting up Simulation object...")
         S = lusee.Simulator (O,self.beams, self.sky, freq=freq, lmax = self.lmax,
-                             combinations=combs, Tground = od['Tground'] )
+                             combinations=combs, Tground = od['Tground'],
+                             extra_opts = self['simulation'] )
         print ("  Simulating...")
         S.simulate(times=O.times)
         fname = self['simulation']['output']

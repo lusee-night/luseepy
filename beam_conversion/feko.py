@@ -70,10 +70,14 @@ def convertS2Z(s_data_array, z_load):
     
 class Feko2LBeam(BeamConverter):
 
-    def __init__ (self, root, farfield, thetamax = 90):
-        BeamConverter.__init__(self,root,thetamax)
-        self.farfield = farfield
+    def __init__ (self):
+        BeamConverter.__init__(self, 'Convert FEKO Beam to LBEAM.', 'feko_converted.fits')
 
+    def add_options (self):
+        self.parser.add_argument('--farfield', default = "FarField1", help='farfield to pick')
+        
+    def process_options(self,args):
+        self.farfield = args.farfield
         
     def load(self):
         fname = self.find_single_file("*.out")
@@ -164,8 +168,6 @@ class Feko2LBeam(BeamConverter):
         phiL = ((beam[:,2]-phi_min)/dphi+1e-6).astype(int)
         EthetaL = beam[:,3]*np.exp(1j*2*np.pi/360*beam[:,4])
         EphiL = beam[:,5]*np.exp(1j*2*np.pi/360*beam[:,6])
-
-        print (freqL[-10:],thetaL[-10:], phiL[-10:], EthetaL[-10:])
         Etheta[freqL, thetaL, phiL] = EthetaL
         Ephi[freqL, thetaL, phiL] = EphiL
         gain[freqL, thetaL, phiL] = beam[:,9]
@@ -194,11 +196,11 @@ class Feko2LBeam(BeamConverter):
         mygain = np.abs(Etheta**2) + np.abs(Ephi**2)
         db2fact = lambda dB: 10**(dB/10)
         ratio = db2fact(gain)/(mygain+1e-100)
-        gainmax = gain.max()
+        gainmax = gain.max(axis=(1,2))
         gainconv = []
         for i,f in enumerate(freq):
             r = ratio[i,:,:]
-            w = np.where(gain[i,:,:]>gainmax-20)
+            w = np.where(gain[i,:,:]>gainmax[i]-20)
             meanconv = r[w].mean()
             rms = np.sqrt(r[w].var())
             assert (rms/meanconv<1e-3)
@@ -209,7 +211,6 @@ class Feko2LBeam(BeamConverter):
         ZIm =np.zeros(Nfreq)+np.nan
 
         ZRe_fname = self.find_single_file("*_Z_Re.dat", ok_if_not_found = True)
-
         if type(ZRe_fname)==str:
             print ("Reading Z_Re / Z_Im style files...")
             data = np.loadtxt(ZRe_fname, skiprows=2)
@@ -217,10 +218,8 @@ class Feko2LBeam(BeamConverter):
             for i,f in enumerate(freq):
                 freqL[f==data[:,0]/1e6] = i
                 ZRe [freqL] = data[:,1]
-
             data = np.loadtxt(self.find_single_file("*_Z_Im.dat"), skiprows=2)
             ZIm [freqL] = data[:,1]
-
         else:
             print ("Reading s4p style files...")
             fname = self.find_single_file("*.s4p")
@@ -233,8 +232,6 @@ class Feko2LBeam(BeamConverter):
         assert(not np.any(np.isnan(ZIm)))
         print ("Impedance loading successful.")
 
-
-        
         self.Etheta = Etheta
         self.Ephi = Ephi
         self.ZRe = ZRe
@@ -243,31 +240,25 @@ class Feko2LBeam(BeamConverter):
         self.theta_min, self.theta_max, self.Ntheta = theta_min, theta_max, Ntheta
         self.phi_min, self.phi_max, self.Nphi = phi_min, phi_max, Nphi
         self.gainconv = np.array(gainconv)
+        self.gain = db2fact(gain)
         self.freq = freq
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='Convert FEKO Beam to LBEAM.')
-    parser.add_argument('root_name', nargs=1, help='root name, ')
-    parser.add_argument('--farfield', default = "FarField1", help='farfield to pick')
-    parser.add_argument('--thetamax', default = 90, type=float, help='do not include data beyond this theta')
-    parser.add_argument('-o', '--output_file', default = "feko_converted.fits", help='output filename')
-    args = parser.parse_args()
-    O = Feko2LBeam(args.root_name[0],farfield = args.farfield, thetamax = args.thetamax)
-    return O, args
+    O = Feko2LBeam()
 
 
 if __name__=="__main__":
-    F2B, args = parse_args()
+    F2B = Feko2LBeam() 
     print (f"  FEKO beam converter  ")
     print (f"-----------------------")
     print (f" Loading: {F2B.root}\n")
     F2B.load()
-    F2B.save_fits(args.output_file)
+    F2B.save_fits()
     if have_lusee:
         print ("Attempting to reread the file ... ",end="")
         sys.stdout.flush()
-        B = lusee.LBeam(args.output_file)
+        B = lusee.LBeam(F2B.output_file)
         print ("OK.")
     else:
         print ("No lusee module so no check.")

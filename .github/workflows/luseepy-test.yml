@@ -23,3 +23,5 @@ jobs:
       - run: python tests/CoordTest.py
       - run: python tests/SimTest.py
       - run: cd simulation; ln -s ../Drive .; mkdir output; python driver/run_sim.py config/example.yaml
+      - run: python tests/SimReadTest.py simulation/output/sim_example.fits
+      

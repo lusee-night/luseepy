@@ -32,12 +32,13 @@ class Simulator:
 
     def __init__ (self, obs, beams, sky_model, 
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], lmax = 128,
-                  taper = 0.03, Tground = 200.0, freq = None):
+                  taper = 0.03, Tground = 200.0, freq = None, extra_opts = {}):
         self.obs = obs
         self.sky_model = sky_model
         self.lmax = lmax
         self.taper = taper
         self.Tground = Tground
+        self.extra_opts = extra_opts
         if freq is None:
             self.freq = beams[0].freq
         else:
@@ -63,6 +64,7 @@ class Simulator:
             
         self.freq_ndx_beam = freq_ndx_beam
         self.freq_ndx_sky = freq_ndx_sky
+        self.Nfreq = len(self.freq)
         self.prepare_beams (beams, combinations)
         self.result = None
 
@@ -78,11 +80,15 @@ class Simulator:
         self.combinations = combinations
         f_grounds = []
         for b in beams:
-            f_ground = b.ground_fraction()
+            if self.extra_opts.get('fix_ground_fraction'):
+                print ("Fixing ground power to 0.45/np.sqrt(freq)+0.5")
+                f_ground = 0.45/np.sqrt(b.freq)+0.5
+            else:
+                f_ground = b.ground_fraction()
             f_grounds.append(f_ground)
             P = b.power()[self.freq_ndx_beam,:,:]*tapr[None,:,None]
             beamnorm =  np.array([grid2healpix_alm_fast(b.theta,b.phi[:-1], np.real(P[fi,:,:-1]),
-                                                        lmax=1)[0]/np.sqrt(4*np.pi) for fi in self.freq_ndx_beam])
+                                                        lmax=1)[0]/np.sqrt(4*np.pi) for fi in range(self.Nfreq)])
             beamnorm /= (1-f_ground[self.freq_ndx_beam])
             bomega.append(np.real(beamnorm))
         
@@ -95,7 +101,7 @@ class Simulator:
             ground = xP*gtapr[None,:,None]/norm[:,None,None]
             ## now need to transfrom this to healpy
             beamreal =  np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.real(beam[fi,:,:-1]),
-                                                        self.lmax) for fi in self.freq_ndx_beam])
+                                                        self.lmax) for fi in range(self.Nfreq)])
             #groundPowerReal =  np.real(1-beamreal[:,0]/np.sqrt(4*np.pi))
             #groundPowerReal = np.array([np.real(grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.real(ground[fi,:,:-1]),
             #                                         1)[0])/np.sqrt(4*np.pi) for fi in self.freq_ndx])
@@ -103,7 +109,7 @@ class Simulator:
 
             if i!=j:
                 beamimag = np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(beam[fi,:,:-1]),
-                                                           self.lmax) for fi in self.freq_ndx_beam])
+                                                           self.lmax) for fi in range(self.Nfreq)])
                 groundPowerImage = 0.
                 #groundPowerImag = np.array([np.real(grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(ground[fi,:,:-1]),
                 #                                         1)[0]/np.sqrt(4*np.pi)) for fi in self.freq_ndx])
