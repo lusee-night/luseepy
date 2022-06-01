@@ -33,7 +33,7 @@ class LBeam_Gauss(LBeam):
         Etheta_theta=gauss_beam(self.theta,np.deg2rad(sigma_deg))*gauss_beam(np.deg2rad(dec_deg),np.deg2rad(sigma_deg))
         Etheta_phi=gauss_beam(self.phi,np.deg2rad(sigma_deg))
 
-        self.Etheta=[:,Etheta_theta,Etheta_phi]
+        self.Etheta=self.Etheta[:,Etheta_theta,Etheta_phi]
 
         
         # need to set self.gain_conv so that ground fraction is zero.
