@@ -1,15 +1,26 @@
+from curses.ascii import ETB
 from math import degrees
 from .LBeam import LBeam
 import numpy as np
+import scipy
 
-def gauss_beam(theta, theta_fwhm):
+def gauss_beam(theta,phi,sigma, theta_c):
     """
-    Creates a map-level gaussian beam centered at zero
-
-    for a gaussian, fwhm = 2.355*sigma
+    Creates a map-level gaussian beam in theta, phi of width sigma, centered at theta=theta_c and phi=0
+    Uses a naive gaussian function 
     """
+    
+    #the naive Gaussian beam, White(1995): https://adsabs.harvard.edu/full/1995ApJ...443....6W
+    #no sin(theta) factor here, since that would be included in the measure for the angular convolution
+    #this naive definition makes sense however it does not wrap around correctly for theta or phi. 
+    # Appropriate way could be 1. to implement wrap around by hand, 
+    #                       or 2. use the alternate idea from Challinor(2000) above.
+    return 1/(2*np.pi*sigma**2)* np.exp(- (theta-theta_c)**2/(2*sigma**2)) * np.exp(- phi**2/(2*sigma**2))
+    
+    #alternate idea in Challinor(2000), Sec5A: https://arxiv.org/pdf/astro-ph/0008228.pdf
+    # allows for easier analytic results, and converges to the naive definition above for sigma<<1
+    # also, wrap around is natural.
 
-    return 2.355/(np.sqrt(2*np.pi)*theta_fwhm)*np.exp(-2.355**2 * theta**2 / (2*theta_fwhm**2) )
 
 class LBeam_Gauss(LBeam):
     def __init__ (self, dec_deg, sigma_deg):
@@ -28,13 +39,19 @@ class LBeam_Gauss(LBeam):
         self.Etheta = np.zeros((self.Nfreq, self.Ntheta, self.Nphi),complex)
         self.Ephi = np.zeros_like(self.Etheta)
         
+        #convert to radians and create meshgrid
+        sigma=np.deg2rad(sigma_deg)
+        dec=np.deg2rad(dec_deg)
+        Phi,Theta=np.meshgrid(self.phi,self.theta)
 
-        # to check with maps
-        Etheta_theta=gauss_beam(self.theta,np.deg2rad(sigma_deg))*gauss_beam(np.deg2rad(dec_deg),np.deg2rad(sigma_deg))
-        Etheta_phi=gauss_beam(self.phi,np.deg2rad(sigma_deg))
+        #create gauss beam centered at theta=phi=0
+        beam=gauss_beam(Theta,Phi,sigma,dec).astype(complex)
+        assert(beam.shape==self.Etheta[0,:,:].shape)
 
-        self.Etheta=self.Etheta[:,Etheta_theta,Etheta_phi]
-
+        #achromatic
+        for freq in self.Etheta[:,0,0]:
+            self.Etheta[freq,:,:]=beam
+        #need to check with maps
         
         # need to set self.gain_conv so that ground fraction is zero.
         self.gain_conv=np.zeros(self.Nfreq)
