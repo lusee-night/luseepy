@@ -9,13 +9,13 @@ def gauss_beam(theta,phi,sigma, theta_c):
     Creates a map-level gaussian beam in theta, phi of width sigma, centered at theta=theta_c and phi=0
     Uses a naive gaussian function 
     """
+    #ToDo:Verify theta convention: altitude
     
     #the naive Gaussian beam, White(1995): https://adsabs.harvard.edu/full/1995ApJ...443....6W
-    #no sin(theta) factor here, since that would be included in the measure for the angular convolution
     #this naive definition makes sense however it does not wrap around correctly for theta or phi. 
     # Appropriate way could be 1. to implement wrap around by hand, 
     #                       or 2. use the alternate idea from Challinor(2000) above.
-    return 1/(2*np.pi*sigma**2)* np.exp(- (theta-theta_c)**2/(2*sigma**2)) * np.exp(- phi**2/(2*sigma**2))
+    return 1/(2*np.pi*sigma**2)* np.exp(- (theta-theta_c)**2/(2*sigma**2)) * np.exp(- phi**2/(2*(sigma*np.cos(theta))**2))
     
     #alternate idea in Challinor(2000), Sec5A: https://arxiv.org/pdf/astro-ph/0008228.pdf
     # allows for easier analytic results, and converges to the naive definition above for sigma<<1
