@@ -165,5 +165,5 @@ class Simulator:
         fits.write(self.freq, extname='freq')
         fits.write(np.array(self.combinations), extname='combinations')
         for i,b in enumerate(self.beams):
-            fits.write(np.real(b.ZRe[self.freq_ndx_beam]),extname=f'ZRe_{i}')
-            fits.write(np.imag(b.ZIm[self.freq_ndx_beam]),extname=f'ZIm_{i}')
+            fits.write(b.ZRe[self.freq_ndx_beam],extname=f'ZRe_{i}')
+            fits.write(b.ZIm[self.freq_ndx_beam],extname=f'ZIm_{i}')
