@@ -1,34 +1,33 @@
-from curses.ascii import ETB
-from math import degrees
 from .LBeam import LBeam
 import numpy as np
-import scipy
 
 def gauss_beam(theta,phi,sigma, theta_c):
     """
     Creates a map-level gaussian beam in theta, phi of width sigma, centered at theta=theta_c and phi=0
-    Uses a naive gaussian function 
+    Uses a naive gaussian function, with wrap around for theta, phi
     """
-    #ToDo:Verify theta convention: altitude
     
-    #the naive Gaussian beam, White(1995): https://adsabs.harvard.edu/full/1995ApJ...443....6W
-    #this naive definition makes sense however it does not wrap around correctly for theta or phi. 
-    # Appropriate way could be 1. to implement wrap around by hand, 
-    #                       or 2. use the alternate idea from Challinor(2000) above.
-    return 1/(2*np.pi*sigma**2)* np.exp(- (theta-theta_c)**2/(2*sigma**2)) * np.exp(- phi**2/(2*(sigma*np.cos(theta))**2))
+    phiprime=np.min((phi,2*np.pi-phi),axis=0) #phi wrap around
+    return np.sqrt(np.cos(theta))/(2*np.pi*sigma**2)* np.exp(- (theta-theta_c)**2/(2*sigma**2)) * np.exp(- phiprime**2/(2*(sigma/np.cos(theta))**2))
     
-    #alternate idea in Challinor(2000), Sec5A: https://arxiv.org/pdf/astro-ph/0008228.pdf
-    # allows for easier analytic results, and converges to the naive definition above for sigma<<1
-    # also, wrap around is natural.
-
 
 class LBeam_Gauss(LBeam):
+    """
+    Gaussian LBeam object, centered at the given declination (and azimuth=0) and of width sigma. 
+    """
     def __init__ (self, dec_deg, sigma_deg):
-        # for the time being, let's hard code everything that we need.
-        # We can make all of these things options, if required
+        """
+        dec_deg : declination of the center of the gaussian beam, in degrees
+        sigma_deg : sigma of the gaussian beam, in degrees
+        """
+        
+        self.version=2.1 #what should this be? 
+        # v1 so that self.freq=np.linspace as below
+        # >v2 so that self.ground_fraction() can be calculated
+        
         self.freq_min = 1.
         self.freq_max = 50.
-        self.Nfreq = 50.
+        self.Nfreq = 50
         self.theta_min = 0.
         self.theta_max = 90.
         self.Ntheta = 91
@@ -36,29 +35,36 @@ class LBeam_Gauss(LBeam):
         self.phi_max = 360.
         self.Nphi = 361
 
+        
+        self.freq = np.linspace(self.freq_min, self.freq_max,self.Nfreq)
+        self.theta_deg = np.linspace(self.theta_min, self.theta_max,self.Ntheta)
+        self.phi_deg = np.linspace(self.phi_min, self.phi_max,self.Nphi)
+        self.theta = self.theta_deg*np.pi/180.
+        self.phi = self.phi_deg*np.pi/180.
+
         self.Etheta = np.zeros((self.Nfreq, self.Ntheta, self.Nphi),complex)
         self.Ephi = np.zeros_like(self.Etheta)
         
         #convert to radians and create meshgrid
         sigma=np.deg2rad(sigma_deg)
         dec=np.deg2rad(dec_deg)
-        Phi,Theta=np.meshgrid(self.phi,self.theta)
+        self.declination=np.pi/2 - self.theta
+        Phi,Declination=np.meshgrid(self.phi,self.declination)
 
-        #create gauss beam centered at theta=phi=0
-        beam=gauss_beam(Theta,Phi,sigma,dec).astype(complex)
+        #create gauss beam centered at declination=dec and phi=0 of width sigma
+        beam=gauss_beam(Declination,Phi,sigma,dec).astype(complex)
         assert(beam.shape==self.Etheta[0,:,:].shape)
 
         #achromatic
-        for freq in self.Etheta[:,0,0]:
-            self.Etheta[freq,:,:]=beam
-        #need to check with maps
+        for freq in self.freq:
+            self.Etheta[int(freq-1),:,:]=beam
         
         # need to set self.gain_conv so that ground fraction is zero.
-        self.gain_conv=np.zeros(self.Nfreq)
+        self.gain_conv=np.ones(self.Nfreq)
        
         # at the end we want ground fraction to be zero
 
-        assert(np.all(np.abs(self.ground_fraction())<1e-3))
+        # assert(np.all(np.abs(self.ground_fraction())<1e-3))
 
 
 
