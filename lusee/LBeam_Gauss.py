@@ -8,7 +8,9 @@ def gauss_beam(theta,phi,sigma, theta_c):
     """
     
     phiprime=np.min((phi,2*np.pi-phi),axis=0) #phi wrap around
-    return np.sqrt(np.cos(theta))/(2*np.pi*sigma**2)* np.exp(- (theta-theta_c)**2/(2*sigma**2)) * np.exp(- phiprime**2/(2*(sigma/np.cos(theta))**2))
+    norm=1. #beam E^2 is not normalized, E^2*gain_conv is normalized
+
+    return norm*np.exp(- (theta-theta_c)**2/(2*sigma**2)) * np.exp(- phiprime**2/(2*(sigma/np.cos(theta))**2))
     
 
 class LBeam_Gauss(LBeam):
@@ -61,10 +63,15 @@ class LBeam_Gauss(LBeam):
         
         # need to set self.gain_conv so that ground fraction is zero.
         self.gain_conv=np.ones(self.Nfreq)
-       
-        # at the end we want ground fraction to be zero
 
-        # assert(np.all(np.abs(self.ground_fraction())<1e-3))
+        dphi=self.phi[1]-self.phi[0]
+        dtheta=self.theta[1]-self.theta[0]
+        dA_theta=np.sin(self.theta)*dtheta*dphi
+
+        factor=(dA_theta[:,None]*self.power()[0,:,:]).sum()/(4*np.pi) #same factor for all frequencies
+        self.gain_conv/=factor
+
+        assert(np.all(np.abs(self.ground_fraction())<1e-3)) #confirm ground_fraction==zero
 
 
 
