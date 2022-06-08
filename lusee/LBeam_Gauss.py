@@ -1,25 +1,26 @@
 from .LBeam import LBeam
 import numpy as np
 
-def gauss_beam(theta,phi,sigma, theta_c):
+def gauss_beam(theta,phi,sigma, theta_c,phi_c=0.):
     """
-    Creates a map-level gaussian beam in theta, phi of width sigma, centered at theta=theta_c and phi=0
+    Creates a map-level gaussian beam in theta, phi of width sigma, centered at theta=theta_c and phi=phi_c
     Uses a naive gaussian function, with wrap around for theta, phi
     """
     
-    phiprime=np.min((phi,2*np.pi-phi),axis=0) #phi wrap around
+    phiprime=np.min((phi-phi_c,2*np.pi-phi+phi_c),axis=0) #phi wrap around
     norm=1. #beam E^2 is not normalized, E^2*gain_conv is normalized
 
-    return norm*np.exp(- (theta-theta_c)**2/(2*sigma**2)) * np.exp(- phiprime**2/(2*(sigma/np.cos(theta))**2))
+    return norm*np.exp(- (theta-theta_c)**2/(2*sigma**2)) * np.exp(- (phiprime)**2/(2*(sigma/np.cos(theta))**2))
     
 
 class LBeam_Gauss(LBeam):
     """
     Gaussian LBeam object, centered at the given declination (and azimuth=0) and of width sigma. 
     """
-    def __init__ (self, dec_deg, sigma_deg):
+    def __init__ (self, dec_deg, sigma_deg, azimuth_deg=0):
         """
         dec_deg : declination of the center of the gaussian beam, in degrees
+        azimuth_deg : azimuth of the center of the gaussian beam, in degrees
         sigma_deg : sigma of the gaussian beam, in degrees
         """
         
@@ -50,11 +51,12 @@ class LBeam_Gauss(LBeam):
         #convert to radians and create meshgrid
         sigma=np.deg2rad(sigma_deg)
         dec=np.deg2rad(dec_deg)
+        azimuth=np.deg2rad(azimuth_deg)
         self.declination=np.pi/2 - self.theta
         Phi,Declination=np.meshgrid(self.phi,self.declination)
 
         #create gauss beam centered at declination=dec and phi=0 of width sigma
-        beam=gauss_beam(Declination,Phi,sigma,dec).astype(complex)
+        beam=gauss_beam(Declination,Phi,sigma,dec,azimuth).astype(complex)
         assert(beam.shape==self.Etheta[0,:,:].shape)
 
         #achromatic
