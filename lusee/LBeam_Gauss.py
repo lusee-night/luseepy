@@ -17,11 +17,11 @@ class LBeam_Gauss(LBeam):
     """
     Gaussian LBeam object, centered at the given declination (and azimuth=0) and of width sigma. 
     """
-    def __init__ (self, dec_deg, sigma_deg, azimuth_deg=0):
+    def __init__ (self, dec_deg, sigma_deg, azimuth_deg=0, one_over_freq_scaling=False):
         """
         dec_deg : declination of the center of the gaussian beam, in degrees
         azimuth_deg : azimuth of the center of the gaussian beam, in degrees
-        sigma_deg : sigma of the gaussian beam, in degrees
+        sigma_deg : sigma of the gaussian beam at 1MHz, in degrees
         """
         
         self.version=2.1 #what should this be? 
@@ -45,9 +45,17 @@ class LBeam_Gauss(LBeam):
         self.theta = self.theta_deg*np.pi/180.
         self.phi = self.phi_deg*np.pi/180.
 
+        #initialize E
         self.Etheta = np.zeros((self.Nfreq, self.Ntheta, self.Nphi),complex)
         self.Ephi = np.zeros_like(self.Etheta)
         
+        # initialize gain_conv and related quantities. 
+        # Need to set self.gain_conv so that ground fraction is zero.
+        self.gain_conv=np.ones(self.Nfreq)
+        dphi=self.phi[1]-self.phi[0]
+        dtheta=self.theta[1]-self.theta[0]
+        dA_theta=np.sin(self.theta)*dtheta*dphi
+
         #convert to radians and create meshgrid
         sigma=np.deg2rad(sigma_deg)
         dec=np.deg2rad(dec_deg)
@@ -55,23 +63,18 @@ class LBeam_Gauss(LBeam):
         self.declination=np.pi/2 - self.theta
         Phi,Declination=np.meshgrid(self.phi,self.declination)
 
-        #create gauss beam centered at declination=dec and phi=0 of width sigma
-        beam=gauss_beam(Declination,Phi,sigma,dec,azimuth).astype(complex)
-        assert(beam.shape==self.Etheta[0,:,:].shape)
+        for f,freq in enumerate(self.freq):
+            #scale sigma if 1/f scaling is True
+            sigma_freq=sigma/freq if one_over_freq_scaling else sigma
+            
+            #create gauss beam centered at declination=dec and phi=0 of width sigma_freq
+            beam=gauss_beam(Declination,Phi,sigma_freq,dec,azimuth).astype(complex)
+            assert(beam.shape==self.Etheta[f,:,:].shape)
+            self.Etheta[f,:,:]=beam
 
-        #achromatic
-        for freq in self.freq:
-            self.Etheta[int(freq-1),:,:]=beam
-        
-        # need to set self.gain_conv so that ground fraction is zero.
-        self.gain_conv=np.ones(self.Nfreq)
-
-        dphi=self.phi[1]-self.phi[0]
-        dtheta=self.theta[1]-self.theta[0]
-        dA_theta=np.sin(self.theta)*dtheta*dphi
-
-        factor=(dA_theta[:,None]*self.power()[0,:,:]).sum()/(4*np.pi) #same factor for all frequencies
-        self.gain_conv/=factor
+            #set gain_conv such that ground_fraction() is zero
+            factor=(dA_theta[:,None]*self.power()[f,:,:]).sum()/(4*np.pi)
+            self.gain_conv[f]/=factor
 
         assert(np.all(np.abs(self.ground_fraction())<1e-3)) #confirm ground_fraction==zero
 
