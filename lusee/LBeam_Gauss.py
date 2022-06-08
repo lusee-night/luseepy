@@ -15,12 +15,12 @@ def gauss_beam(theta,phi,sigma, theta_c,phi_c=0.):
 
 class LBeam_Gauss(LBeam):
     """
-    Gaussian LBeam object, centered at the given declination (and azimuth=0) and of width sigma. 
+    Gaussian LBeam object, centered at the given declination (and phi=360-azimuth=0) and of width sigma. 
     """
-    def __init__ (self, dec_deg, sigma_deg, azimuth_deg=0, one_over_freq_scaling=False):
+    def __init__ (self, dec_deg, sigma_deg, phi_deg=0, one_over_freq_scaling=False):
         """
         dec_deg : declination of the center of the gaussian beam, in degrees
-        azimuth_deg : azimuth of the center of the gaussian beam, in degrees
+        phi_deg : 360-azimuth of the center of the gaussian beam, in degrees
         sigma_deg : sigma of the gaussian beam at 1MHz, in degrees
         """
         
@@ -59,7 +59,7 @@ class LBeam_Gauss(LBeam):
         #convert to radians and create meshgrid
         sigma=np.deg2rad(sigma_deg)
         dec=np.deg2rad(dec_deg)
-        azimuth=np.deg2rad(azimuth_deg)
+        phi_rad=np.deg2rad(phi_deg)
         self.declination=np.pi/2 - self.theta
         Phi,Declination=np.meshgrid(self.phi,self.declination)
 
@@ -68,7 +68,7 @@ class LBeam_Gauss(LBeam):
             sigma_freq=sigma/freq if one_over_freq_scaling else sigma
             
             #create gauss beam centered at declination=dec and phi=0 of width sigma_freq
-            beam=gauss_beam(Declination,Phi,sigma_freq,dec,azimuth).astype(complex)
+            beam=gauss_beam(Declination,Phi,sigma_freq,dec,phi_rad).astype(complex)
             assert(beam.shape==self.Etheta[f,:,:].shape)
             self.Etheta[f,:,:]=beam
 
