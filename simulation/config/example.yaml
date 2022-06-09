@@ -1,23 +1,20 @@
 paths:
   lusee_drive_dir: $LUSEE_DRIVE_DIR
   sky_dir: Simulations/SkyModels
-  beam_dir: AntennaResponse/Exported/Example
+  beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
     
 sky:
   file: ULSA_32_ddi_smooth.fits
 
 beams: 
+  default_file: hfss_lbl_3m_75deg.fits
   N:
-    file: feko_monopole_3m_75deg_regolith.fits 
     angle: 0
   E:
-    file: feko_monopole_3m_75deg_regolith.fits 
     angle: -90
   S:
-    file: feko_monopole_3m_75deg_regolith.fits 
     angle: -180
   W:
-    file: feko_monopole_3m_75deg_regolith.fits 
     angle: -270
 
 

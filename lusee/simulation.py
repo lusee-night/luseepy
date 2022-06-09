@@ -78,49 +78,31 @@ class Simulator:
         tapr = 1.0 - gtapr
         bomega = []
         self.combinations = combinations
-        f_grounds = []
-        for b in beams:
-            if self.extra_opts.get('fix_ground_fraction'):
-                print ("Fixing ground power to 0.45/np.sqrt(freq)+0.5")
-                f_ground = 0.45/np.sqrt(b.freq)+0.5
-            else:
-                f_ground = b.ground_fraction()
-            f_grounds.append(f_ground)
-            P = b.power()[self.freq_ndx_beam,:,:]*tapr[None,:,None]
-            beamnorm =  np.array([grid2healpix_alm_fast(b.theta,b.phi[:-1], np.real(P[fi,:,:-1]),
-                                                        lmax=1)[0]/np.sqrt(4*np.pi) for fi in range(self.Nfreq)])
-            beamnorm /= (1-f_ground[self.freq_ndx_beam])
-            bomega.append(np.real(beamnorm))
         
         for i,j in combinations:
             bi , bj = beams[i], beams[j]
-            f_ground_i, f_ground_j = f_grounds[i], f_grounds[j]
+            #f_ground_i, f_ground_j = f_grounds[i], f_grounds[j]
             xP = bi.cross_power(bj)[self.freq_ndx_beam,:,:]
-            norm = np.sqrt(bomega[i]*bomega[j])
-            beam = xP*tapr[None,:,None]/norm[:,None,None]
-            ground = xP*gtapr[None,:,None]/norm[:,None,None]
-            ## now need to transfrom this to healpy
+            norm = np.sqrt(bi.gain_conv[self.freq_ndx_beam]*bj.gain_conv[self.freq_ndx_beam])
+            beam = xP*tapr[None,:,None]*norm[:,None,None]
+            # now need to transfrom this to healpy
+            # (Note: we cut on freq_ndx above, so yes, range is fine in the line below)
             beamreal =  np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.real(beam[fi,:,:-1]),
                                                         self.lmax) for fi in range(self.Nfreq)])
-            #groundPowerReal =  np.real(1-beamreal[:,0]/np.sqrt(4*np.pi))
-            #groundPowerReal = np.array([np.real(grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.real(ground[fi,:,:-1]),
-            #                                         1)[0])/np.sqrt(4*np.pi) for fi in self.freq_ndx])
-            groundPowerReal = np.sqrt(f_ground_i[self.freq_ndx_beam]*f_ground_j[self.freq_ndx_beam])
 
-            if i!=j:
-                beamimag = np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(beam[fi,:,:-1]),
-                                                           self.lmax) for fi in range(self.Nfreq)])
-                groundPowerImage = 0.
-                #groundPowerImag = np.array([np.real(grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(ground[fi,:,:-1]),
-                #                                         1)[0]/np.sqrt(4*np.pi)) for fi in self.freq_ndx])
-
-            else:
+            if i==j:
+                groundPowerReal = np.array([1-np.real(br[0])/np.sqrt(4*np.pi) for br in beamreal])
                 beamimag = None
                 groundPowerImag = 0.
+            else:
+                beamimag = np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(beam[fi,:,:-1]),
+                                                           self.lmax) for fi in range(self.Nfreq)])
+                groundPowerReal = np.array([1-np.real(br[0])/np.sqrt(4*np.pi) for br in beamreal])
+                groundPowerImag = np.array([1-np.real(bi[0])/np.sqrt(4*np.pi) for bi in beamimag])
 
             self.efbeams.append((i,j,beamreal, beamimag, groundPowerReal,
                                  groundPowerImag))
-
+            
                                 
     def simulate (self,times=None):
         if times is None:
@@ -183,5 +165,5 @@ class Simulator:
         fits.write(self.freq, extname='freq')
         fits.write(np.array(self.combinations), extname='combinations')
         for i,b in enumerate(self.beams):
-            fits.write(np.real(b.ZRe[self.freq_ndx_beam]),extname=f'ZRe_{i}')
-            fits.write(np.imag(b.ZIm[self.freq_ndx_beam]),extname=f'ZIm_{i}')
+            fits.write(b.ZRe[self.freq_ndx_beam],extname=f'ZRe_{i}')
+            fits.write(b.ZIm[self.freq_ndx_beam],extname=f'ZIm_{i}')
