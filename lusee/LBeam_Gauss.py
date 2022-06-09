@@ -38,6 +38,9 @@ class LBeam_Gauss(LBeam):
         self.phi_max = 360.
         self.Nphi = 361
 
+        self.ZRe=np.zeros(self.Nfreq) #Need this for lusee.Simulator.write()
+        self.ZIm=np.zeros(self.Nfreq) #Need this for lusee.Simulator.write()
+
         
         self.freq = np.linspace(self.freq_min, self.freq_max,self.Nfreq)
         self.theta_deg = np.linspace(self.theta_min, self.theta_max,self.Ntheta)

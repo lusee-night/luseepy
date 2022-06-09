@@ -1,0 +1,54 @@
+paths:
+  lusee_drive_dir: $LUSEE_DRIVE_DIR
+  sky_dir: Simulations/SkyModels
+  beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
+    
+sky:
+  type: CMB
+
+beams: 
+  type: Gaussian
+  N:
+    angle: 0
+    declination: 30
+    sigma: 20
+    one_over_freq_scaling: False
+  E:
+    angle: -90
+    declination: 30
+    sigma: 20
+    one_over_freq_scaling: False
+  S:
+    angle: -180
+    declination: 30
+    sigma: 20
+    one_over_freq_scaling: False
+    
+  W:
+    angle: -270
+    declination: 30
+    sigma: 20
+    one_over_freq_scaling: False
+
+
+
+observation:
+  long: 180
+  lat: -10
+  beams: [ N, S, E, W ]
+  common_beam_angle: 0
+  lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
+  dt: 24*3600 
+  Tground: 0
+  lmax: 32
+  combinations: all
+  freq:
+    start: 1
+    end: 6
+    step: 4
+
+simulation:
+  output: output/sim_gaussLBeam.fits
+  
+  
+ 

@@ -33,24 +33,36 @@ class SimDriver(dict):
         broot = os.path.join(self.root,self['paths']['beam_dir'])
         beams = []
         bd = self['beams']
-        default_file = bd.get('default_file')
-        for b in self['observation']['beams']:
-            if "default_file" in b:
-                continue
-            print ("Loading beam",b,":")
-            cbeam = bd[b]
-            filename = cbeam.get('file')
-            if filename is None:
-                filename = default_file
+        if bd.get('type')=='Gaussian': #similar to sky_type above
+            print('Creating Gaussian beams!')
+            for b in self['observation']['beams']:
+                cbeam=bd[b]
+                print ("Creating gaussian beam",b,":")
+                B = lusee.LBeam_Gauss(dec_deg=cbeam['declination'],sigma_deg=cbeam['sigma'],one_over_freq_scaling=cbeam['one_over_freq_scaling'])
+                angle = self['observation']['common_beam_angle']+cbeam['angle']
+                print ("  rotating: ",angle)
+                B.rotate(angle)
+                beams.append(B)
+
+        else:
+            default_file = bd.get('default_file')
+            for b in self['observation']['beams']:
+                if "default_file" in b:
+                    continue
+                print ("Loading beam",b,":")
+                cbeam = bd[b]
+                filename = cbeam.get('file')
                 if filename is None:
-                    print ("Neither default not special file declare for beam",b)
-            fname = os.path.join(broot,filename)
-            print ("  loading file: ",fname)
-            B = lusee.LBeam (fname)
-            angle = self['observation']['common_beam_angle']+cbeam['angle']
-            print ("  rotating: ",angle)
-            B=B.rotate(angle)
-            beams.append(B)
+                    filename = default_file
+                    if filename is None:
+                        print ("Neither default not special file declare for beam",b)
+                fname = os.path.join(broot,filename)
+                print ("  loading file: ",fname)
+                B = lusee.LBeam (fname)
+                angle = self['observation']['common_beam_angle']+cbeam['angle']
+                print ("  rotating: ",angle)
+                B=B.rotate(angle)
+                beams.append(B)
         self.beams = beams
         self.Nbeams = len(self.beams)
 
