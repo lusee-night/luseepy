@@ -57,6 +57,7 @@ class LData(LObservation):
         self.NComb = len(self.comb2ndx)
         self._calc_conversion_factors()
                          
+
     def __getitem__(self, req):
         """
          Can do things like
@@ -104,7 +105,10 @@ class LData(LObservation):
 
         # Should not get here.
         raise NotImplemented
-    
+
+    def setCfront(self,Cfront):
+        self.Cfront = Cfront
+        self._calc_conversion_factors()
         
     def _calc_conversion_factors(self):
         kB = const.k_B.value
