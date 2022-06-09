@@ -19,9 +19,15 @@ class SimDriver(dict):
         
 
     def _parse_sky(self):
-        fname = os.path.join(self.root,self['paths']['sky_dir'],self['sky']['file'])
-        print ("Loading sky: ",fname)
-        self.sky = lusee.sky.FitsSky (fname, lmax = self.lmax)
+        sky_type = self['sky'].get('type','file')
+        if sky_type == 'file':
+            fname = os.path.join(self.root,self['paths']['sky_dir'],self['sky']['file'])
+            print ("Loading sky: ",fname)
+            self.sky = lusee.sky.FitsSky (fname, lmax = self.lmax)
+        elif sky_type == 'CMB':
+            # make sure if lmax matters here
+            print ("Using CMB sky")
+            self.sky = lusee.sky.ConstSky(self.lmax,lmax=self.lmax,T=2.73, freq=np.arange(1,51))  
 
     def _parse_beams(self):
         broot = os.path.join(self.root,self['paths']['beam_dir'])

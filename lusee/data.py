@@ -57,6 +57,7 @@ class LData(LObservation):
         self.NComb = len(self.comb2ndx)
         self._calc_conversion_factors()
                          
+
     def __getitem__(self, req):
         """
          Can do things like
@@ -71,10 +72,10 @@ class LData(LObservation):
             if comb[0]=="-":
                 fact=-1
                 comb=comb[1:]
-            i = float(comb[0])
-            j = float(comb[1])
-            if len(comb)==3:
-                what = comb[2]
+            i = int(comb[0])
+            j = int(comb[1])
+            if len(comb)>=3:
+                what = comb[2:]
             else:
                 what = 'R' if (i==j) else 'C'
         else:
@@ -83,6 +84,15 @@ class LData(LObservation):
                 what = comb[2]
             else:
                 what = 'R' if (i==j) else 'C'
+
+        if len(what)>1:
+            wfact = what[1:]
+            if wfact == "V":
+                fact *= np.sqrt(self.T2Vsq[i]*self.T2Vsq[j])
+            else:
+                print ('X',fact,'y')
+                raise NotImplemented
+            what=what[0]
         ndx = self.comb2ndx[(i,j)]
         if what == "R":
             return fact*self.data[day,ndx,freq]
@@ -95,7 +105,10 @@ class LData(LObservation):
 
         # Should not get here.
         raise NotImplemented
-    
+
+    def setCfront(self,Cfront):
+        self.Cfront = Cfront
+        self._calc_conversion_factors()
         
     def _calc_conversion_factors(self):
         kB = const.k_B.value

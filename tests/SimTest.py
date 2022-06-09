@@ -6,7 +6,7 @@ import pickle
 import os
 
 O=lusee.LObservation('2025-02-01 13:00:00 to 2025-03-01 13:00:00',deltaT_sec=24*3600, lun_lat_deg=-00.0)
-B = lusee.LBeam(os.environ['LUSEE_DRIVE_DIR']+'/AntennaResponse/Exported/Example/feko_monopole_3m_75deg_regolith.fits')
+B = lusee.LBeam(os.environ['LUSEE_DRIVE_DIR']+'/Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits')
 
 beams = []
 for ofs,c in enumerate(["N","E","S","W"]):
