@@ -66,18 +66,29 @@ class LBeam_Gauss(LBeam):
         self.declination=np.pi/2 - self.theta
         Phi,Declination=np.meshgrid(self.phi,self.declination)
 
-        for f,freq in enumerate(self.freq):
-            #scale sigma if 1/f scaling is True
-            sigma_freq=sigma/freq if one_over_freq_scaling else sigma
-            
-            #create gauss beam centered at declination=dec and phi=0 of width sigma_freq
-            beam=gauss_beam(Declination,Phi,sigma_freq,dec,phi_rad).astype(complex)
-            assert(beam.shape==self.Etheta[f,:,:].shape)
-            self.Etheta[f,:,:]=beam
+        if one_over_freq_scaling: #slow code, hence separate
+            for f,freq in enumerate(self.freq):
+                #scale sigma with 1/freq
+                sigma_freq=sigma/freq if one_over_freq_scaling else sigma
+                
+                #create gauss beam centered at declination=dec and phi=0 of width sigma_freq
+                beam=gauss_beam(Declination,Phi,sigma_freq,dec,phi_rad).astype(complex)
+                assert(beam.shape==self.Etheta[f,:,:].shape)
+                self.Etheta[f,:,:]=beam
+
+                #set gain_conv such that ground_fraction() is zero
+                factor=(dA_theta[:,None]*self.power()[f,:,:]).sum()/(4*np.pi)
+                self.gain_conv[f]/=factor
+        else:
+            #create gauss beam centered at declination=dec and phi=0 of width sigma
+            beam=gauss_beam(Declination,Phi,sigma,dec,phi_rad).astype(complex)
+            assert(beam.shape==self.Etheta[0,:,:].shape)
+            for f,freq in enumerate(self.freq):
+                self.Etheta[f,:,:]=beam
 
             #set gain_conv such that ground_fraction() is zero
-            factor=(dA_theta[:,None]*self.power()[f,:,:]).sum()/(4*np.pi)
-            self.gain_conv[f]/=factor
+            factor=(dA_theta[:,None]*self.power()[0,:,:]).sum()/(4*np.pi)
+            self.gain_conv/=factor
 
         assert(np.all(np.abs(self.ground_fraction())<1e-3)) #confirm ground_fraction==zero
 
