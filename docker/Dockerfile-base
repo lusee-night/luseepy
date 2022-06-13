@@ -16,5 +16,7 @@ RUN wget https://github.com/mirochaj/ares/archive/refs/tags/v${ARES_TAG}.zip && 
 
 ENV PYTHONPATH "/app/ares-${ARES_TAG}"
 
+RUN rm *.zip
+
 WORKDIR /user
 

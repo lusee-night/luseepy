@@ -10,7 +10,16 @@ is ```3.10.1```, and the base image is derived from __Debian bullseye__:
 Building the images is done from the folder one level above the ```docker``` folder,
 and so dockerfiles need to be specified with the ```-f``` option.
 
-## The "foundation" Image
+
+## Images
+
+Images are built in layer, in the following order:
+
+* foundation
+* base
+* jupyter
+
+### The "foundation" Image
 
 This is the minimal useable image based on ```requirements-foundation.txt```.
 The main "Dockerfile" in the "docker" folder now uses a ```build-arg``` argument,
@@ -24,17 +33,19 @@ docker build . -f docker/Dockerfile -t buddhasystem/lusee-night-foundation:0.1 -
 This image is published on __Docker Hub__:
 * [buddhasystem/lusee-night-foundation:0.1](https://hub.docker.com/repository/docker/buddhasystem/lusee-night-foundation)
 
-## The "base" image
+```Dockerfile-foundation``` is kept for historical reference and is deprecated.
+
+### The "base" image
 
 * Based on "foundation", with added ```ARES``` package.
 * Uses ```Dockerfile-base```.
 * Docker Hub reference: [buddhasystem/lusee-night-base:0.1](https://hub.docker.com/repository/docker/buddhasystem/lusee-night-base)
 
 
-## The "pyshtools" image
+### The "jupyter" image
 
-* Based on "base", with added ```pyshtools``` package.
-*  Uses ```Dockerfile-pyshtools```.
+* Based on "base", with added ```pyshtools``` and ```jupyterlab``` packages.
+*  Uses ```Dockerfile-jupyter```.
 * Docker Hub reference: [buddhasystem/lusee-night-pyshtools:0.1](https://hub.docker.com/repository/docker/buddhasystem/lusee-night-pyshtools)
 
 ---
@@ -58,7 +69,4 @@ pip install wheel
 sudo apt-get install libbz2-dev
 ```
 
-## Notes
-
-May 9, 2022: Added pyshtools
 

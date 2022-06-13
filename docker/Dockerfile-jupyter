@@ -6,3 +6,4 @@ WORKDIR /app
 COPY docker/requirements-jupyter.txt requirements-jupyter.txt
 RUN pip install -r requirements-jupyter.txt
 
+RUN rm requirements-jupyter.txt
