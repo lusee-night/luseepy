@@ -14,7 +14,7 @@ To develop on your laptop, the easiest thing is to use the latest docker environ
 Please install docker and pull the image
 
 ```
-docker pull buddhasystem/lusee-night-pyshtools:0.1
+docker pull lusee/lusee-night-jupyter:0.1
 ```
 Next, checkout the lusee repo
 ```
@@ -59,6 +59,6 @@ Additionally you might want to set up:
 
 The ```tests``` folder contains CI-related and other testing scripts. Here's an example of a simple test run with Singularity, on a SDCC/BNL node, from the ```luseepy``` folder:
 ```bash
-singularity exec -B /direct/phenix+u/mxmp/projects/luseepy --env PYTHONPATH=/direct/phenix+u/mxmp/projects/luseepy docker://buddhasystem/lusee-night-foundation:0.1 ./tests/LunarCalendarTest.py
+singularity exec -B /direct/phenix+u/mxmp/projects/luseepy --env PYTHONPATH=/direct/phenix+u/mxmp/projects/luseepy docker://lusee/lusee-night-foundation:0.1 ./tests/LunarCalendarTest.py
 ```
 
