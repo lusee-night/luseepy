@@ -1,3 +1,5 @@
+
+####################### ATTENTION ##################
 #
 ####################### DEPRECATED #####################
 # Superceded by "Dockerfile" with an extra argument
@@ -15,6 +17,8 @@ RUN apt-get install libbz2-dev
 
 COPY docker/requirements_fresh.txt requirements.txt
 RUN pip install -r requirements.txt
+
+RUN rm requirements.txt
 
 ADD .astropy /root/.astropy
 
