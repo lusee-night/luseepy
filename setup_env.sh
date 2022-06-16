@@ -1,6 +1,6 @@
 
 
-export LUSEE_IMAGE=buddhasystem/lusee-night-pyshtools:0.1
+export LUSEE_IMAGE=lusee/lusee-night-jupyter:0.1
 export LUSEEPY_PATH=$(dirname $BASH_SOURCE)
 
 lpython() { docker run  -e HOME -e PYTHONPATH=/app -w $PWD -v $HOME:$HOME -e LUSEE_DRIVE_DIR --user $(id -u):$(id -g) -it  $LUSEE_IMAGE  python $@; }

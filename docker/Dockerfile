@@ -1,3 +1,4 @@
+##### USED PRIMARILY TO BUILD THE FOUNDATION IMAGE
 #
 # NB. the "reqs" build argument can supply any  requirements file for
 # the build, defaulting to the common "requirements.txt"
@@ -12,10 +13,11 @@ WORKDIR /app
 COPY docker/${reqs} requirements.txt
 RUN pip install -r requirements.txt
 
+RUN rm requirements.txt
+
 COPY lusee lusee
 COPY tests tests
 
 ADD .astropy /root/.astropy
-
 
 CMD ["python"]
