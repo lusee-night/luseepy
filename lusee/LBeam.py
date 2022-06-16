@@ -185,7 +185,7 @@ class LBeam:
         dphi = self.phi[1]-self.phi[0]
         dtheta = self.theta[1]-self.theta[0]
         dA_theta = np.sin(self.theta)*dtheta*dphi
-        f_sky = np.array([(dA_theta[:,None]*gain[i,:,:]).sum()/(4*np.pi) for i in range(self.Nfreq)])
+        f_sky = np.array([(dA_theta[:,None]*gain[i,:,:-1]).sum()/(4*np.pi) for i in range(self.Nfreq)])
         f_ground = 1.0 - f_sky
         return f_ground
         

@@ -17,7 +17,7 @@ class LBeam_Gauss(LBeam):
     """
     Gaussian LBeam object, centered at the given declination (and phi=360-azimuth=0) and of width sigma. 
     """
-    def __init__ (self, dec_deg, sigma_deg, phi_deg=0, one_over_freq_scaling=False):
+    def __init__ (self, dec_deg, sigma_deg, phi_deg=90, one_over_freq_scaling=False):
         """
         dec_deg : declination of the center of the gaussian beam, in degrees
         phi_deg : 360-azimuth of the center of the gaussian beam, in degrees
@@ -77,7 +77,7 @@ class LBeam_Gauss(LBeam):
                 self.Etheta[f,:,:]=beam
 
                 #set gain_conv such that ground_fraction() is zero
-                factor=(dA_theta[:,None]*self.power()[f,:,:]).sum()/(4*np.pi)
+                factor=(dA_theta[:,None]*self.power()[f,:,:-1]).sum()/(4*np.pi)
                 self.gain_conv[f]/=factor
         else:
             #create gauss beam centered at declination=dec and phi=0 of width sigma
@@ -87,7 +87,7 @@ class LBeam_Gauss(LBeam):
                 self.Etheta[f,:,:]=beam
 
             #set gain_conv such that ground_fraction() is zero
-            factor=(dA_theta[:,None]*self.power()[0,:,:]).sum()/(4*np.pi)
+            factor=(dA_theta[:,None]*self.power()[0,:,:-1]).sum()/(4*np.pi)
             self.gain_conv/=factor
 
         assert(np.all(np.abs(self.ground_fraction())<1e-3)) #confirm ground_fraction==zero

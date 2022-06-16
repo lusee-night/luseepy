@@ -26,7 +26,7 @@ assert (np.allclose(WF[:,:2,:],200))
 print ("  OK")
 
 print ("Setting up object with Gauss beam")
-BG = lusee.LBeam_Gauss(dec_deg=50, sigma_deg=6, phi_deg=180)
+BG = lusee.LBeam_Gauss(dec_deg=50, sigma_deg=6, phi_deg=0)
 beams = [BG]
 
 lmax = 64
