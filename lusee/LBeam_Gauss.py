@@ -20,7 +20,7 @@ class LBeam_Gauss(LBeam):
     def __init__ (self, dec_deg, sigma_deg, phi_deg=90, one_over_freq_scaling=False):
         """
         dec_deg : declination of the center of the gaussian beam, in degrees
-        phi_deg : 360-azimuth of the center of the gaussian beam, in degrees
+        phi_deg : phi center of the gaussian beam, in degrees, phi=0->E, phi=90->N
         sigma_deg : sigma of the gaussian beam at 1MHz, in degrees
         """
         
