@@ -92,6 +92,7 @@ class Simulator:
 
             if i==j:
                 groundPowerReal = np.array([1-np.real(br[0])/np.sqrt(4*np.pi) for br in beamreal])
+                print (groundPowerReal,' XX remove this')
                 beamimag = None
                 groundPowerImag = 0.
             else:
