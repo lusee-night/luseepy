@@ -14,7 +14,7 @@ jobs:
     env:
        PYTHONPATH: .:..
        LUSEE_DRIVE_DIR: Drive
-    container: buddhasystem/lusee-night-jupyter:0.1 
+    container: lusee/lusee-night-jupyter:0.1 
     steps:
       - uses: actions/checkout@v2
       - run: wget "https://drive.google.com/uc?export=download&id=1cdKZpq81DmLBy_gbGy-DpNYXbvnQAJG9" -O drive.tgz
