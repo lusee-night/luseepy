@@ -19,7 +19,6 @@ RUN pip install -r requirements.txt
 RUN rm requirements.txt
 
 COPY lusee lusee
-COPY simulation simulation
 COPY tests tests
 
 ADD .astropy /root/.astropy
