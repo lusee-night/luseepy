@@ -34,7 +34,7 @@ observation:
     step: 4
 
 simulation:
-  output: output/sim_example.fits
+  output: sim_example.fits
   
   
  
