@@ -4,7 +4,7 @@ paths:
   beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
     
 sky:
-  type: CMB
+  file: ULSA_32_ddi_smooth.fits
 
 beams: 
   type: Gaussian
@@ -57,17 +57,17 @@ observation:
   beams: [ N1, N2, N3, S1, S2, S3, E1, W1 ]
   common_beam_angle: 0
   lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
-  dt: 24*3600 
+  dt: 24*3600
   Tground: 0
   lmax: 32
-  combinations: [ '00', '11', '22', '33', '44', '55', '66', '77', '12', '15', '16', '17']
+  combinations: [ '00', '11', '22', '33', '44', '55', '66', '77', '12', '13', '14', '15', '16', '17']
   freq:
     start: 1
-    end: 6
+    end: 4
     step: 4
 
 simulation:
-  output: output/sim_gaussLBeam.fits
+  output: output/sim_ULSAgaussLBeam.fits
   
   
  
