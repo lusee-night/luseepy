@@ -1,0 +1,51 @@
+paths:
+  lusee_drive_dir: $LUSEE_DRIVE_DIR
+  sky_dir: Simulations/SkyModels
+  beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
+
+sky:
+  file: ULSA_32_ddi_smooth.fits
+
+beam_config:
+  type: fits
+  couplings:
+    opposite:
+      combinations: [ [N,S] ]
+      two_port: hfss_lbl_1m_75deg.2port.fits
+      sign: -1
+
+
+beams:
+  N:
+    angle: 0
+    file: hfss_lbl_1m_75deg.fits
+
+  S:
+    angle: +180
+    file: hfss_lbl_1m_75deg.fits
+    
+  pseudo:
+    angle: 180
+    file: hfss_lbl_1m_75deg.2port.fits
+
+observation:
+  long: 180
+  lat: -10
+  beams: [ N, S, pseudo ]
+  common_beam_angle: 0
+  lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
+  dt: 24*3600 
+  Tground: 50000.0
+  lmax: 32
+  combinations: [ [0,0], [1,1], [0,1], [2,2] ]
+  freq:
+    start: 1
+    end: 50.1
+    step: 1
+
+simulation:
+  output: output/coupling_test.fits
+  
+
+  
+ 

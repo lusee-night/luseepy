@@ -107,7 +107,8 @@ class Simulator:
                 groundPowerReal = np.array([cp-np.real(br[0])/np.sqrt(4*np.pi) for br,cp in
                                             zip(beamreal,cross_power)])
                 groundPowerImag = np.array([0-np.real(bi[0])/np.sqrt(4*np.pi) for bi in beamimag])
-
+            if "dump_beams" in self.extra_opts:
+                np.save(bi.id+bj.id,beamreal)
             self.efbeams.append((i,j,beamreal, beamimag, groundPowerReal,
                                  groundPowerImag))
             
