@@ -91,10 +91,11 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
 
 
 class LBeam:
-    def __init__ (self, fname):
+    def __init__ (self, fname, id = None):
         header = dict(fitsio.read_header(fname))
         fits = fitsio.FITS(fname,'r')
         version = header['VERSION']
+        self.id = id
         self.version = version
         self.Etheta = fits['Etheta_real'].read() + 1j*fits['Etheta_imag'].read()
         self.Ephi = fits['Ephi_real'].read() + 1j*fits['Ephi_imag'].read()

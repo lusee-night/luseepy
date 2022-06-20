@@ -46,7 +46,7 @@ class SimDriver(dict):
                     print ("Neither default not special file declare for beam",b)
             fname = os.path.join(broot,filename)
             print ("  loading file: ",fname)
-            B = lusee.LBeam (fname)
+            B = lusee.LBeam (fname, id = b)
             angle = self['observation']['common_beam_angle']+cbeam['angle']
             print ("  rotating: ",angle)
             B=B.rotate(angle)
