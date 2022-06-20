@@ -115,13 +115,13 @@ class LData(LObservation):
         c = const.c.value
         ## 1 / i w C , 1e6 = MHz, 1e-12 is pico (farad)
         Zrec  = 1/(1j*(self.freq*1e6)*(self.Cfront*1e-12))
-        self.Gamma = []
+        self.POCGamma = []
         self.T2Vsq = []
         for ZRe,ZIm in zip(self.ZRe,self.ZIm):
             Zant = ZRe+1j*ZIm
-            Gamma = np.abs(Zrec)/np.abs((Zant+Zrec))
-            self.Gamma.append(Gamma)
-            self.T2Vsq.append(kB*ZRe*Gamma**2)
+            POCGamma = 2*np.abs(Zrec)/np.abs((Zant+Zrec)) ##2 as per t
+            self.POCGamma.append(POCGamma)
+            self.T2Vsq.append(kB*ZRe*POCGamma**2)
 
             
             

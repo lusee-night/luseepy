@@ -28,6 +28,7 @@ class LBeam_Gauss(LBeam):
         # v1 so that self.freq=np.linspace as below
         # >v2 so that self.ground_fraction() can be calculated
         
+        self.id = None
         self.freq_min = 1.
         self.freq_max = 50.
         self.Nfreq = 50

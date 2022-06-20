@@ -8,10 +8,9 @@ sky:
 
 beam_config:
   type: fits
-  default_file: hfss_lbl_1m_75deg.fits
   couplings:
     opposite:
-      combinations: [[N,S], [E,W]]
+      combinations: [ [N,S] ]
       two_port: hfss_lbl_1m_75deg.2port.fits
       sign: -1
 
@@ -19,30 +18,34 @@ beam_config:
 beams:
   N:
     angle: 0
-  E:
-    angle: -90
+    file: hfss_lbl_1m_75deg.fits
+
   S:
-    angle: -180
-  W:
-    angle: -270
+    angle: +180
+    file: hfss_lbl_1m_75deg.fits
+    
+  pseudo:
+    angle: 180
+    file: hfss_lbl_1m_75deg.2port.fits
 
 observation:
   long: 180
   lat: -10
-  beams: [ N, E, S, W ]
+  beams: [ N, S, pseudo ]
   common_beam_angle: 0
   lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
   dt: 24*3600 
-  Tground: 0
+  Tground: 50000.0
   lmax: 32
-  combinations: all
+  combinations: [ [0,0], [1,1], [0,1], [2,2] ]
   freq:
     start: 1
     end: 50.1
     step: 1
 
 simulation:
-  output: output/hfss_lbl_1m_0523.fits
+  output: output/coupling_test.fits
+  
 
   
  

@@ -34,7 +34,7 @@ class SimDriver(dict):
         beams = []
         bd = self['beams']
         bdc = self['beam_config']
-        default_file = bdc.get('default_file')
+        couplings = bdc.get('couplings')
         beam_type = bdc.get('type','fits')
 
         if beam_type=='Gaussian': #similar to sky_type above
@@ -53,6 +53,7 @@ class SimDriver(dict):
                 cbeam = bd[b]
                 filename = cbeam.get('file')
                 if filename is None:
+                    default_file = bdc.get('default_file')
                     filename = default_file
                     if filename is None:
                         print ("Neither default not special file declare for beam",b)
@@ -69,7 +70,12 @@ class SimDriver(dict):
         
         self.beams = beams
         self.Nbeams = len(self.beams)
-
+        if couplings is not None:
+            for c in couplings:
+                couplings[c]['two_port'] = os.path.join(broot,couplings[c]['two_port'])
+            self.couplings=lusee.LBeamCouplings(beams, from_yaml_dict = couplings)
+        else:
+            self.couplings = None
 
     def run(self):
         print ("Starting simulation :")
@@ -92,6 +98,7 @@ class SimDriver(dict):
         print ("  setting up Simulation object...")
         S = lusee.Simulator (O,self.beams, self.sky, freq=freq, lmax = self.lmax,
                              combinations=combs, Tground = od['Tground'],
+                             cross_power = self.couplings,
                              extra_opts = self['simulation'] )
         print ("  Simulating...")
         S.simulate(times=O.times)
