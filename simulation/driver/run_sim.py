@@ -33,10 +33,11 @@ class SimDriver(dict):
         broot = os.path.join(self.root,self['paths']['beam_dir'])
         beams = []
         bd = self['beams']
-        default_file = bd.get('default_file')
+        bdc = self['beam_config']
+        default_file = bdc.get('default_file')
+        beam_type = bdc.get('beam_type','fits')
+        
         for b in self['observation']['beams']:
-            if "default_file" in b:
-                continue
             print ("Loading beam",b,":")
             cbeam = bd[b]
             filename = cbeam.get('file')
