@@ -6,8 +6,10 @@ paths:
 sky:
   type: CMB
 
-beams: 
+beam_config:
   type: Gaussian
+
+beams: 
   N1:
     angle: 0
     declination: 20
