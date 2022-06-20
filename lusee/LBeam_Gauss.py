@@ -77,7 +77,7 @@ class LBeam_Gauss(LBeam):
                 self.Etheta[f,:,:]=beam
 
                 #set gain_conv such that ground_fraction() is zero
-                factor=(dA_theta[:,None]*self.power()[f,:,:-1]).sum()/(4*np.pi)
+                factor=(dA_theta[:,None]*self.power()[f,:,:]).sum()/(4*np.pi)
                 self.gain_conv[f]/=factor
         else:
             #create gauss beam centered at declination=dec and phi=0 of width sigma
@@ -87,7 +87,7 @@ class LBeam_Gauss(LBeam):
                 self.Etheta[f,:,:]=beam
 
             #set gain_conv such that ground_fraction() is zero
-            factor=(dA_theta[:,None]*self.power()[0,:,:-1]).sum()/(4*np.pi)
+            factor=(dA_theta[:,None]*self.power()[0,:,:]).sum()/(4*np.pi)
             self.gain_conv/=factor
 
         assert(np.all(np.abs(self.ground_fraction())<1e-3)) #confirm ground_fraction==zero
