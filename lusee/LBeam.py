@@ -177,16 +177,20 @@ class LBeam:
         xP = self.Etheta*np.conj(other.Etheta) + self.Ephi*np.conj(other.Ephi)
         return xP
 
-    def ground_fraction(self):
+
+    def sky_fraction(self, cross = None):
         if self.version<2:
             print ("Cannot do this on v1 files.")
-        xP=self.power()
+        xP=self.power() if cross is None else self.cross_power(cross)
         gain = xP*self.gain_conv[:,None,None]
         dphi = self.phi[1]-self.phi[0]
         dtheta = self.theta[1]-self.theta[0]
         dA_theta = np.sin(self.theta)*dtheta*dphi
         f_sky = np.array([(dA_theta[:,None]*gain[i,:,:]).sum()/(4*np.pi) for i in range(self.Nfreq)])
-        f_ground = 1.0 - f_sky
+        return f_sky
+    
+    def ground_fraction(self):
+        f_ground = 1.0 - self.sky_fraction()
         return f_ground
         
     
