@@ -2,14 +2,20 @@ paths:
   lusee_drive_dir: $LUSEE_DRIVE_DIR
   sky_dir: Simulations/SkyModels
   beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
-    
+
 sky:
   file: ULSA_32_ddi_smooth.fits
 
 beam_config:
   type: fits
   default_file: hfss_lbl_1m_75deg.fits
-  
+  couplings:
+    opposite:
+      combinations: [[N,S], [E,W]]
+      two_port: hfss_lbl_1m_75deg.2port.fits
+      sign: -1
+
+
 beams:
   N:
     angle: 0

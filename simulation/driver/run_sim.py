@@ -36,6 +36,7 @@ class SimDriver(dict):
         bdc = self['beam_config']
         default_file = bdc.get('default_file')
         beam_type = bdc.get('beam_type','fits')
+        couplings = bdc.get('couplings')
         
         for b in self['observation']['beams']:
             print ("Loading beam",b,":")
@@ -54,7 +55,12 @@ class SimDriver(dict):
             beams.append(B)
         self.beams = beams
         self.Nbeams = len(self.beams)
-
+        if couplings is not None:
+            for c in couplings:
+                couplings[c]['two_port'] = os.path.join(broot,couplings[c]['two_port'])
+            self.couplings=lusee.LBeamCouplings(beams, from_yaml_dict = couplings)
+        else:
+            self.couplings = None
 
     def run(self):
         print ("Starting simulation :")
@@ -77,6 +83,7 @@ class SimDriver(dict):
         print ("  setting up Simulation object...")
         S = lusee.Simulator (O,self.beams, self.sky, freq=freq, lmax = self.lmax,
                              combinations=combs, Tground = od['Tground'],
+                             cross_power = self.couplings,
                              extra_opts = self['simulation'] )
         print ("  Simulating...")
         S.simulate(times=O.times)
