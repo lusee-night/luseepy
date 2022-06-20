@@ -8,9 +8,9 @@ sky:
 
 beam_config:
   type: fits
-  default_file: hfss_lbl_3m_75deg.fits
+  default_file: hfss_lbl_1m_75deg.fits
   
-beams: 
+beams:
   N:
     angle: 0
   E:
@@ -23,7 +23,7 @@ beams:
 observation:
   long: 180
   lat: -10
-  beams: [ N, S, E, W ]
+  beams: [ N, E, S, W ]
   common_beam_angle: 0
   lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
   dt: 24*3600 
@@ -32,11 +32,11 @@ observation:
   combinations: all
   freq:
     start: 1
-    end: 6
-    step: 4
+    end: 50.1
+    step: 1
 
 simulation:
-  output: output/sim_example.fits
-  
+  output: output/hfss_lbl_1m_0523.fits
+
   
  

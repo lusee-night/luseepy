@@ -4,7 +4,7 @@ from yaml.loader import SafeLoader
 from  run_sim import SimDriver
 import copy
 
-yaml_file = 'config/lbl_1m_0523.yaml'
+yaml_file = 'config/pdr_run.yaml'
 raw_config = yaml.load(open(yaml_file),Loader=SafeLoader)
 
 

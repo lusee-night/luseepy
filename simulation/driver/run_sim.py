@@ -33,25 +33,16 @@ class SimDriver(dict):
         broot = os.path.join(self.root,self['paths']['beam_dir'])
         beams = []
         bd = self['beams']
-        if bd.get('type')=='Gaussian': #similar to sky_type above
-            print('Creating Gaussian beams!')
-            for b in self['observation']['beams']:
-                cbeam=bd[b]
-                print ("Creating gaussian beam",b,":")
-                B = lusee.LBeam_Gauss(dec_deg=cbeam['declination'],sigma_deg=cbeam['sigma'],one_over_freq_scaling=cbeam['one_over_freq_scaling'])
-                angle = self['observation']['common_beam_angle']+cbeam['angle']
-                print ("  rotating: ",angle)
-                B.rotate(angle)
-                beams.append(B)
-
-        else:
-            default_file = bd.get('default_file')
-            for b in self['observation']['beams']:
-                if "default_file" in b:
-                    continue
-                print ("Loading beam",b,":")
-                cbeam = bd[b]
-                filename = cbeam.get('file')
+        bdc = self['beam_config']
+        default_file = bdc.get('default_file')
+        beam_type = bdc.get('beam_type','fits')
+        
+        for b in self['observation']['beams']:
+            print ("Loading beam",b,":")
+            cbeam = bd[b]
+            filename = cbeam.get('file')
+            if filename is None:
+                filename = default_file
                 if filename is None:
                     filename = default_file
                     if filename is None:
