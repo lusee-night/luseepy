@@ -14,7 +14,7 @@ for ofs,c in enumerate(["N","E","S","W"]):
     beams.append(cB)
     
 lmax = 64
-freq=[1,2,3]
+freq=[10,12,30]
 sky = lusee.sky.ConstSky(Nside = 32, lmax = lmax, freq=freq, T=200)
 S = lusee.Simulator (O,beams, sky, freq=freq, lmax = lmax, combinations=[(0,0),(1,1),(1,3)],
                      Tground = 200. )
