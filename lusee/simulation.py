@@ -81,9 +81,9 @@ class Simulator:
         gtapr = (np.arctan((thetas-np.pi/2)/self.taper)/np.pi+0.5)**2
         tapr = 1.0 - gtapr
         bomega = []
-        self.combinations = combinations
+        self.combinations = [(int(i),int(j)) for i,j in combinations]
         
-        for i,j in combinations:
+        for i,j in self.combinations:
             bi , bj = beams[i], beams[j]
             print (f"  intializing beam combination {bi.id} x {bj.id} ...")
             #f_ground_i, f_ground_j = f_grounds[i], f_grounds[j]
