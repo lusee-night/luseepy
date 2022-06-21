@@ -45,7 +45,7 @@ class SimDriver(dict):
                 B = lusee.LBeam_Gauss(dec_deg=cbeam['declination'],sigma_deg=cbeam['sigma'],one_over_freq_scaling=cbeam['one_over_freq_scaling'])
                 angle = self['observation']['common_beam_angle']+cbeam['angle']
                 print ("  rotating: ",angle)
-                B.rotate(angle)
+                B = B.rotate(angle)
                 beams.append(B)
         elif beam_type == 'fits':
             for b in self['observation']['beams']:

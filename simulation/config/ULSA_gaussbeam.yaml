@@ -6,8 +6,10 @@ paths:
 sky:
   file: ULSA_32_ddi_smooth.fits
 
-beams: 
+beam_config:
   type: Gaussian
+
+beams: 
   N1:
     angle: 0
     declination: 20
@@ -15,7 +17,7 @@ beams:
     one_over_freq_scaling: False
   N2:
     angle: 0
-    declination: 40
+    declination: 0
     sigma: 8
     one_over_freq_scaling: False
   N3:
@@ -41,12 +43,12 @@ beams:
 
   E1:
     angle: 90
-    declination: 40
+    declination: 0
     sigma: 8
     one_over_freq_scaling: False
   W1:
     angle: 270
-    declination: 40
+    declination: 0
     sigma: 8
     one_over_freq_scaling: False
 
@@ -60,7 +62,7 @@ observation:
   dt: 24*3600
   Tground: 0
   lmax: 32
-  combinations: [ '00', '11', '22', '33', '44', '55', '66', '77', '12', '13', '14', '15', '16', '17']
+  combinations: [ '00', '11', '22', '33', '44', '55', '66', '77', '10', '12', '13', '14', '15', '16', '17']
   freq:
     start: 1
     end: 4

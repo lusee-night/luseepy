@@ -43,26 +43,38 @@ beams:
 
   E1:
     angle: 90
+    declination: 20
+    sigma: 8
+    one_over_freq_scaling: False
+  E2:
+    angle: 90
     declination: 40
     sigma: 8
     one_over_freq_scaling: False
+
   W1:
+    angle: 270
+    declination: 20
+    sigma: 8
+    one_over_freq_scaling: False
+  W2:
     angle: 270
     declination: 40
     sigma: 8
     one_over_freq_scaling: False
-
+  
 
 observation:
   long: 180
   lat: -10
-  beams: [ N1, N2, N3, S1, S2, S3, E1, W1 ]
+  beams: [ N1, N2, N3, S1, S2, S3, E1, E2, W1, W2 ]
   common_beam_angle: 0
   lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
   dt: 24*3600 
   Tground: 0
   lmax: 32
-  combinations: [ '00', '11', '22', '33', '44', '55', '66', '77', '12', '15', '16', '17']
+  # combinations: [ '00', '11', '22', '33', '44', '55', '66', '77', '12', '15', '16', '17']
+  combinations: [ '10', '11', '12', '13', '14', '15', '16', '17', '18', '19']
   freq:
     start: 1
     end: 6
