@@ -32,6 +32,6 @@ $ docker run -it --rm -v $LUSEE_DRIVE_DIR:/data --env LUSEE_DRIVE_DIR=/data luse
 # The prototype
 
 ```bash
-docker run -it --rm -v $LUSEE_DRIVE_DIR:/data --env LUSEE_DRIVE_DIR=/data --env PYTHONPATH=/app --entrypoint /app/simulation/driver/run_sim.py lusee/lusee-night-jupyter:0.1 /app/simulation/config/example.yaml
+docker run -it --rm -v $LUSEE_DRIVE_DIR:/data -v $PWD:/output --env LUSEE_DRIVE_DIR=/data --env PYTHONPATH=/app --env LUSEE_OUTPUT_DIR=/output --entrypoint /app/simulation/driver/run_sim.py lusee/lusee-night-jupyter:0.1 /app/simulation/config/example.yaml
 ```
 

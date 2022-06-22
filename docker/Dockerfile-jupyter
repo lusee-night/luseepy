@@ -2,6 +2,7 @@
 # Includes Jupyter
 
 FROM lusee/lusee-night-base:0.1
+
 WORKDIR /app
 
 
@@ -12,3 +13,11 @@ RUN pip install -r requirements-jupyter.txt
 COPY simulation simulation
 
 RUN rm requirements-jupyter.txt
+
+
+# We'll be writing out data and it's best
+# to have a mount point we can map to a folder
+# on the host machine. This is also important
+# for Singularuty.
+
+WORKDIR /output
