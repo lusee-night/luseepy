@@ -6,7 +6,9 @@ export LUSEE_IMAGE='lusee/lusee-night-jupyter:0.1'
 export LUSEE_DRIVE_DIR='/home/maxim/data/lusee/'
 #
 # In the above, note the local folder for the LuSEE data.
-# At the SDCC facility, the path would be /gpfs02/astro/workarea/LuSEE_Drive at the time of writing.
+# At the SDCC facility, the path would be /gpfs02/astro/workarea/LuSEE_Drive e.g.
+
+export LUSEE_DRIVE_DIR=/gpfs02/astro/workarea/LuSEE_Drive
 ```
 
 The starting point is the bash function defined in the setup file:
