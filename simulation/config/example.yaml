@@ -9,6 +9,13 @@ sky:
 beam_config:
   type: fits
   default_file: hfss_lbl_3m_75deg.fits
+  couplings:
+    opposite:
+      combinations: [[N,S], [E,W]]
+      # following is to save CI DL: we should have a 2 port here,
+      # but use this to have CI run through this part of the code
+      two_port: hfss_lbl_3m_75deg.fits 
+      sign: -1
   
 beams: 
   N:

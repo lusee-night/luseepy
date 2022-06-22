@@ -42,7 +42,9 @@ class SimDriver(dict):
             for b in self['observation']['beams']:
                 cbeam=bd[b]
                 print ("Creating gaussian beam",b,":")
-                B = lusee.LBeam_Gauss(dec_deg=cbeam['declination'],sigma_deg=cbeam['sigma'],one_over_freq_scaling=cbeam['one_over_freq_scaling'])
+                B = lusee.LBeam_Gauss(dec_deg=cbeam['declination'],
+                                      sigma_deg=cbeam['sigma'],
+                                      one_over_freq_scaling=cbeam['one_over_freq_scaling'], id = b)
                 angle = self['observation']['common_beam_angle']+cbeam['angle']
                 print ("  rotating: ",angle)
                 B = B.rotate(angle)
@@ -59,7 +61,7 @@ class SimDriver(dict):
                         print ("Neither default not special file declare for beam",b)
                     fname = os.path.join(broot,filename)
                     print ("  loading file: ",fname)
-                    B = lusee.LBeam (fname)
+                    B = lusee.LBeam (fname, id = b)
                     angle = self['observation']['common_beam_angle']+cbeam['angle']
                     print ("  rotating: ",angle)
                     B=B.rotate(angle)
