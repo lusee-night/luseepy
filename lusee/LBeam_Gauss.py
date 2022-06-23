@@ -70,7 +70,7 @@ class LBeam_Gauss(LBeam):
         if one_over_freq_scaling: #slow code, hence separate
             for f,freq in enumerate(self.freq):
                 #scale sigma with 1/freq
-                sigma_freq=sigma/freq if one_over_freq_scaling else sigma
+                sigma_freq=sigma*(10.0/freq) if one_over_freq_scaling else sigma
                 
                 #create gauss beam centered at declination=dec and phi=0 of width sigma_freq
                 beam=gauss_beam(Declination,Phi,sigma_freq,dec,phi_rad).astype(complex)
