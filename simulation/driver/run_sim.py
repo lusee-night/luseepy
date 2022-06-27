@@ -27,7 +27,11 @@ class SimDriver(dict):
         elif sky_type == 'CMB':
             # make sure if lmax matters here
             print ("Using CMB sky")
-            self.sky = lusee.sky.ConstSky(self.lmax,lmax=self.lmax,T=2.73, freq=np.arange(1,51))  
+            self.sky = lusee.sky.ConstSky(self.lmax,lmax=self.lmax,T=2.73, freq=np.arange(1,51)) 
+        elif sky_type == 'Cane1979':
+            # make sure if lmax matters here
+            print ("Using Cane1979 sky")
+            self.sky = lusee.sky.ConstSkyCane1979(self.lmax, lmax=self.lmax, freq=np.arange(1,51))  
 
     def _parse_beams(self):
         broot = os.path.join(self.root,self['paths']['beam_dir'])
@@ -45,7 +49,7 @@ class SimDriver(dict):
                 B = lusee.LBeam_Gauss(dec_deg=cbeam['declination'],
                                       sigma_deg=cbeam['sigma'],
                                       one_over_freq_scaling=cbeam['one_over_freq_scaling'], id = b)
-                angle = self['observation']['common_beam_angle']+cbeam['angle']
+                angle = bdc['common_beam_angle']+cbeam['angle']
                 print ("  rotating: ",angle)
                 B = B.rotate(angle)
                 beams.append(B)
@@ -59,13 +63,13 @@ class SimDriver(dict):
                     filename = default_file
                     if filename is None:
                         print ("Neither default not special file declare for beam",b)
-                    fname = os.path.join(broot,filename)
-                    print ("  loading file: ",fname)
-                    B = lusee.LBeam (fname, id = b)
-                    angle = self['observation']['common_beam_angle']+cbeam['angle']
-                    print ("  rotating: ",angle)
-                    B=B.rotate(angle)
-                    beams.append(B)
+                fname = os.path.join(broot,filename)
+                print ("  loading file: ",fname)
+                B = lusee.LBeam (fname, id = b)
+                angle = bdc['common_beam_angle']+cbeam.get('angle',0)
+                print ("  rotating: ",angle)
+                B=B.rotate(angle)
+                beams.append(B)
         else:
             print ("Beam type unrecognized")
             raise Exception('NotImplementedError')

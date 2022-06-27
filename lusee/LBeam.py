@@ -9,7 +9,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import healpy as hp
 from scipy.special import sph_harm
 from pyshtools.legendre import legendre
-
+import os
 
 
 def getLegendre(lmax, theta):
@@ -92,6 +92,9 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
 
 class LBeam:
     def __init__ (self, fname, id = None):
+        if not (os.path.isfile (fname) and os.access(fname, os.R_OK)):
+            print (f"Cannot open {fname}")
+            stop()
         header = dict(fitsio.read_header(fname))
         fits = fitsio.FITS(fname,'r')
         version = header['VERSION']

@@ -9,6 +9,7 @@ sky:
 beam_config:
   type: fits
   default_file: hfss_lbl_3m_75deg.fits
+  common_beam_angle: 0
   couplings:
     opposite:
       combinations: [[N,S], [E,W]]
@@ -31,7 +32,6 @@ observation:
   long: 180
   lat: -10
   beams: [ N, S, E, W ]
-  common_beam_angle: 0
   lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
   dt: 24*3600 
   Tground: 0
