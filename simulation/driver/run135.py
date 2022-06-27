@@ -8,10 +8,11 @@ yaml_file = 'config/pdr_run.yaml'
 raw_config = yaml.load(open(yaml_file),Loader=SafeLoader)
 
 
-for l in [3,6]:
+for l in [2,3]:
   for angle in [75,15]:
     config = copy.deepcopy(raw_config)
-    config['beams']['default_file'] = f"hfss_lbl_{l}m_{angle}deg.fits"
+    config['beam_config']['default_file'] = f"hfss_lbl_{l}m_{angle}deg.fits"
+    config['beam_config']['couplings']['opposite']['two_port'] = f"hfss_lbl_{l}m_{angle}deg.2port.fits"
     config['simulation']['output'] = f"output/hfss_lbl_{l}m_{angle}deg.fits"
     S=SimDriver(config)
     S.run()
