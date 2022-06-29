@@ -1,9 +1,10 @@
 import fitsio
 import healpy as hp
 import numpy as np
+from .mono_sky_models import T_C
 
 class ConstSky:
-    def __init__ (self,Nside, lmax, T, freq=None):
+    def __init__ (self,Nside, lmax, T, freq=None, zero_cone = True):
         self.Nside = Nside
         self.Npix = Nside**2 * 12
         Tmap = np.ones(self.Npix)
@@ -13,7 +14,10 @@ class ConstSky:
             T = np.array(T)
         self._T = T
         theta,phi = hp.pix2ang(self.Nside,np.arange(self.Npix))
-        Tmap[theta>0.75*np.pi] = 0 
+        if zero_cone:
+            # this is strictly speaking not needed, but we want to make sure
+            # sky below horizon is ignored
+            Tmap[theta>0.75*np.pi] = 0  
         self.mapalm = hp.map2alm(Tmap, lmax=lmax)
         self.frame = "MCMF"
         self.freq=freq
@@ -25,6 +29,12 @@ class ConstSky:
     def get_alm(self, ndx, freq=None):
         return [self.mapalm*T for T in self.T(ndx)]
 
+class ConstSkyCane1979(ConstSky):
+    def __init__(self, Nside, lmax, freq=None):
+        self.freq = np.arange(1.0,50.1) if freq is None else freq
+        T = T_C(self.freq).value
+        ConstSky.__init__(self, Nside, lmax, T, freq)
+    
 
 class GalCenter (ConstSky):
     def __init__ (self,Nside, lmax, T, freq=None):
@@ -38,6 +48,7 @@ class GalCenter (ConstSky):
         self.frame = "galactic"
         self.freq=freq
 
+    
 
 class FitsSky:
     def __init__ (self, fname, lmax):
