@@ -9,7 +9,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import healpy as hp
 from scipy.special import sph_harm
 from pyshtools.legendre import legendre
-
+import os
 
 
 def getLegendre(lmax, theta):
@@ -92,6 +92,9 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
 
 class LBeam:
     def __init__ (self, fname, id = None):
+        if not (os.path.isfile (fname) and os.access(fname, os.R_OK)):
+            print (f"Cannot open {fname}")
+            stop()
         header = dict(fitsio.read_header(fname))
         fits = fitsio.FITS(fname,'r')
         version = header['VERSION']
@@ -230,3 +233,8 @@ class LBeam:
             cax = divider.append_axes("right", size="5%", pad=0.05)
             plt.colorbar(im, cax=cax)
 
+    def get_healpix(self,lmax, field, freq = None):
+        if freq is None:
+            freq = self.freq
+        return  np.array([grid2healpix_alm_fast(self.theta,self.phi[:-1], field[fi,:,:-1],
+                                    lmax) for fi in range(self.Nfreq)])
