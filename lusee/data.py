@@ -6,13 +6,14 @@ from .LunarCalendar  import LunarCalendar
 
 
 class LData(LObservation):
-    def __init__(self, filename, noise_e = 2, Cfront = 35 ):
+    def __init__(self, filename, noise_e = 2, Cfront = 35, R4 = 1e6 ):
         """
            noise_e is amplifier noise in nV/rtHz
            Cfront is front-end capacticance in pico-farads
         """
         self.noise_e = noise_e
         self.Cfront = 35
+        self.R4 = R4
         header = dict(fitsio.read_header(filename))
         version = header['VERSION']
         lunar_day    = header['LUNAR_DAY']
@@ -114,14 +115,16 @@ class LData(LObservation):
         kB = const.k_B.value
         c = const.c.value
         ## 1 / i w C , 1e6 = MHz, 1e-12 is pico (farad)
-        Zrec  = 1/(1j*(self.freq*1e6)*(self.Cfront*1e-12))
-        self.POCGamma = []
+        omega = 2*np.pi*self.freq*1e6
+        
+        Zrec  = 1/(1j*omega*(self.Cfront*1e-12) + 1/self.R4)
+        self.Gamma_VD = []
         self.T2Vsq = []
         for ZRe,ZIm in zip(self.ZRe,self.ZIm):
             Zant = ZRe+1j*ZIm
-            POCGamma = 2*np.abs(Zrec)/np.abs((Zant+Zrec)) ##2 as per t
-            self.POCGamma.append(POCGamma)
-            self.T2Vsq.append(kB*ZRe*POCGamma**2)
+            Gamma_VD = np.abs(Zrec)/np.abs((Zant+Zrec)) ##2 as per t
+            self.Gamma_VD.append(Gamma_VD)
+            self.T2Vsq.append(4*kB*ZRe*Gamma_VD**2)
 
             
             

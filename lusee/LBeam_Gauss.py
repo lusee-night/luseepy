@@ -17,7 +17,7 @@ class LBeam_Gauss(LBeam):
     """
     Gaussian LBeam object, centered at the given declination (and phi=360-azimuth=0) and of width sigma. 
     """
-    def __init__ (self, dec_deg, sigma_deg, phi_deg=90, one_over_freq_scaling=False):
+    def __init__ (self, dec_deg, sigma_deg, phi_deg=90, one_over_freq_scaling=False, id = None):
         """
         dec_deg : declination of the center of the gaussian beam, in degrees
         phi_deg : phi center of the gaussian beam, in degrees, phi=0->E, phi=90->N
@@ -28,7 +28,7 @@ class LBeam_Gauss(LBeam):
         # v1 so that self.freq=np.linspace as below
         # >v2 so that self.ground_fraction() can be calculated
         
-        self.id = None
+        self.id = id
         self.freq_min = 1.
         self.freq_max = 50.
         self.Nfreq = 50
