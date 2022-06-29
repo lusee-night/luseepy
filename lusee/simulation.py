@@ -1,8 +1,8 @@
 
 from .observation import LObservation
-from .LBeam import LBeam, grid2healpix_alm_fast
+from .LBeam import LBeam
 from .LBeamCouplings import LBeamCouplings
-
+from scipy.ndimage import gaussian_filter
 import numpy as np
 import healpy as hp
 import fitsio
@@ -34,7 +34,7 @@ class Simulator:
     def __init__ (self, obs, beams, sky_model, 
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], lmax = 128,
                   taper = 0.03, Tground = 200.0, freq = None,
-                  cross_power = None,
+                  cross_power = None, beam_smooth = None,
                   extra_opts = {}):
         self.obs = obs
         self.sky_model = sky_model
@@ -43,6 +43,7 @@ class Simulator:
         self.Tground = Tground
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else LBeamCouplings()
+        self.beam_smooth = beam_smooth
         if freq is None:
             self.freq = beams[0].freq
         else:
@@ -90,18 +91,20 @@ class Simulator:
             xP = bi.cross_power(bj)[self.freq_ndx_beam,:,:]
             norm = np.sqrt(bi.gain_conv[self.freq_ndx_beam]*bj.gain_conv[self.freq_ndx_beam])
             beam2 = xP*tapr[None,:,None]*norm[:,None,None]
+            if self.beam_smooth is not None:
+                print ("  smoothing beams with ",self.beam_smooth)
+                beam2 = gaussian_filter(beam2,self.beam_smooth)
+
             # now need to transfrom this to healpy
             # (Note: we cut on freq_ndx above, so yes, range is fine in the line below)
-            beamreal =  np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.real(beam2[fi,:,:-1]),
-                                                        self.lmax) for fi in range(self.Nfreq)])
+            beamreal =  bi.get_healpix(self.lmax, np.real(beam2), range(self.Nfreq))
 
             if i==j:
                 groundPowerReal = np.array([1-np.real(br[0])/np.sqrt(4*np.pi) for br in beamreal])
                 beamimag = None
                 groundPowerImag = 0.
             else:
-                beamimag = np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(beam2[fi,:,:-1]),
-                                                           self.lmax) for fi in range(self.Nfreq)])
+                beamimag = bi.get_healpix(self.lmax, np.imag(beam2), range(self.Nfreq))
                 cross_power = self.cross_power.Ex_coupling(bi,bj,self.freq_ndx_beam)
                 print (f"    cross power is {cross_power[0]} ... {cross_power[-1]} ")
                 groundPowerReal = np.array([cp-np.real(br[0])/np.sqrt(4*np.pi) for br,cp in
