@@ -9,7 +9,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import healpy as hp
 from scipy.special import sph_harm
 from pyshtools.legendre import legendre
-
+import os
 
 
 def getLegendre(lmax, theta):
@@ -91,10 +91,14 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
 
 
 class LBeam:
-    def __init__ (self, fname):
+    def __init__ (self, fname, id = None):
+        if not (os.path.isfile (fname) and os.access(fname, os.R_OK)):
+            print (f"Cannot open {fname}")
+            stop()
         header = dict(fitsio.read_header(fname))
         fits = fitsio.FITS(fname,'r')
         version = header['VERSION']
+        self.id = id
         self.version = version
         self.Etheta = fits['Etheta_real'].read() + 1j*fits['Etheta_imag'].read()
         self.Ephi = fits['Ephi_real'].read() + 1j*fits['Ephi_imag'].read()
@@ -186,7 +190,7 @@ class LBeam:
         dphi = self.phi[1]-self.phi[0]
         dtheta = self.theta[1]-self.theta[0]
         dA_theta = np.sin(self.theta)*dtheta*dphi
-        f_sky = np.array([(dA_theta[:,None]*gain[i,:,:]).sum()/(4*np.pi) for i in range(self.Nfreq)])
+        f_sky = np.array([(dA_theta[:,None]*gain[i,:,:-1]).sum()/(4*np.pi) for i in range(self.Nfreq)])
         return f_sky
     
     def ground_fraction(self):

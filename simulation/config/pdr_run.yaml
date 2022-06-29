@@ -2,8 +2,7 @@ paths:
   lusee_drive_dir: $LUSEE_DRIVE_DIR
   sky_dir: Simulations/SkyModels
   beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
-  output_dir: $LUSEE_OUTPUT_DIR
-    
+
 sky:
   file: ULSA_32_ddi_smooth.fits
 
@@ -14,12 +13,10 @@ beam_config:
   couplings:
     opposite:
       combinations: [[N,S], [E,W]]
-      # following is to save CI DL: we should have a 2 port here,
-      # but use this to have CI run through this part of the code
-      two_port: hfss_lbl_3m_75deg.fits 
+      two_port: hfss_lbl_3m_75deg.2port.fits
       sign: -1
-  
-beams: 
+
+beams:
   N:
     angle: 0
   E:
@@ -32,7 +29,7 @@ beams:
 observation:
   long: 180
   lat: -10
-  beams: [ N, S, E, W ]
+  beams: [ N, E, S, W ]
   lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
   dt: 24*3600 
   Tground: 0
@@ -40,11 +37,11 @@ observation:
   combinations: all
   freq:
     start: 1
-    end: 6
-    step: 4
+    end: 50.1
+    step: 1
 
 simulation:
-  output: sim_example.fits
-  
+  output: output/hfss_lbl_3m_pdr.fits
+
   
  

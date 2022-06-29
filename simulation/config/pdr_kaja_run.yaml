@@ -1,0 +1,35 @@
+paths:
+  lusee_drive_dir: $LUSEE_DRIVE_DIR
+  sky_dir: Simulations/SkyModels
+  beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
+
+sky:
+  type: Cane1979
+
+beam_config:
+  common_beam_angle: 0
+  type: fits
+
+beams:
+  P:
+    file: hfss_lbl_3m_75deg.2port.fits
+
+observation:
+  long: 180
+  lat: -10
+  beams: [ P ]
+  lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
+  dt: 24*3600 
+  Tground: 0
+  lmax: 32
+  combinations: all
+  freq:
+    start: 1
+    end: 50.1
+    step: 1
+
+simulation:
+  output: output/hfss_lbl_3m_pdr.fits
+
+  
+ 
