@@ -9,6 +9,7 @@ sky:
 beam_config:
   type: fits
   default_file: hfss_lbl_3m_75deg.fits
+  beam_smooth : [ 1, 1, 0.5 ] ## in freq, theta, phi
   common_beam_angle: 0
   couplings:
     opposite:

@@ -40,7 +40,8 @@ class SimDriver(dict):
         bdc = self['beam_config']
         couplings = bdc.get('couplings')
         beam_type = bdc.get('type','fits')
-
+        self.beam_smooth = bdc.get('beam_smooth')
+        
         if beam_type=='Gaussian': #similar to sky_type above
             print('Creating Gaussian beams!')
             for b in self['observation']['beams']:
@@ -104,7 +105,7 @@ class SimDriver(dict):
         print ("  setting up Simulation object...")
         S = lusee.Simulator (O,self.beams, self.sky, freq=freq, lmax = self.lmax,
                              combinations=combs, Tground = od['Tground'],
-                             cross_power = self.couplings,
+                             cross_power = self.couplings, beam_smooth = self.beam_smooth,
                              extra_opts = self['simulation'] )
         print ("  Simulating...")
         S.simulate(times=O.times)
