@@ -233,8 +233,8 @@ class LBeam:
             cax = divider.append_axes("right", size="5%", pad=0.05)
             plt.colorbar(im, cax=cax)
 
-    def get_healpix(self,lmax, field, freq = None):
-        if freq is None:
-            freq = self.freq
+    def get_healpix(self,lmax, field, freq_ndx = None):
+        if freq_ndx is None:
+            freq_ndx = range(self.Nfreq)
         return  np.array([grid2healpix_alm_fast(self.theta,self.phi[:-1], field[fi,:,:-1],
-                                    lmax) for fi in range(self.Nfreq)])
+                                                lmax) for fi in freq_ndx])
