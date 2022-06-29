@@ -1,6 +1,6 @@
 
 from .observation import LObservation
-from .LBeam import LBeam, grid2healpix_alm_fast
+from .LBeam import LBeam
 from .LBeamCouplings import LBeamCouplings
 
 import numpy as np
