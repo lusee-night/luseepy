@@ -92,7 +92,8 @@ class Simulator:
             norm = np.sqrt(bi.gain_conv[self.freq_ndx_beam]*bj.gain_conv[self.freq_ndx_beam])
             beam2 = xP*tapr[None,:,None]*norm[:,None,None]
             if self.beam_smooth is not None:
-                beam2 = gaussian_filter(beam2,beam_smooth)
+                print ("  smoothing beams with ",self.beam_smooth)
+                beam2 = gaussian_filter(beam2,self.beam_smooth)
 
             # now need to transfrom this to healpy
             # (Note: we cut on freq_ndx above, so yes, range is fine in the line below)
