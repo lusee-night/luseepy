@@ -92,16 +92,14 @@ class Simulator:
             beam2 = xP*tapr[None,:,None]*norm[:,None,None]
             # now need to transfrom this to healpy
             # (Note: we cut on freq_ndx above, so yes, range is fine in the line below)
-            beamreal =  np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.real(beam2[fi,:,:-1]),
-                                                        self.lmax) for fi in range(self.Nfreq)])
+            beamreal =  bi.get_healpix(self.lmax, np.real(beam2), range(self.Nfreq))
 
             if i==j:
                 groundPowerReal = np.array([1-np.real(br[0])/np.sqrt(4*np.pi) for br in beamreal])
                 beamimag = None
                 groundPowerImag = 0.
             else:
-                beamimag = np.array([grid2healpix_alm_fast(bi.theta,bi.phi[:-1], np.imag(beam2[fi,:,:-1]),
-                                                           self.lmax) for fi in range(self.Nfreq)])
+                beamimag = bi.get_healpix(self.lmax, np.imag(beam2), range(self.Nfreq))
                 cross_power = self.cross_power.Ex_coupling(bi,bj,self.freq_ndx_beam)
                 print (f"    cross power is {cross_power[0]} ... {cross_power[-1]} ")
                 groundPowerReal = np.array([cp-np.real(br[0])/np.sqrt(4*np.pi) for br,cp in
