@@ -45,3 +45,9 @@ docker run -it --rm -v $LUSEE_DRIVE_DIR:/data -v $PWD:/output --env LUSEE_DRIVE_
 singularity exec --env LUSEE_OUTPUT_DIR=/output --bind .:/output --env LUSEE_DRIVE_DIR=/gpfs02/astro/workarea/LuSEE_Drive --env PYTHONPATH=/app -B /gpfs02/astro/workarea/LuSEE_Drive -B ${LOCAL} docker://lusee/lusee-night-jupyter:0.1 /app/simulation/driver/run_sim.py  /app/simulation/config/example.yaml
 ```
 
+Running with singularity driver for batch
+
+```bash
+singularity exec --env LUSEE_OUTPUT_DIR=/output --bind .:/output --env LUSEE_DRIVE_DIR=/gpfs02/astro/workarea/LuSEE_Drive --env PYTHONPATH=/app -B /gpfs02/astro/workarea/LuSEE_Drive -B `pwd`:/app docker://lusee/lusee-night-jupyter:0.1 python /app/simulation/driver/run_batch.py /app/simulation/config/pdr_run.yaml /app/simulation/config/pdr_config.batch 2
+```
+The last argument is the sim# to run from `pdr_config.batch`, to be `$(Process)` or whatever in condor.
