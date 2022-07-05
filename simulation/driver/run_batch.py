@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import yaml
 from yaml.loader import SafeLoader
 from  run_sim import SimDriver
