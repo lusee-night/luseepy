@@ -12,7 +12,6 @@ export OUTROOT=$LUSEE_DRIVE_DIR/Simulations/BeamModels/LanderFreeSpaceComparison
 
 
 
-
 export ROOT=$LUSEE_DRIVE_DIR/AntennaResponse/SimulationFiles/LuSEELanderRegolithComparison/eight_layer_regolith/ 
 export OUTROOT=$LUSEE_DRIVE_DIR/Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith
 
