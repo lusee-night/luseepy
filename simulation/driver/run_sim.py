@@ -10,13 +10,21 @@ from yaml.loader import SafeLoader
 class SimDriver(dict):
     def __init__ (self,yaml):
         self.update(yaml)
+        self._parse_base()
+        self._parse_sky()
+        self._parse_beams()
+        
+    def _parse_base(self):
         self.lmax = self['observation']['lmax'] ## common lmax
         self.root = self['paths']['lusee_drive_dir']
         if self.root[0]=='$':
             self.root = os.environ[self.root[1:]]
-        self._parse_sky()
-        self._parse_beams()
-        
+
+        od = self['observation']
+        self.dt = od['dt']
+        if type(self.dt)==str:
+            self.dt = eval(od['dt'])
+        self.freq = np.arange(od['freq']['start'],od['freq']['end'],od['freq']['step'])
 
     def _parse_sky(self):
         sky_type = self['sky'].get('type','file')
@@ -27,12 +35,22 @@ class SimDriver(dict):
         elif sky_type == 'CMB':
             # make sure if lmax matters here
             print ("Using CMB sky")
-            self.sky = lusee.sky.ConstSky(self.lmax,lmax=self.lmax,T=2.73, freq=np.arange(1,51)) 
+            self.sky = lusee.sky.ConstSky(self.lmax,lmax=self.lmax,T=2.73, freq=self.freq) 
         elif sky_type == 'Cane1979':
             # make sure if lmax matters here
             print ("Using Cane1979 sky")
-            self.sky = lusee.sky.ConstSkyCane1979(self.lmax, lmax=self.lmax, freq=np.arange(1,51))  
-
+            self.sky = lusee.sky.ConstSkyCane1979(self.lmax, lmax=self.lmax, freq=self.freq)  
+        elif sky_type == 'DarkAges':
+            d = self['sky']
+            scaled = d.get('scaled',True)
+            nu_min = d.get('nu_min',16.4) 
+            nu_rms = d.get('nu_rms',14.0)
+            A      = d.get('A',0.04)
+            
+            print (f"Using Dark Ages Monopoe sky scaled={scaled}, min={nu_min} MHz, rms={nu_rms}MHz,A={A}K")
+            self.sky = lusee.sky.DarkAgesMonopole(self.lmax, lmax=self.lmax, freq = self.freq,
+                                                  nu_min=nu_min, nu_rms=nu_rms, A=A)
+            
     def _parse_beams(self):
         broot = os.path.join(self.root,self['paths']['beam_dir'])
         beams = []
@@ -87,12 +105,8 @@ class SimDriver(dict):
     def run(self):
         print ("Starting simulation :")
         od = self['observation']
-        dt = od['dt']
-        if type(dt)==str:
-            dt = eval(dt)
-        O=lusee.LObservation(od['lunar_day'],deltaT_sec=dt,
+        O=lusee.LObservation(od['lunar_day'],deltaT_sec=self.dt,
                     lun_lat_deg=od['lat'], lun_long_deg = od['long'])
-        freq = np.arange(od['freq']['start'],od['freq']['end'],od['freq']['step'])
         print ("  setting up combinations...")
         combs = od['combinations']
         if type(combs)==str:
@@ -103,7 +117,7 @@ class SimDriver(dict):
                         combs.append((i,j))
     
         print ("  setting up Simulation object...")
-        S = lusee.Simulator (O,self.beams, self.sky, freq=freq, lmax = self.lmax,
+        S = lusee.Simulator (O,self.beams, self.sky, freq = self.freq, lmax = self.lmax,
                              combinations=combs, Tground = od['Tground'],
                              cross_power = self.couplings, beam_smooth = self.beam_smooth,
                              extra_opts = self['simulation'] )

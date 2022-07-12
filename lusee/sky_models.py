@@ -1,7 +1,7 @@
 import fitsio
 import healpy as hp
 import numpy as np
-from .mono_sky_models import T_C
+from .mono_sky_models import T_C, T_DarkAges, T_DarkAges_Scaled
 
 class ConstSky:
     def __init__ (self,Nside, lmax, T, freq=None, zero_cone = True):
@@ -34,7 +34,19 @@ class ConstSkyCane1979(ConstSky):
         self.freq = np.arange(1.0,50.1) if freq is None else freq
         T = T_C(self.freq).value
         ConstSky.__init__(self, Nside, lmax, T, freq)
-    
+
+class DarkAgesMonopole(ConstSky):
+    def __init__(self, Nside, lmax, scaled = True, nu_min = 16.4,
+                     nu_rms = 14.0, A = 0.04, freq=None):
+        self.freq = np.arange(1.0,50.1) if freq is None else freq
+        if scaled:
+            T = T_DarkAges_Scaled(self.freq, nu_min, nu_rms, A)
+        else:
+            T = T_DarkAges(self.freq)
+        ConstSky.__init__(self, Nside, lmax, T, freq)
+
+
+        
 
 class GalCenter (ConstSky):
     def __init__ (self,Nside, lmax, T, freq=None):

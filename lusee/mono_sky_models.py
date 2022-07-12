@@ -915,11 +915,11 @@ def _interp_to_zero():
 
 _DA_nu_cut, _DA_TSig_cut = _interp_to_zero()
 
-def T_DarkAges_Scaled (nu, nu_min = 16.4284, nu_rms = 13.978460392144557, A = 0.040765):
+def T_DarkAges_Scaled (nu, nu_min = 16.4, nu_rms = 14, A = 0.04):
     out = np.zeros_like(nu)
-    nu_resc = nu_min+(nu-16.428)*(13.978460392144557/nu_rms)
+    nu_resc = nu_min+(nu-16.4)*(14/nu_rms)
     out=interp1d(_DA_nu_cut, _DA_TSig_cut, fill_value=0, bounds_error=False)(nu_resc)
-    return out*A/0.040765
+    return out*A/0.04
 
     
     
