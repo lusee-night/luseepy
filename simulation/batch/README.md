@@ -61,14 +61,14 @@ For Condor integration please see the next paragraph.
 
 ## Submitting to HTCondor
 
-The Condor job description is contained the file `runsim_batch.job`. The mandatory parameter `runs` will define
-the size of the Condor cluster (i.e. the number of jobs to be simultaneously created in one batch run). The executable
-referred to in `runsim_batch.job` is `runsim_batch.sh`, which is a simple utility wrapper around `run_batch.py` which
-sets the updated `PYTHONPATH` to ensure the script runs in the batch mode.
+* The Condor job definition is contained the file `runsim_batch.job`.
+* This jobs definition requires a mandatory parameter: `runs`. This parameter defines the size of the Condor cluster (i.e. the number of jobs to be simultaneously created in one batch run)
+* The executable in `runsim_batch.job` is `runsim_batch.sh`
+* `runsim_batch.sh` is a utility wrapper around `run_batch.py` which updates the environment variable `PYTHONPATH` to ensure the script runs in the batch mode.
 
-Every
-job will have the internal `ProcId` identifier which will be used to refer to a specific line in the file `pdr_config.batch`,
-so the `runs` parameter should be less or equal to the number of entries in this file.
+Every HTCondor job has the internal `ProcId` identifier which will be used to refer to a specific line in the file `pdr_config.batch`.
+This is achieved by using `ProcId` as an argument to `runsim_batch.sh`. For this to work properly, the `runs` parameter should be less or
+equal to the number of entries in this file.
 
 ```bash
 condor_submit runs=2 runsim_batch.job
