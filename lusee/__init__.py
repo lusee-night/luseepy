@@ -16,5 +16,6 @@ from .LBeamCouplings import LBeamCouplings
 from .simulation import Simulator
 from . import sky_models as sky 
 from . import mono_sky_models as monosky 
-from .PCA_analyzer import PCA_Analyzer
+from .PCA_analyzer import PCA_Analyzer, Composite_PCA_Analyzer
+
 
