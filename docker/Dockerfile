@@ -8,6 +8,9 @@
 FROM python:3.10.1-bullseye
 
 ARG reqs=requirements.txt
+
+WORKDIR /data
+
 WORKDIR /app
 
 COPY docker/${reqs} requirements.txt

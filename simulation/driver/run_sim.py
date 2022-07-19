@@ -1,19 +1,24 @@
-#!/usr/bin/env python
-import lusee
-import numpy  as np
-import healpy as hp
-import pickle
-import os,sys
-import yaml
-from yaml.loader import SafeLoader
+#!/usr/bin/env python3
+import  lusee
+import  numpy  as np
+import  healpy as hp
+import  pickle
+import  os,sys
+import  yaml
+from    yaml.loader import SafeLoader
 
 class SimDriver(dict):
     def __init__ (self,yaml):
         self.update(yaml)
-        self.lmax = self['observation']['lmax'] ## common lmax
-        self.root = self['paths']['lusee_drive_dir']
-        if self.root[0]=='$':
-            self.root = os.environ[self.root[1:]]
+        self.lmax   = self['observation']['lmax'] ## common lmax
+        self.root   = self['paths']['lusee_drive_dir']
+        self.outdir = self['paths']['output_dir']
+
+        if self.root[0]=='$':       self.root   = os.environ[self.root[1:]]
+        if self.outdir[0]=='$':
+            self.outdir = os.environ[self.outdir[1:]]
+            print(self.outdir)
+
         self._parse_sky()
         self._parse_beams()
         
@@ -109,7 +114,9 @@ class SimDriver(dict):
                              extra_opts = self['simulation'] )
         print ("  Simulating...")
         S.simulate(times=O.times)
-        fname = self['simulation']['output']
+        
+        fname = os.path.join(self.outdir, self['simulation']['output'])
+
         print ("Writing to",fname)
         S.write(fname)
 

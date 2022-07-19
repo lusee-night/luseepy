@@ -34,7 +34,7 @@ image is done like this:
 docker build . -f docker/Dockerfile -t lusee/lusee-night-foundation:0.1 --build-arg reqs=requirements-foundation.txt
 ```
 This image is published on __Docker Hub__:
-* [buddhasystem/lusee-night-foundation:0.1](https://hub.docker.com/repository/docker/lusee/lusee-night-foundation)
+* [lusee/lusee-night-foundation:0.1](https://hub.docker.com/repository/docker/lusee/lusee-night-foundation)
 
 ```Dockerfile-foundation``` is kept for historical reasons and is deprecated.
 
@@ -42,14 +42,14 @@ This image is published on __Docker Hub__:
 
 * Based on "foundation", with added ```ARES``` package.
 * Uses ```Dockerfile-base```.
-* Docker Hub reference: [buddhasystem/lusee-night-base:0.1](https://hub.docker.com/repository/docker/lusee/lusee-night-base)
+* Docker Hub reference: [lusee/lusee-night-base:0.1](https://hub.docker.com/repository/docker/lusee/lusee-night-base)
 
 
 ### The "jupyter" image
 
 * Based on "base", with added ```pyshtools``` and ```jupyterlab``` packages.
 *  Uses ```Dockerfile-jupyter```.
-* Docker Hub reference: [buddhasystem/lusee-night-jupyter:0.1](https://hub.docker.com/repository/docker/lusee/lusee-night-jupyter)
+* Docker Hub reference: [lusee/lusee-night-jupyter:0.1](https://hub.docker.com/repository/docker/lusee/lusee-night-jupyter)
 
 ---
 
