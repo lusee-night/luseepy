@@ -34,8 +34,9 @@ class PCA_Analyzer:
             x = np.arange(len(self.eva))+1
             plot.plot (x, self.eva, label = 'FG + noise')
             plot.plot (x, self.eva0, label = 'FG')
-            plot.plot (x, rottemp_sq)
+            plot.plot (x, rottemp_sq, label = 'signal')
             plot.semilogy()
+            plot.legend()
         return SNR
     
     def get_chi2 (self, template,data, istart=2):
@@ -57,10 +58,13 @@ class Composite_PCA_Analyzer:
     def __init__ (self, alist):
         self.alist = alist
 
-    def SNR(self, template_list, plot=None):
+    def SNR(self, template_list, plot=None, verbose=False):
         SNR2 = 0
         for a,t in zip(self.alist, template_list):
-            SNR2 += (a.SNR(t,plot))**2
+            cSNR = a.SNR(t,plot)
+            if verbose:
+                print (f"sub SNR = {cSNR}")
+            SNR2 += (cSNR)**2
         return np.sqrt(SNR2)
 
     def sim_data(self,template_list):
