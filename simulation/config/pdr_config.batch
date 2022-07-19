@@ -1,0 +1,3 @@
+observation:dt=12*3600 beam_config:couplings:opposite:sign=-1 simulation:output=test0.fits
+observation:dt=14*3600 beam_config:couplings:opposite:sign=-1 simulation:output=test1.fits
+observation:dt=16*3600 beam_config:couplings:opposite:sign=-1 simulation:output=test2.fits

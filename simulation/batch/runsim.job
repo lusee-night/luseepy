@@ -1,0 +1,15 @@
+Universe 	  = vanilla
+
+Executable 	= runsim.sh
+
+getenv = True
+
+notification 	= Never
+Output  	= runsim$(ProcId).out
+Error     = runsim$(ProcId).err
+Log  		  = runsim$(ProcId).log
+  
+Initialdir = $(PWD) 
+
+PeriodicHold = (NumJobStarts>=1 && JobStatus == 1)
+Queue 1

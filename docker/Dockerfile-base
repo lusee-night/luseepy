@@ -8,7 +8,7 @@
 #
 # So we are using "ARG" to define its tag, download and set it up
 
-FROM buddhasystem/lusee-night-foundation:0.1
+FROM lusee/lusee-night-foundation:0.1
 ARG ARES_TAG=0.7
 
 WORKDIR /app
