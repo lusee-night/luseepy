@@ -7,6 +7,8 @@ import numpy as np
 import healpy as hp
 import fitsio
 import sys
+import pickle
+import os
 
 def mean_alm(alm1, alm2, lmax):
     prod = alm1*np.conj(alm2)
@@ -121,11 +123,26 @@ class Simulator:
             times = self.obs.times
         if self.sky_model.frame=="galactic":
             do_rot = True
-            print ("Getting pole transformations...")
-            lzl,bzl = self.obs.get_l_b_from_alt_az(np.pi/2,0., times)
-            print ("Getting horizon transformations...")
-            lyl,byl = self.obs.get_l_b_from_alt_az(0.,0., times)  ## astronomical azimuth = 0 = N = our y coordinate
-
+            cache_fn = self.extra_opts.get("cache_transform")
+            if (cache_fn is not None) and (os.path.isfile(cache_fn)):
+                print (f"Loading cached transform from {cache_fn}...")
+                lzl,bzl,lyl,byl = pickle.load(open(cache_fn,'br'))
+                if (len(lzl)!=len(times)):
+                    print ("Cache file mix-up. Array wrong length!")
+                    stop()
+                have_transform = True
+            else:
+                have_transform = False
+                
+            if not have_transform:
+                print ("Getting pole transformations...")
+                lzl,bzl = self.obs.get_l_b_from_alt_az(np.pi/2,0., times)
+                print ("Getting horizon transformations...")
+                lyl,byl = self.obs.get_l_b_from_alt_az(0.,0., times)  ## astronomical azimuth = 0 = N = our y coordinate
+                if cache_fn is not None:
+                    print (f"Saving transforms to {cache_fn}...")
+                    pickle.dump((lzl,bzl,lyl,byl),open(cache_fn,'bw'))
+            
         elif self.sky_model.frame=="MCMF":
             do_rot = False
         else:

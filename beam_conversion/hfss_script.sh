@@ -12,7 +12,6 @@ export OUTROOT=$LUSEE_DRIVE_DIR/Simulations/BeamModels/LanderFreeSpaceComparison
 
 
 
-
 export ROOT=$LUSEE_DRIVE_DIR/AntennaResponse/SimulationFiles/LuSEELanderRegolithComparison/eight_layer_regolith/ 
 export OUTROOT=$LUSEE_DRIVE_DIR/Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith
 
@@ -21,23 +20,36 @@ export OUTROOT=$LUSEE_DRIVE_DIR/Simulations/BeamModels/LanderRegolithComparison/
 #lpython_dev beam_conversion/hfss.py -g $ROOT/monopole_1m_75deg/hfss_lbl/dipole_Phase0deg/ -o $OUTROOT/hfss_lbl_1m_75deg.2portX.fits
 
 
-for L in 2m 3m
-do
-    for D in 75deg 45deg 15deg
-    do
-	for M in monopole_Phase0deg dipole_Phase180deg
-	do
-	    if [[ "$M" == *"dipole"* ]]; then
-		export E=2port.fits
-	    else
-		export E=fits
-	    fi
-	    lpython_dev beam_conversion/hfss.py -g $ROOT/monopole_$L\_$D/hfss_lbl/$M/ -o $OUTROOT/hfss_lbl_$L\_$D.$E
-	done
-  done
-done
-	 
+# for L in 2p5m
+# do
+#     for D in 75deg 45deg 15deg
+#     do
+# 	for M in monopole_Phase0deg dipole_Phase180deg
+# 	do
+# 	    if [[ "$M" == *"dipole"* ]]; then
+# 		export E=2port.fits
+# 	    else
+# 		export E=fits
+# 	    fi
+# 	    lpython_dev beam_conversion/hfss.py -g $ROOT/monopole_$L\_$D/hfss_lbl/$M/ -o $OUTROOT/hfss_lbl_$L\_$D.$E
+# 	done
+#   done
+# done
 
+
+for H in 2p7mAntennaHeight_1p5mLanderHeight 3p2mAntennaHeight_2p0mLanderHeight_Baseline 3p7mAntennaHeight_2p5mLanderHeight 4p2mAntennaHeight_3p0mLanderHeight 4p7mAntennaHeight_2p0mLanderHeight_2mLanderThickness 4p7mAntennaHeight_3p5mLanderHeight 5p2mAntennaHeight_4p0mLanderHeight 5p7mAntennaHeight_4p5mLanderHeight
+do
+    for M in monopole_Phase0deg dipole_Phase180deg
+    do
+ 	if [[ "$M" == *"dipole"* ]]; then
+		export E=2port.fits
+ 	    else
+		export E=fits
+ 	    fi
+
+	lpython_dev beam_conversion/hfss.py -g $ROOT/monopole_3m_75deg/hfss_lbl/$H/$M/ -o $OUTROOT/hfss_lbl_$H.$E
+    done
+done
 #lpython_dev beam_conversion/hfss.py -g $ROOT/monopole_6m_75deg/hfss_lbl/monopole_Phase0deg/ -o $OUTROOT/hfss_lbl_6m_75deg.fits
 
 #lpython_dev beam_conversion/hfss.py -g $ROOT/monopole_1m_45deg/hfss_lbl/monopole_Phase0deg/ -o $OUTROOT/hfss_lbl_1m_45deg.fits

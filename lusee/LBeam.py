@@ -132,7 +132,8 @@ class LBeam:
             print ("Code might implicitly assume phi wraparound ... use with care.")
         
     def rotate(self,deg):
-        assert (deg in [0,45,-45,90,-90,135,-135,270,-270,180,-180])
+        dphi = self.phi_deg[1]-self.phi_deg[0]
+        assert (deg%dphi<1e-5)
         if self.phi_max != 360:
             print ("This really only works in you have full phi circle with repetition at the end")
             raise NotImplemented
