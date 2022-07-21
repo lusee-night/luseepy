@@ -46,4 +46,3 @@ observation:
 simulation:
   output: sim_example.fits
   cache_transform: lunar_day.pickle  
- 
