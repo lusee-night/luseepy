@@ -23,8 +23,8 @@ print("Where is LPF? ...", end="")
 S = LSatellite()
 OS = ObservedSatellite(L, S)
 (alt, az) = OS.alt_rad(), OS.az_rad()
-assert np.allclose(alt, np.array([0.75436834, 1.28474677, 0.03689239, -0.90291079]))
-assert np.allclose(az, np.array([2.70386501, 6.1162517, 2.53861365, 4.47444415]))
+assert np.allclose(alt, np.array([ 0.2218286,  -0.65821452, -0.90447214,  0.16188729]))
+assert np.allclose(az, np.array([2.52478389, 3.54176988, 3.01239313, 3.81632209]))
 print("   OK")
 
 

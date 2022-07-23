@@ -12,11 +12,11 @@ from lunarsky import MCMF, SkyCoord, LunarTopo
 class LSatellite:
     def __init__(
         self,
-        semi_major_km=5740,
-        eccentricity=0.58,
-        inclination_deg=54.856,
+        semi_major_km=5738,
+        eccentricity=0.56489,
+        inclination_deg=57.097,
         raan_deg=0,
-        argument_of_pericenter_deg=86.322,
+        argument_of_pericenter_deg=72.625,
         aposelene_ref_time=Time("2024-05-01T00:00:00"),
     ):
         ## first period
