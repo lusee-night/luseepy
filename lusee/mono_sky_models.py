@@ -901,3 +901,25 @@ _DA_TSig = np.array([0, -8.5677e-09, -8.51986e-09, -8.58573e-09,
 0.00266097, 0.0026564, 0.00265184, 0.00264729, 0.00264276])
 
 T_DarkAges = interp1d(_DA_nu,_DA_TSig)
+
+
+## Now a scaled and cut dark ages signal
+
+def _interp_to_zero():
+    w = np.where(_DA_nu<50)
+    nu = _DA_nu[w]
+    T = _DA_TSig[w]
+    w2 = np.where(nu>32.5)
+    T[w2] = interp1d([32.5, 33.5, 50],[T_DarkAges(32.5), T_DarkAges(33.5), 0], kind='quadratic')(nu[w2])
+    return nu, T
+
+_DA_nu_cut, _DA_TSig_cut = _interp_to_zero()
+
+def T_DarkAges_Scaled (nu, nu_min = 16.4, nu_rms = 14, A = 0.04):
+    out = np.zeros_like(nu)
+    nu_resc = 16.4+(nu-nu_min)*(14/nu_rms)
+    out=interp1d(_DA_nu_cut, _DA_TSig_cut, fill_value=0, bounds_error=False, kind='linear')(nu_resc)
+    return out*A/0.04
+
+    
+    
