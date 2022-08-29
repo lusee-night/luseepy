@@ -2,7 +2,7 @@ paths:
   lusee_drive_dir: $LUSEE_DRIVE_DIR
   sky_dir: Simulations/SkyModels
   beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
-  output_dir: $LUSEE_OUTPUT_DIR
+  output_dir: output
 
 sky:
   file: ULSA_32_ddi_smooth.fits
