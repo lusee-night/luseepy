@@ -917,8 +917,8 @@ _DA_nu_cut, _DA_TSig_cut = _interp_to_zero()
 
 def T_DarkAges_Scaled (nu, nu_min = 16.4, nu_rms = 14, A = 0.04):
     out = np.zeros_like(nu)
-    nu_resc = nu_min+(nu-16.4)*(14/nu_rms)
-    out=interp1d(_DA_nu_cut, _DA_TSig_cut, fill_value=0, bounds_error=False)(nu_resc)
+    nu_resc = 16.4+(nu-nu_min)*(14/nu_rms)
+    out=interp1d(_DA_nu_cut, _DA_TSig_cut, fill_value=0, bounds_error=False, kind='linear')(nu_resc)
     return out*A/0.04
 
     

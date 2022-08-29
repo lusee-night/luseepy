@@ -46,5 +46,3 @@ simulation:
   output: output/hfss_lbl_3m_pdr.fits
   cache_transform: lunar_day_pdr.pickle  
  
-  
- 

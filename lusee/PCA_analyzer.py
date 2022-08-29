@@ -27,8 +27,12 @@ class PCA_Analyzer:
         self.evax = np.maximum((pdata**2).mean(axis=0),self.eva)
         self.mean_data = mdata.mean(axis=0)
 
-    def SNR (self, template, plot=None):
+    def get_template_power (self,template):
         rottemp_sq = (self.eve.T@(template*self.weight))**2
+        return rottemp_sq
+    
+    def SNR (self, template, plot=None):
+        rottemp_sq = self.get_template_power(template)
         SNR = np.sqrt(np.sum(rottemp_sq/self.eva))
         if plot is not None:
             x = np.arange(len(self.eva))+1
