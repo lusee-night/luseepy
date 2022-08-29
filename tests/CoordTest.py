@@ -24,10 +24,10 @@ S = LSatellite()
 OS = ObservedSatellite(L, S)
 
 (alt, az, dist) = OS.alt_rad(), OS.az_rad(), OS.dist_km()
-print (alt,az,dist)
-assert np.allclose(alt, np.array([ 0.75436834,  1.28474677,  0.03689239, -0.90291079]))
-assert np.allclose(az, np.array([2.70386501, 6.1162517,  2.53861365, 4.47444415]))
-assert np.allclose(dist, np.array([8596.68426879, 3422.57922986, 9066.0932814,  3977.96951592]))
+#print (alt.tolist(),az.tolist(),dist.tolist())
+assert np.allclose(alt, np.array([-0.00543200722105552, -0.8096304884190358, -1.0811007094400147, -0.03304368165418423]))
+assert np.allclose(az, np.array([2.524783887986564, 3.5417698779881284, 3.0123931318205153, 3.8163220915027685]))
+assert np.allclose(dist, np.array([7520.9259030327385, 9110.399367602751, 6110.595777308103, 8850.788020005619]))
 print("   OK")
 
 
