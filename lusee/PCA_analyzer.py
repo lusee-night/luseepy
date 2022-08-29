@@ -81,4 +81,4 @@ class Composite_PCA_Analyzer:
     def get_chi2_table (self, templates, data, istart=2):
         chi2 = [[self.get_chi2(t,data) for t in x] for x in templates]
         return np.array(chi2)
-    
+

@@ -76,7 +76,7 @@ class ObservedSatellite:
         self.observation = observation
         self.satelite = satellite
         self.posxyz = satellite.predict_position_mcmf(observation.times)
-        self.sky_coords = SkyCoord(MCMF(*(self.posxyz.T)))
+        self.sky_coords = SkyCoord(MCMF(*(self.posxyz.T*u.km)))
         self.satpos = self.sky_coords.transform_to(LunarTopo(location=observation.loc))
 
     def alt_rad(self):
