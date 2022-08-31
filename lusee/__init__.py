@@ -18,4 +18,7 @@ from . import sky_models as sky
 from . import mono_sky_models as monosky 
 from .PCA_analyzer import PCA_Analyzer, Composite_PCA_Analyzer
 
+__version__ = '20220831'
+
+
 
