@@ -16,15 +16,19 @@ The Simulator class
 ----------------
 
 The main simulator class
+
 .. autoclass:: lusee.Simulator
 
 
 Beam preparation
+
 .. autofunction:: lusee.Simulator.prepare_beams
 
 The "simulate" method
+
 .. autofunction:: lusee.Simulator.simulate
 
 Writing out data
+
 .. autofunction:: lusee.Simulator.write
 
