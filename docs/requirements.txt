@@ -4,3 +4,4 @@ astropy-healpix
 lunarsky
 scipy
 fitsio
+matplotlib
