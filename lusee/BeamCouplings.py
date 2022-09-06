@@ -7,7 +7,7 @@ from .Beam import Beam
 import numpy as np
 
 
-class LBeamCouplings:
+class BeamCouplings:
 
     def __init__(self, beams = [], from_yaml_dict = None):
         self.beamd = {}
@@ -22,7 +22,7 @@ class LBeamCouplings:
         self.cross_powers = {}
         for n,sd in d.items():
             print (f"Initializing copupling '{n}'...")
-            two_port_beam = LBeam(sd['two_port'])
+            two_port_beam = Beam(sd['two_port'])
             sign = sd['sign']
             combs = sd['combinations']
             b1, b2 = combs[0]

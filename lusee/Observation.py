@@ -21,7 +21,7 @@ from    datetime        import timedelta
 
 from    .LunarCalendar  import LunarCalendar
 
-class LObservation:
+class Observation:
     def __init__(
         self,
         lunar_day       =   2500,
@@ -86,10 +86,11 @@ class LObservation:
         ).astype(Time)
 
     def get_track_solar(self, objid):
-        """ get a track in alt,az coordinates for an object in the solar system
-            on the self.times time stamps.
-            objid can be 'sun', 'moon' (as debug, should be alt=-90),
-            or plantes id (jupyter, etc)
+        """
+        get a track in alt,az coordinates for an object in the solar system
+        on the self.times time stamps.
+        objid can be 'sun', 'moon' (as debug, should be alt=-90),
+        or plantes id (jupyter, etc)
         """
 #        cache_key = f"track_solar_{objid}"
 #        if cache_key in self.cache:

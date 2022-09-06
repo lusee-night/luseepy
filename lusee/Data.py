@@ -1,11 +1,11 @@
-import numpy           as np
+import  numpy           as np
 import  astropy.constants  as const
-import fitsio          
-from .observation import LObservation
+import  fitsio          
+from    .Observation import Observation
 from .LunarCalendar  import LunarCalendar
 
 
-class LData(LObservation):
+class Data(Observation):
     def __init__(self, filename, noise_e = 2, Cfront = 35, R4 = 1e6 ):
         """
            noise_e is amplifier noise in nV/rtHz

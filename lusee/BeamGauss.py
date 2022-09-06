@@ -15,7 +15,7 @@ def gauss_beam(theta,phi,sigma, theta_c,phi_c=0.):
 
 class BeamGauss(Beam):
     """
-    Gaussian LBeam object, centered at the given declination (and phi=360-azimuth=0) and of width sigma. 
+    Gaussian Beam object, centered at the given declination (and phi=360-azimuth=0) and of width sigma. 
     """
     def __init__ (self, dec_deg, sigma_deg, phi_deg=90, one_over_freq_scaling=False, id = None):
         """

@@ -1,8 +1,9 @@
-
-from .observation import LObservation
-from .Beam import Beam
-from .LBeamCouplings import LBeamCouplings
 from scipy.ndimage import gaussian_filter
+
+from .Observation import Observation
+from .Beam import Beam
+from .BeamCouplings import BeamCouplings
+
 import numpy as np
 import healpy as hp
 import fitsio
@@ -47,7 +48,7 @@ class Simulator:
         self.taper = taper
         self.Tground = Tground
         self.extra_opts = extra_opts
-        self.cross_power = cross_power if (cross_power is not None) else LBeamCouplings()
+        self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
         self.beam_smooth = beam_smooth
         if freq is None:
             self.freq = beams[0].freq
