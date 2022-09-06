@@ -6,3 +6,4 @@ scipy
 fitsio
 matplotlib
 healpy
+pyshtools
