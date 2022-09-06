@@ -3,3 +3,4 @@ astropy
 astropy-healpix
 lunarsky
 scipy
+fitsio
