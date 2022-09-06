@@ -193,17 +193,23 @@ class Simulator:
         return self.result
             
     def write(self, out_file):
+        """
+        Write out the data.
+        :param out_file: name of the output file
+        :type out_file: str
+
+        """        
         if self.result is None:
             print ("Nothing to write")
             raise RunTimeError
         fits = fitsio.FITS(out_file,'rw',clobber=True)
         header = {
-            "version" : 0.1,
-            "lunar_day"  : self.obs.lunar_day,
-            "lun_lat_deg"   : self.obs.lun_lat_deg,
-            "lun_long_deg"   : self.obs.lun_long_deg,
-            "lun_height_m"  : self.obs.lun_height_m,
-            "deltaT_sec" : self.obs.deltaT_sec
+            "version":      0.1,
+            "lunar_day":    self.obs.lunar_day,
+            "lun_lat_deg":  self.obs.lun_lat_deg,
+            "lun_long_deg": self.obs.lun_long_deg,
+            "lun_height_m": self.obs.lun_height_m,
+            "deltaT_sec":   self.obs.deltaT_sec
         }
         fits.write(self.result, header=header, extname='data')
         fits.write(self.freq, extname='freq')

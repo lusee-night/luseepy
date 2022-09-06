@@ -28,8 +28,3 @@ The "simulate" method
 Writing out data
 .. autofunction:: lusee.Simulator.write
 
-
-Misc
-----
-
-Expandability.
