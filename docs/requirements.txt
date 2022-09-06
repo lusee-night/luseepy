@@ -5,3 +5,4 @@ lunarsky
 scipy
 fitsio
 matplotlib
+healpy
