@@ -12,14 +12,17 @@ To use luseepy, go to the GitHub repo
 
    (.venv) $ # commands here
 
-Getting packages
+The Simulator class
 ----------------
 
-To retrieve a list of random ingredients,
-you can use the ``lusee.get_packages()`` function:
+The main simulator class
 
 .. autoclass:: lusee.Simulator
 
+
+The "simulate" method
+
+.. autofunction:: lusee.Simulator.simulate
 
 
 

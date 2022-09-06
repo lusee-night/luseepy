@@ -132,7 +132,7 @@ class Simulator:
                                 
     def simulate (self,times=None):
         """
-        Simulation
+        Main simulation loop.
         """
         if times is None:
             times = self.obs.times
