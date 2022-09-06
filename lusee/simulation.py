@@ -32,6 +32,9 @@ def eul2rot(theta) :
 
 
 class Simulator:
+    """
+    Simulator class
+    """
 
     def __init__ (self, obs, beams, sky_model, 
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], lmax = 128,
@@ -119,6 +122,9 @@ class Simulator:
             
                                 
     def simulate (self,times=None):
+        """
+        Simulation
+        """
         if times is None:
             times = self.obs.times
         if self.sky_model.frame=="galactic":
