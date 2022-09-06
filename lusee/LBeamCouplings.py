@@ -3,7 +3,7 @@
 #
 # Ability to calculate beams couplings based on 1 and 2 ports beams
 #
-from .LBeam import LBeam
+from .Beam import Beam
 import numpy as np
 
 

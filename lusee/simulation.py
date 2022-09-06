@@ -1,6 +1,6 @@
 
 from .observation import LObservation
-from .LBeam import LBeam
+from .Beam import Beam
 from .LBeamCouplings import LBeamCouplings
 from scipy.ndimage import gaussian_filter
 import numpy as np

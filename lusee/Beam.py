@@ -90,7 +90,7 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
     return Etheta, Ephi
 
 
-class LBeam:
+class Beam:
     def __init__ (self, fname, id = None):
         if not (os.path.isfile (fname) and os.access(fname, os.R_OK)):
             print (f"Cannot open {fname}")

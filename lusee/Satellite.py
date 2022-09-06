@@ -1,15 +1,16 @@
 # class for dealing with orbiting relay / calibrator satelite
-from lunarsky.time import Time
-from astropy.time import TimeDelta
-import numpy as np
-from scipy.interpolate import interp1d
-import astropy.constants as ac
-import astropy.units as u
-from scipy.spatial.transform import Rotation as R
-from lunarsky import MCMF, SkyCoord, LunarTopo
+import  numpy as np
+
+from    lunarsky.time       import Time
+from    astropy.time        import TimeDelta
+from    scipy.interpolate   import interp1d
+import  astropy.constants   as ac
+import  astropy.units       as u
+from    scipy.spatial.transform import Rotation as R
+from    lunarsky            import MCMF, SkyCoord, LunarTopo
 
 
-class LSatellite:
+class Satellite:
     def __init__(
         self,
         semi_major_km=5738,

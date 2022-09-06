@@ -7,11 +7,11 @@
 # gracefully e.g. optionally cleaned up, has db name capability etc.
 
 #from . import lunar_calendar as calendar
-from .observation import LObservation
-from .data import LData
-from .lunar_satellite import LSatellite, ObservedSatellite
-from .LBeam import LBeam, grid2healpix, grid2healpix_alm_fast
-from .LBeam_Gauss import LBeam_Gauss
+from .observation   import LObservation
+from .data          import LData
+from .Satellite     import Satellite, ObservedSatellite
+from .Beam          import Beam, grid2healpix, grid2healpix_alm_fast
+from .BeamGauss     import BeamGauss
 from .LBeamCouplings import LBeamCouplings
 from .simulation import Simulator
 from . import sky_models as sky 

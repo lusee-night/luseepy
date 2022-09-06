@@ -1,4 +1,4 @@
-from .LBeam import LBeam
+from .Beam import Beam
 import numpy as np
 
 def gauss_beam(theta,phi,sigma, theta_c,phi_c=0.):
@@ -13,7 +13,7 @@ def gauss_beam(theta,phi,sigma, theta_c,phi_c=0.):
     return norm*np.exp(- (theta-theta_c)**2/(2*sigma**2)) * np.exp(- (phiprime)**2/(2*(sigma/np.cos(theta))**2))
     
 
-class LBeam_Gauss(LBeam):
+class BeamGauss(Beam):
     """
     Gaussian LBeam object, centered at the given declination (and phi=360-azimuth=0) and of width sigma. 
     """
