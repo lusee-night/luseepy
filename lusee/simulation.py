@@ -80,6 +80,15 @@ class Simulator:
 
 
     def prepare_beams(self,beams, combinations):
+        """
+        Beam Preparation
+
+        
+        :param combinations: Indices for beams
+        :type combinations: tuple
+
+        """
+        
         self.beams = beams
         self.efbeams = []
         thetas = beams[0].theta

@@ -23,7 +23,6 @@ you can use the ``lusee.get_packages()`` function:
 
 
 
-
 Misc
 ----
 
