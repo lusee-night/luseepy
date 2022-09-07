@@ -15,7 +15,7 @@ from .BeamCouplings import BeamCouplings
 from .Simulation    import Simulator
 from . import SkyModels     as sky 
 from . import MonoSkyModels as monosky 
-from .PCA_analyzer import PCA_Analyzer, Composite_PCA_Analyzer
+from .PCAanalyzer import PCAanalyzer, CompositePCAanalyzer
 
 __version__ = '20220831'
 

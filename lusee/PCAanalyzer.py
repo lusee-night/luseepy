@@ -2,7 +2,7 @@ import numpy as np
 import scipy.linalg as la
 
 
-class PCA_Analyzer:
+class PCAanalyzer:
 
     def __init__ (self, data, noise, weight = None):
         self.Nfreq = data.shape[1]
@@ -58,7 +58,7 @@ class PCA_Analyzer:
 
 
 
-class Composite_PCA_Analyzer:
+class CompositePCAanalyzer:
     def __init__ (self, alist):
         self.alist = alist
 

@@ -11,14 +11,17 @@ from    lunarsky            import MCMF, SkyCoord, LunarTopo
 
 
 class Satellite:
-    def __init__(
-        self,
-        semi_major_km=5738,
-        eccentricity=0.56489,
-        inclination_deg=57.097,
-        raan_deg=0,
-        argument_of_pericenter_deg=72.625,
-        aposelene_ref_time=Time("2024-05-01T00:00:00"),
+    """
+    A class to calculate satellite parameters and position
+    """
+    ### ------------
+    def __init__(self,
+        semi_major_km               =5738,
+        eccentricity                =0.56489,
+        inclination_deg             =57.097,
+        raan_deg                    =0,
+        argument_of_pericenter_deg  =72.625,
+        aposelene_ref_time          =Time("2024-05-01T00:00:00"),
     ):
         ## first period
         M_moon = 7.34767309e22 * u.kg
@@ -46,11 +49,14 @@ class Satellite:
         self.periperp_norm = r.apply(np.array([0.0, 1.0, 0.0]))
         self.t0 = aposelene_ref_time
 
+    ### ------------
     def predict_position_mcmf(self, times):
         ## neeed to do this like this
         dt = np.array([float((t - self.t0) / TimeDelta(1 * u.d)) for t in times])
-        mean_anomaly = 2 * np.pi * ((dt / self.period) % 1.0)
-        phi_moon = -2 * np.pi * ((dt / self.moon_sidereal_period) % 1.0)
+
+        mean_anomaly    = 2 * np.pi * ((dt / self.period) % 1.0)
+        phi_moon        =-2 * np.pi * ((dt / self.moon_sidereal_period) % 1.0)
+
         E = self.M2E(mean_anomaly)
         r = self.semi_major * (1 - self.e * np.cos(E))
 
@@ -72,7 +78,11 @@ class Satellite:
         return pos
 
 
+##############################################
 class ObservedSatellite:
+    """
+    Satellite observables
+    """    
     def __init__(self, observation, satellite):
         self.observation = observation
         self.satelite = satellite
@@ -107,6 +117,7 @@ class ObservedSatellite:
                 tostate = not tostate
         return passes
 
+    ### ------------
     def plot_tracks(self, ax):
         transits = self.get_transit_indices()
         az = self.az_rad()

@@ -12,8 +12,8 @@ To use luseepy, go to the GitHub repo
 
    (.venv) $ # commands here
 
-The Simulator class
-----------------
+The Simulator
+--------------
 
 The main simulator class
 
@@ -32,3 +32,9 @@ Writing out data
 
 .. autofunction:: lusee.Simulator.write
 
+The Satellite classes
+---------------------
+
+.. autoclass:: lusee.Satellite
+
+.. autoclass:: lusee.ObservedSatellite
