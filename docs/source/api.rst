@@ -5,4 +5,6 @@ API for lusee
    :toctree: generated
 
    lusee.Simulation
-
+   lusee.Satellite
+   lusee.ObservedSatellite
+   
