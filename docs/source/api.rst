@@ -4,5 +4,5 @@ API for lusee
 .. autosummary::
    :toctree: generated
 
-   lusee.simulation
-   
+   lusee.Simulation
+
