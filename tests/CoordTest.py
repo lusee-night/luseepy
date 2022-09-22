@@ -15,7 +15,6 @@ print("   OK")
 
 print("Where is Crab? ...", end="")
 (alt, az) = L.get_track_ra_dec(ra="05h34m31.94s", dec="+22d00m52.2s")
-<<<<<<< HEAD
 assert np.allclose(alt, np.array([-0.20558058508392482, 0.5453246924579669, -0.8712342373563664, 1.1075629720529663]))
 assert np.allclose(az, np.array([1.658400973508976, 4.989332762046785, 2.1139005746252524, 5.818167146594609]))
 print("   OK")
