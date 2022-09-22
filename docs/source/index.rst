@@ -1,7 +1,7 @@
 Welcome to luseepy documentation!
 =====================================
 
-**luseepy** is the term for software used in the **LuSEE at Night** experiment.
+**luseepy** is the main python library fo the **LuSEE-Night** experiment.
 
 .. note::
 
