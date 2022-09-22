@@ -25,8 +25,8 @@ class LObservation:
     def __init__(
         self,
         lunar_day       =   2500,
-        lun_lat_deg     =   -10.0,
-        lun_long_deg    =   180.0,
+        lun_lat_deg     =   -23.814,
+        lun_long_deg    =   182.258,
         lun_height_m    =   0,
         deltaT_sec      =   15*60,
     ):
