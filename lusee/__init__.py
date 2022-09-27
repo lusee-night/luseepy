@@ -16,6 +16,7 @@ from .Simulation    import Simulator
 from . import SkyModels     as sky 
 from . import MonoSkyModels as monosky 
 from .PCAanalyzer import PCAanalyzer, CompositePCAanalyzer
+from .Throughput import Throughput
 
 __version__ = '20220831'
 

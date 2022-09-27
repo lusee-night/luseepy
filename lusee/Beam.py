@@ -91,7 +91,9 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
 
 
 class Beam:
-    def __init__ (self, fname, id = None):
+    def __init__ (self, fname = None, id = None):
+        if fname is None:
+            fname = base = os.environ['LUSEE_DRIVE_DIR']+"Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
         if not (os.path.isfile (fname) and os.access(fname, os.R_OK)):
             print (f"Cannot open {fname}")
             stop()
