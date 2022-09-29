@@ -36,10 +36,25 @@ class Throughput:
         self.Cfront = Cfront
         self._calc_conversion_factors()
 
+
+    def AntennaImpedanceInterp(self,f):
+        #extrapolates antenna impedance
+        out = np.zeros_like(f,complex)
+        bfreq = self.beam.freq
+        fmin = bfreq[0]
+        out[f>=fmin] = interp1d(bfreq, self.beam.Z,fill_value="extrapolate")(f[f>=fmin])
+        alpha = (np.log(-np.imag(self.beam.Z[1]))-np.log(-np.imag(self.beam.Z[0]))) / (np.log(bfreq[1])-np.log(bfreq[0]))
+        print (alpha)
+        Ai = -np.imag(self.beam.Z[0])*(f[f<fmin]/fmin)**alpha
+        out [f<fmin] = -Ai*1j
+        return out
+        
+
+        
     def Gamma_VD(self,freq):
         omega = 2*np.pi*freq*1e6
         Zrec  = 1/(1j*omega*(self.Cfront*1e-12) + 1/self.R4)
-        ZAnt = interp1d(self.beam.freq, self.beam.Z,fill_value="extrapolate")(freq)
+        ZAnt = self.AntennaImpedanceInterp(freq)
         Gamma_VD = np.abs(Zrec)/np.abs((ZAnt+Zrec)) ##2 as per t
         return Gamma_VD
     
