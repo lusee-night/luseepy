@@ -1,4 +1,4 @@
-numpy==1.22.2
+pyshtools
 astropy
 astropy-healpix
 lunarsky
@@ -6,4 +6,4 @@ scipy
 fitsio
 matplotlib
 healpy
-pyshtools
+
