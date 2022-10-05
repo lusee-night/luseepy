@@ -12,6 +12,8 @@ To use luseepy, go to the GitHub repo
 
    (.venv) $ # commands here
 
+As an alternative, there are Docker images in development (TBD).
+
 The Simulator
 --------------
 
