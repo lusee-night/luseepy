@@ -7,7 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.abspath('../..'))
 
-import lusee
+# import lusee
 
 # -- Project information
 
