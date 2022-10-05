@@ -18,14 +18,10 @@ version = '0.1.0'
 
 
 # Mock imports, because it fails to build in readthedocs
-# MOCK_MODULES = ["astropy",
-#                 "astropy.time",
-#                 "astropy.units",
-#                 "astropy.coordinates","astropy.coordinates.builtin_frames",
-#                 "pyshtools"]
+MOCK_MODULES = ["pyshtools",]
 
-# for mod_name in MOCK_MODULES:
-#     sys.modules[mod_name] = mock.Mock()
+for mod_name in MOCK_MODULES:
+    sys.modules[mod_name] = mock.Mock()
 
 import lusee
 
