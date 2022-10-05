@@ -1,5 +1,5 @@
 numpy
-pyshtools
+#pyshtools
 astropy
 astropy-healpix
 lunarsky
