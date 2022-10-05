@@ -18,7 +18,12 @@ version = '0.1.0'
 
 
 # Mock imports, because it fails to build in readthedocs
-MOCK_MODULES = ["astropy", "astropy.time", "astropy.units", "pyshtools"]
+MOCK_MODULES = ["astropy",
+                "astropy.time",
+                "astropy.units",
+                "astropy.coordinates",
+                "pyshtools"]
+                
 for mod_name in MOCK_MODULES:
     sys.modules[mod_name] = mock.Mock()
 
