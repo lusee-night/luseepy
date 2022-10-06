@@ -36,6 +36,9 @@ class ConstSkyCane1979(ConstSky):
         ConstSky.__init__(self, Nside, lmax, T, freq)
 
 class DarkAgesMonopole(ConstSky):
+    """
+    Dark Ages Monopole.
+    """
     def __init__(self, Nside, lmax, scaled = True, nu_min = 16.4,
                      nu_rms = 14.0, A = 0.04, freq=None):
         self.freq = np.arange(1.0,50.1) if freq is None else freq
@@ -85,6 +88,10 @@ class FitsSky:
         self.frame  = "galactic"
 
     def get_alm (self, ndx, freq):
+        """
+        :param ndx: index
+        :type ndx: int
+        """
         assert (np.all(self.freq[ndx]==freq))
         return self.mapalm[ndx]
 

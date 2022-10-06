@@ -41,7 +41,15 @@ The Satellite classes
 
 .. autoclass:: lusee.ObservedSatellite
 
-The 'Fit Sky' classes
+The Sky Models classes
 ---------------------
 
+.. autoclass:: lusee.GalCenter
+
 .. autoclass:: lusee.FitsSky
+
+
+'Map alm'
+
+.. autofunction:: lusee.FitsSky.get_alm
+
