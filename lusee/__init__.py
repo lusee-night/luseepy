@@ -13,7 +13,13 @@ from .Beam          import Beam, grid2healpix, grid2healpix_alm_fast
 from .BeamGauss     import BeamGauss
 from .BeamCouplings import BeamCouplings
 from .Simulation    import Simulator
-from . import SkyModels     as sky 
+
+from .SkyModels     import FitsSky
+from .SkyModels     import GalCenter
+
+from . import SkyModels     as sky
+
+
 from . import MonoSkyModels as monosky 
 from .PCAanalyzer import PCAanalyzer, CompositePCAanalyzer
 
