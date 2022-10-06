@@ -44,9 +44,9 @@ The Satellite classes
 The Sky Models classes
 ----------------------
 
-.. autoclass:: lusee.Skymodels.GalCenter
+.. autoclass:: lusee.GalCenter
 
-.. autoclass:: lusee.Skymodels.FitsSky
+.. autoclass:: lusee.FitsSky
 
 
 'Map alm'
