@@ -136,7 +136,7 @@ class Simulator:
         Main simulation loop.
 
         :param times: array of times
-        :type combinations: list
+        :type times: list
 
         """
         if times is None:
@@ -200,6 +200,7 @@ class Simulator:
     def write(self, out_file):
         """
         Write out the data.
+        
         :param out_file: name of the output file
         :type out_file: str
 

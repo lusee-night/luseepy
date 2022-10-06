@@ -89,6 +89,8 @@ class FitsSky:
 
     def get_alm (self, ndx, freq):
         """
+        Returns a map.
+
         :param ndx: index
         :type ndx: int
         """
