@@ -42,11 +42,11 @@ The Satellite classes
 .. autoclass:: lusee.ObservedSatellite
 
 The Sky Models classes
----------------------
+----------------------
 
-.. autoclass:: lusee.GalCenter
+.. autoclass:: lusee.Skymodels.GalCenter
 
-.. autoclass:: lusee.FitsSky
+.. autoclass:: lusee.Skymodels.FitsSky
 
 
 'Map alm'
