@@ -119,6 +119,9 @@ class ObservedSatellite:
 
     ### ------------
     def plot_tracks(self, ax):
+        """
+        A utility for plot trajectories.
+        """
         transits = self.get_transit_indices()
         az = self.az_rad()
         alt = self.alt_rad()

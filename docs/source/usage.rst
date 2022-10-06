@@ -40,3 +40,8 @@ The Satellite classes
 .. autoclass:: lusee.Satellite
 
 .. autoclass:: lusee.ObservedSatellite
+
+The 'Fit Sky' classes
+---------------------
+
+.. autoclass:: lusee.FitsSky

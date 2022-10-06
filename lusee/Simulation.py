@@ -134,6 +134,10 @@ class Simulator:
     def simulate (self,times=None):
         """
         Main simulation loop.
+
+        :param times: array of times
+        :type combinations: list
+
         """
         if times is None:
             times = self.obs.times

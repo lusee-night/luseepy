@@ -49,6 +49,9 @@ class DarkAgesMonopole(ConstSky):
         
 
 class GalCenter (ConstSky):
+    """
+    The Galaxy Center class.
+    """
     def __init__ (self,Nside, lmax, T, freq=None):
         self.Nside = Nside
         self.Npix = Nside**2 * 12
@@ -63,18 +66,23 @@ class GalCenter (ConstSky):
     
 
 class FitsSky:
+    """
+    The 'Fit Sky' class
+    """
     def __init__ (self, fname, lmax):
-        header = fitsio.read_header(fname)
-        fits = fitsio.FITS(fname,'r')
-        maps  = fits[0].read()
-        self.maps = maps
-        fstart = header['freq_start']
-        fend = header['freq_end']
-        fstep = header['freq_step']
-        self.freq = np.arange(fstart, fend+1e-3*fstep, fstep)
+        header      = fitsio.read_header(fname)
+        fits        = fitsio.FITS(fname,'r')
+        maps        = fits[0].read()
+        self.maps   = maps
+        fstart      = header['freq_start']
+        fend        = header['freq_end']
+        fstep       = header['freq_step']
+        self.freq   = np.arange(fstart, fend+1e-3*fstep, fstep)
+
         assert (len(self.freq) == maps.shape[0])
+
         self.mapalm = np.array([hp.map2alm(m,lmax = lmax) for m in maps])
-        self.frame = "galactic"
+        self.frame  = "galactic"
 
     def get_alm (self, ndx, freq):
         assert (np.all(self.freq[ndx]==freq))
