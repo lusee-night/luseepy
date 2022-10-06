@@ -93,6 +93,10 @@ class FitsSky:
 
         :param ndx: index
         :type ndx: int
+
+        :returns: The map
+        :rtype: array
+
         """
         assert (np.all(self.freq[ndx]==freq))
         return self.mapalm[ndx]
