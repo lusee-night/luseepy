@@ -3,9 +3,9 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath('../..'))
+from unittest import mock
 
-import lusee
+sys.path.insert(0, os.path.abspath('../..'))
 
 # -- Project information
 
@@ -16,8 +16,16 @@ author = 'M.Potekhin'
 release = '0.1'
 version = '0.1.0'
 
-# -- General configuration
 
+# Mock imports, because it fails to build in readthedocs
+MOCK_MODULES = ["pyshtools","pyshtools.legendre"]
+
+for mod_name in MOCK_MODULES:
+    sys.modules[mod_name] = mock.Mock()
+
+import lusee
+
+# -- General configuration
 extensions = [
     'sphinx.ext.duration',
     'sphinx.ext.doctest',

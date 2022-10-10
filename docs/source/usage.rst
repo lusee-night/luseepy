@@ -12,6 +12,8 @@ To use luseepy, go to the GitHub repo
 
    (.venv) $ # commands here
 
+As an alternative, there are Docker images in development (TBD).
+
 The Simulator
 --------------
 
@@ -38,3 +40,16 @@ The Satellite classes
 .. autoclass:: lusee.Satellite
 
 .. autoclass:: lusee.ObservedSatellite
+
+The Sky Models classes
+----------------------
+
+.. autoclass:: lusee.GalCenter
+
+.. autoclass:: lusee.FitsSky
+
+
+'Map alm'
+
+.. autofunction:: lusee.FitsSky.get_alm
+
