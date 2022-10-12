@@ -100,6 +100,14 @@ class ObservedSatellite:
         return np.array(self.satpos.distance / u.km).astype(float)
 
     def get_transit_indices(self):
+        """
+        Returns an array of transit indices.
+
+        :returns: Transit Indices
+        :rtype: array
+
+        """
+
         visible = self.alt_rad() > 0
         passes = []
         if visible[0]:

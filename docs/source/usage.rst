@@ -41,6 +41,8 @@ The Satellite classes
 
 .. autoclass:: lusee.ObservedSatellite
 
+.. autofunction:: lusee.ObservedSatellite.get_transit_indices   
+
 The Sky Models classes
 ----------------------
 
