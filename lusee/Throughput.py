@@ -44,7 +44,6 @@ class Throughput:
         fmin = bfreq[0]
         out[f>=fmin] = interp1d(bfreq, self.beam.Z,fill_value="extrapolate")(f[f>=fmin])
         alpha = (np.log(-np.imag(self.beam.Z[1]))-np.log(-np.imag(self.beam.Z[0]))) / (np.log(bfreq[1])-np.log(bfreq[0]))
-        print (alpha)
         Ai = -np.imag(self.beam.Z[0])*(f[f<fmin]/fmin)**alpha
         out [f<fmin] = -Ai*1j
         return out
@@ -65,5 +64,15 @@ class Throughput:
         ZAnt = interp1d(self.beam.freq, self.beam.Z,fill_value="extrapolate")(freq)
         T2Vsq = 4*kB*np.real(ZAnt)*self.Gamma_VD(freq)**2
         return T2Vsq
-    
+
+
+    def SG2V(self,freq):
+        kB = const.k_B.value
+        c = const.c.value
+        ## 1 / i w C , 1e6 = MHz, 1e-12 is pico (farad)
+        ZAnt = interp1d(self.beam.freq, self.beam.Z,fill_value="extrapolate")(freq)
+        lamb = c/(freq*1e6)
+        T2Vsq = 4*lamb*np.real(ZAnt)*self.Gamma_VD(freq)**2
+        return T2Vsq
+
         

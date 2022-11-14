@@ -118,14 +118,18 @@ class ObservedSatellite:
         return passes
 
     ### ------------
-    def plot_tracks(self, ax):
+    def plot_tracks(self, ax, lin_map = False):
         """
         A utility for plot trajectories.
         """
         transits = self.get_transit_indices()
         az = self.az_rad()
         alt = self.alt_rad()
-        X = np.sin(az) * np.cos(alt)
-        Y = np.cos(az) * np.cos(alt)
+        if lin_map:
+            X = np.sin(az) * (1-alt/(np.pi/2))
+            Y = np.cos(az) * (1-alt/(np.pi/2))
+        else:
+            X = np.sin(az) * np.cos(alt)
+            Y = np.cos(az) * np.cos(alt)
         for s, e in transits:
             ax.plot(X[s:e], Y[s:e])
