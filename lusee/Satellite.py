@@ -133,3 +133,17 @@ class ObservedSatellite:
             Y = np.cos(az) * np.cos(alt)
         for s, e in transits:
             ax.plot(X[s:e], Y[s:e])
+
+    def get_track_coverage(self, Nphi=10, Nmu=10):
+        transits = self.get_transit_indices()
+        altbin = (np.sin(self.alt_rad())*Nmu).astype(int)
+        azbin = (self.az_rad()/(2*np.pi)*Nphi).astype(int)
+        
+        m = np.zeros((Nmu,Nphi))
+        for s,e in transits:
+            #print (azbin[s:e].min(), azbin[s:e].max(), altbin[s:e].min(), altbin[s:e].max(), self.alt_rad()[s:e].min(), self.alt_rad()[s:e].max())
+            m[altbin[s:e],azbin[s:e]] = 1
+
+        return m
+    
+    

@@ -1,9 +1,9 @@
 *
-!*.py
-!*.ipynb
-!*.md 
-!*.yaml
-!*.sh 
-!*.batch
-!*.yml 
+!lusee/*.py
+!notebooks/*.ipynb
+!**.md 
+!**.yaml
+!**.sh 
+!**.batch
+!.github/* 
 !docker/*
