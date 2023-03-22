@@ -2,7 +2,7 @@ import numpy as np
 import os
 from scipy.interpolate import interp1d
 import  astropy.constants  as const
-
+from .Beam import Beam
 
 class Throughput:
 
@@ -11,9 +11,8 @@ class Throughput:
         self.Cfront = 35
         self.R4 = R4
         self._load_spice_sims()
-        if B is not None:
-            self.beam = B
-
+        self.beam = B if B is not None else Beam()
+        
     def _load_spice_sims(self):
         path = os.path.join(os.environ['LUSEE_DRIVE_DIR'],'Simulations/ElectronicsModel/Model54')
         f,n = np.loadtxt(os.path.join(path,'spectrometer_54-noise.dat')).T
@@ -34,7 +33,7 @@ class Throughput:
     
     def setCfront(self,Cfront):
         self.Cfront = Cfront
-        self._calc_conversion_factors()
+        #self._calc_conversion_factors()
 
 
     def AntennaImpedanceInterp(self,f):
@@ -57,7 +56,7 @@ class Throughput:
         Gamma_VD = np.abs(Zrec)/np.abs((ZAnt+Zrec)) ##2 as per t
         return Gamma_VD
     
-    def T2V(self,freq):
+    def T2Vsq(self,freq):
         kB = const.k_B.value
         c = const.c.value
         ## 1 / i w C , 1e6 = MHz, 1e-12 is pico (farad)
