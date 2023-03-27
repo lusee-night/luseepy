@@ -2,10 +2,10 @@ import  numpy           as np
 import  fitsio          
 from    .Observation import Observation
 from .LunarCalendar  import LunarCalendar
-
+from .Throughput import Throughput
 
 class Data(Observation):
-    def __init__(self, filename):
+    def __init__(self, filename, throughput=None):
         """
            noise_e is amplifier noise in nV/rtHz
            Cfront is front-end capacticance in pico-farads
@@ -52,7 +52,8 @@ class Data(Observation):
         self.Nfreq = len(self.freq)
         self.Ntimes = len(self.times)
         self.NComb = len(self.comb2ndx)
-        self._calc_conversion_factors()
+        self.T = Throughput() if throughput is None else throughput
+        self.T2Vsq = self.T.T2Vsq(self.freq)
                          
 
     def __getitem__(self, req):
