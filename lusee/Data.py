@@ -1,19 +1,15 @@
 import  numpy           as np
-import  astropy.constants  as const
 import  fitsio          
 from    .Observation import Observation
 from .LunarCalendar  import LunarCalendar
-
+from .Throughput import Throughput
 
 class Data(Observation):
-    def __init__(self, filename, noise_e = 2, Cfront = 35, R4 = 1e6 ):
+    def __init__(self, filename, throughput=None):
         """
            noise_e is amplifier noise in nV/rtHz
            Cfront is front-end capacticance in pico-farads
         """
-        self.noise_e = noise_e
-        self.Cfront = 35
-        self.R4 = R4
         header = dict(fitsio.read_header(filename))
         version = header['VERSION']
         lunar_day    = header['LUNAR_DAY']
@@ -56,7 +52,9 @@ class Data(Observation):
         self.Nfreq = len(self.freq)
         self.Ntimes = len(self.times)
         self.NComb = len(self.comb2ndx)
-        self._calc_conversion_factors()
+        self.T = Throughput() if throughput is None else throughput
+        self.T2Vsq = self.T.T2Vsq(self.freq)
+        #self._calc_conversion_factors()
                          
 
     def __getitem__(self, req):
@@ -107,24 +105,6 @@ class Data(Observation):
         # Should not get here.
         raise NotImplemented
 
-    def setCfront(self,Cfront):
-        self.Cfront = Cfront
-        self._calc_conversion_factors()
-        
-    def _calc_conversion_factors(self):
-        kB = const.k_B.value
-        c = const.c.value
-        ## 1 / i w C , 1e6 = MHz, 1e-12 is pico (farad)
-        omega = 2*np.pi*self.freq*1e6
-        
-        Zrec  = 1/(1j*omega*(self.Cfront*1e-12) + 1/self.R4)
-        self.Gamma_VD = []
-        self.T2Vsq = []
-        for ZRe,ZIm in zip(self.ZRe,self.ZIm):
-            Zant = ZRe+1j*ZIm
-            Gamma_VD = np.abs(Zrec)/np.abs((Zant+Zrec)) ##2 as per t
-            self.Gamma_VD.append(Gamma_VD)
-            self.T2Vsq.append(4*kB*ZRe*Gamma_VD**2)
 
             
             

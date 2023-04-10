@@ -2,6 +2,8 @@ import numpy as np
 import astropy.units as u
 import astropy.constants as const
 from scipy.interpolate import interp1d
+from scipy.io import readsav
+import os
 
 def B_NB(f):
     ''' return sky brightness (W/m**2/Hz/sr) at frequency f (MHz) 
@@ -41,7 +43,6 @@ def T_J(f):
     return T
 
 
-
 def T2B(T, f):
     ''' return brightness temperature in W/m*2/Hz/sr from T in K and f in MHz) '''
     B = 2 * const.k_B * T*u.K * (f * u.MHz)**2 / (const.c)**2
@@ -56,6 +57,7 @@ def B2T(B, f):
 def B2V(B, f, leff, gamma):
     ''' return V^2/Hz for dipole of effective length leff [m] and preamp coupling efficiency gamma c.f. Zaslavsky (11) '''
     return 4*np.pi / 3. * 377 * B * (leff*gamma)**2
+
 
 # below are interpolants for dark ages, scroll to the end
 _DA_nu = np.array([0.0, 0.473642, 0.474109, 0.474577, 0.475045,
@@ -920,6 +922,15 @@ def T_DarkAges_Scaled (nu, nu_min = 16.4, nu_rms = 14, A = 0.04):
     nu_resc = 16.4+(nu-nu_min)*(14/nu_rms)
     out=interp1d(_DA_nu_cut, _DA_TSig_cut, fill_value=0, bounds_error=False, kind='linear')(nu_resc)
     return out*A/0.04
+
+
+class BalePlasmaEffects:
+    def __init__(self, fname = 'R1_L300cm_n500t2k6v0nf300.sav'):
+        d = readsav(os.path.join(os.environ['LUSEE_DRIVE_DIR'],'Simulations/SkyModels/PlasmaEffects',fname))
+        self._interp = interp1d(d['f_sp']/1e6,d['v2'])
+        
+    def __call__ (self, freq_MHz):
+        return self._interp(freq_MHz)
 
     
     
