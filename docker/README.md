@@ -1,18 +1,25 @@
 # Docker setup for LuSEE-Night
 
-## Docker Hub residency
+## About
+
+This is work in progress. After substantial work completed in the `refspec` project,
+there is an effort to create a number of unified images containing expanded
+functionality, covering both `refspec` and `luseepy`.
 
 Images are kept on __Docker Hub__ in repositories belongning to the _lusee_ identity.
 
 ## Basic OS and the Python version
 
-This folder helps create and manage Python-based images for the **lusee-night**
-CI and other containerized applications. The initial choice of the Python version
-is ```3.10.1```, and the base image is derived from __Debian bullseye__:
-```python:3.10.1-bullseye```.
+This folder helps create and manage Python-based images for the **luseepy**
+package CI and other containerized applications. **NEW**: instead of being
+based directly on `python:3.10.1-bullseye` (Debian), these images will use
+the ones created within the `refspec` project.
 
-Building the images is done from the folder one level above the ```docker``` folder,
-and so dockerfiles need to be specified with the ```-f``` option.
+The "lowest denominator" base (python:3.10.1-bullseye) remains the same, but
+there is the added `refspec` library and its Python bindings through the `cppyy` package.
+
+Building the images is done from the folder one level above the `docker` folder,
+and so dockerfiles need to be specified with the `-f` option.
 
 
 ## Images
