@@ -1,0 +1,27 @@
+##### USED PRIMARILY TO BUILD THE "UNITY FOUNDATION" IMAGE
+#
+# 
+# Note a copy of the "astropy cache"
+
+FROM lusee/lusee-night-refspec-cppyy:0.1
+
+ARG reqs=requirements-foundation.txt
+
+WORKDIR /data
+
+WORKDIR /app
+
+COPY docker/${reqs} requirements.txt
+RUN pip install -r requirements.txt
+
+RUN rm requirements.txt
+
+COPY lusee lusee
+COPY tests tests
+
+ADD .astropy /root/.astropy
+
+ENV PYTHON_PATH=/app
+ENV LUSEE_DRIVE_DIR=/data
+
+CMD ["python"]
