@@ -49,8 +49,6 @@ Among others, the following environment variables are set up by
 the `setup_env.sh` script:
  * `LUSEEPY_PATH` -- path to the luseepy checkout
  * `LUSEE_IMAGE` -- docker image that has everything to run lusee
-
-Additionally you might want to set up:
  *  `LUSEE_DRIVE_DIR` -- path to the checkout of the LuSEE-Night Google Drive
 
 
