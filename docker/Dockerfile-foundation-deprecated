@@ -1,0 +1,33 @@
+
+####################### ATTENTION ##################
+#
+####################### DEPRECATED #####################
+####################### DEPRECATED #####################
+####################### DEPRECATED #####################
+
+
+
+
+# Superceded by "Dockerfile" with an extra argument
+#
+
+#FROM python:3.10.1-bullseye
+
+#WORKDIR /app
+
+## Apparently required by "fitsio" on some platforms
+#RUN apt-get install libbz2-dev
+
+## We may have a few versions of requirements,
+## hence a few custom names, to simplify experiments
+
+#COPY docker/requirements_fresh.txt requirements.txt
+#RUN pip install -r requirements.txt
+
+#RUN rm requirements.txt
+
+#ADD .astropy /root/.astropy
+
+#WORKDIR /user
+
+

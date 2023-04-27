@@ -1,8 +1,9 @@
-
-from .observation import LObservation
-from .LBeam import LBeam
-from .LBeamCouplings import LBeamCouplings
 from scipy.ndimage import gaussian_filter
+
+from .Observation import Observation
+from .Beam import Beam
+from .BeamCouplings import BeamCouplings
+
 import numpy as np
 import healpy as hp
 import fitsio
@@ -32,6 +33,9 @@ def eul2rot(theta) :
 
 
 class Simulator:
+    """
+    Simulator class
+    """
 
     def __init__ (self, obs, beams, sky_model, 
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], lmax = 128,
@@ -44,7 +48,7 @@ class Simulator:
         self.taper = taper
         self.Tground = Tground
         self.extra_opts = extra_opts
-        self.cross_power = cross_power if (cross_power is not None) else LBeamCouplings()
+        self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
         self.beam_smooth = beam_smooth
         if freq is None:
             self.freq = beams[0].freq
@@ -77,6 +81,15 @@ class Simulator:
 
 
     def prepare_beams(self,beams, combinations):
+        """
+        Beam Preparation
+
+        
+        :param combinations: Indices for beams
+        :type combinations: tuple
+
+        """
+        
         self.beams = beams
         self.efbeams = []
         thetas = beams[0].theta
@@ -119,6 +132,13 @@ class Simulator:
             
                                 
     def simulate (self,times=None):
+        """
+        Main simulation loop.
+
+        :param times: array of times
+        :type times: list
+
+        """
         if times is None:
             times = self.obs.times
         if self.sky_model.frame=="galactic":
@@ -178,17 +198,24 @@ class Simulator:
         return self.result
             
     def write(self, out_file):
+        """
+        Write out the data.
+        
+        :param out_file: name of the output file
+        :type out_file: str
+
+        """        
         if self.result is None:
             print ("Nothing to write")
             raise RunTimeError
         fits = fitsio.FITS(out_file,'rw',clobber=True)
         header = {
-            "version" : 0.1,
-            "lunar_day"  : self.obs.lunar_day,
-            "lun_lat_deg"   : self.obs.lun_lat_deg,
-            "lun_long_deg"   : self.obs.lun_long_deg,
-            "lun_height_m"  : self.obs.lun_height_m,
-            "deltaT_sec" : self.obs.deltaT_sec
+            "version":      0.1,
+            "lunar_day":    self.obs.lunar_day,
+            "lun_lat_deg":  self.obs.lun_lat_deg,
+            "lun_long_deg": self.obs.lun_long_deg,
+            "lun_height_m": self.obs.lun_height_m,
+            "deltaT_sec":   self.obs.deltaT_sec
         }
         fits.write(self.result, header=header, extname='data')
         fits.write(self.freq, extname='freq')

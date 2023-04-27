@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+
 import  lusee
 import  numpy  as np
 import  healpy as hp
@@ -7,6 +8,7 @@ import  os,sys
 import  yaml
 from    yaml.loader import SafeLoader
 
+#######################
 class SimDriver(dict):
     def __init__ (self,yaml):
         self.update(yaml)
@@ -51,7 +53,7 @@ class SimDriver(dict):
             nu_rms = d.get('nu_rms',14.0)
             A      = d.get('A',0.04)
             
-            print (f"Using Dark Ages Monopoe sky scaled={scaled}, min={nu_min} MHz, rms={nu_rms}MHz,A={A}K")
+            print (f"Using Dark Ages Monopole sky scaled={scaled}, min={nu_min} MHz, rms={nu_rms}MHz,A={A}K")
             self.sky = lusee.sky.DarkAgesMonopole(self.lmax, lmax=self.lmax, freq = self.freq,
                                                   nu_min=nu_min, nu_rms=nu_rms, A=A)
             
@@ -69,7 +71,7 @@ class SimDriver(dict):
             for b in self['observation']['beams']:
                 cbeam=bd[b]
                 print ("Creating gaussian beam",b,":")
-                B = lusee.LBeam_Gauss(dec_deg=cbeam['declination'],
+                B = lusee.BeamGauss(dec_deg=cbeam['declination'],
                                       sigma_deg=cbeam['sigma'],
                                       one_over_freq_scaling=cbeam['one_over_freq_scaling'], id = b)
                 angle = bdc['common_beam_angle']+cbeam['angle']
@@ -88,7 +90,9 @@ class SimDriver(dict):
                         print ("Neither default not special file declare for beam",b)
                 fname = os.path.join(broot,filename)
                 print ("  loading file: ",fname)
-                B = lusee.LBeam (fname, id = b)
+
+                B = lusee.Beam(fname, id = b)
+
                 angle = bdc['common_beam_angle']+cbeam.get('angle',0)
                 print ("  rotating: ",angle)
                 B=B.rotate(angle)
@@ -102,14 +106,14 @@ class SimDriver(dict):
         if couplings is not None:
             for c in couplings:
                 couplings[c]['two_port'] = os.path.join(broot,couplings[c]['two_port'])
-            self.couplings=lusee.LBeamCouplings(beams, from_yaml_dict = couplings)
+            self.couplings=lusee.BeamCouplings(beams, from_yaml_dict = couplings)
         else:
             self.couplings = None
 
     def run(self):
         print ("Starting simulation :")
         od = self['observation']
-        O=lusee.LObservation(od['lunar_day'],deltaT_sec=self.dt,
+        O=lusee.Observation(od['lunar_day'],deltaT_sec=self.dt,
                     lun_lat_deg=od['lat'], lun_long_deg = od['long'])
         print ("  setting up combinations...")
         combs = od['combinations']

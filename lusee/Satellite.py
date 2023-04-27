@@ -1,23 +1,27 @@
 # class for dealing with orbiting relay / calibrator satelite
-from lunarsky.time import Time
-from astropy.time import TimeDelta
-import numpy as np
-from scipy.interpolate import interp1d
-import astropy.constants as ac
-import astropy.units as u
-from scipy.spatial.transform import Rotation as R
-from lunarsky import MCMF, SkyCoord, LunarTopo
+import  numpy as np
+
+from    lunarsky.time       import Time
+from    astropy.time        import TimeDelta
+from    scipy.interpolate   import interp1d
+import  astropy.constants   as ac
+import  astropy.units       as u
+from    scipy.spatial.transform import Rotation as R
+from    lunarsky            import MCMF, SkyCoord, LunarTopo
 
 
-class LSatellite:
-    def __init__(
-        self,
-        semi_major_km=5738,
-        eccentricity=0.56489,
-        inclination_deg=57.097,
-        raan_deg=0,
-        argument_of_pericenter_deg=72.625,
-        aposelene_ref_time=Time("2024-05-01T00:00:00"),
+class Satellite:
+    """
+    A class to calculate satellite parameters and position
+    """
+    ### ------------
+    def __init__(self,
+        semi_major_km               =5738,
+        eccentricity                =0.56489,
+        inclination_deg             =57.097,
+        raan_deg                    =0,
+        argument_of_pericenter_deg  =72.625,
+        aposelene_ref_time          =Time("2024-05-01T00:00:00"),
     ):
         ## first period
         M_moon = 7.34767309e22 * u.kg
@@ -45,11 +49,14 @@ class LSatellite:
         self.periperp_norm = r.apply(np.array([0.0, 1.0, 0.0]))
         self.t0 = aposelene_ref_time
 
+    ### ------------
     def predict_position_mcmf(self, times):
         ## neeed to do this like this
         dt = np.array([float((t - self.t0) / TimeDelta(1 * u.d)) for t in times])
-        mean_anomaly = 2 * np.pi * ((dt / self.period) % 1.0)
-        phi_moon = -2 * np.pi * ((dt / self.moon_sidereal_period) % 1.0)
+
+        mean_anomaly    = 2 * np.pi * ((dt / self.period) % 1.0)
+        phi_moon        =-2 * np.pi * ((dt / self.moon_sidereal_period) % 1.0)
+
         E = self.M2E(mean_anomaly)
         r = self.semi_major * (1 - self.e * np.cos(E))
 
@@ -71,7 +78,11 @@ class LSatellite:
         return pos
 
 
+##############################################
 class ObservedSatellite:
+    """
+    Satellite observables
+    """    
     def __init__(self, observation, satellite):
         self.observation = observation
         self.satelite = satellite
@@ -89,6 +100,14 @@ class ObservedSatellite:
         return np.array(self.satpos.distance / u.km).astype(float)
 
     def get_transit_indices(self):
+        """
+        Returns an array of transit indices.
+
+        :returns: Transit Indices
+        :rtype: array
+
+        """
+
         visible = self.alt_rad() > 0
         passes = []
         if visible[0]:
@@ -106,11 +125,33 @@ class ObservedSatellite:
                 tostate = not tostate
         return passes
 
-    def plot_tracks(self, ax):
+    ### ------------
+    def plot_tracks(self, ax, lin_map = False):
+        """
+        A utility for plot trajectories.
+        """
         transits = self.get_transit_indices()
         az = self.az_rad()
         alt = self.alt_rad()
-        X = np.sin(az) * np.cos(alt)
-        Y = np.cos(az) * np.cos(alt)
+        if lin_map:
+            X = np.sin(az) * (1-alt/(np.pi/2))
+            Y = np.cos(az) * (1-alt/(np.pi/2))
+        else:
+            X = np.sin(az) * np.cos(alt)
+            Y = np.cos(az) * np.cos(alt)
         for s, e in transits:
             ax.plot(X[s:e], Y[s:e])
+
+    def get_track_coverage(self, Nphi=10, Nmu=10):
+        transits = self.get_transit_indices()
+        altbin = (np.sin(self.alt_rad())*Nmu).astype(int)
+        azbin = (self.az_rad()/(2*np.pi)*Nphi).astype(int)
+        
+        m = np.zeros((Nmu,Nphi))
+        for s,e in transits:
+            #print (azbin[s:e].min(), azbin[s:e].max(), altbin[s:e].min(), altbin[s:e].max(), self.alt_rad()[s:e].min(), self.alt_rad()[s:e].max())
+            m[altbin[s:e],azbin[s:e]] = 1
+
+        return m
+    
+    

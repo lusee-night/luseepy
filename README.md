@@ -45,14 +45,13 @@ and then connect to the address given in the terminal output.
 
 ## Environment variables
 
-The following environment variables are set up by the `setup_env.sh` script:
-
+Among others, the following environment variables are set up by
+the `setup_env.sh` script:
  * `LUSEEPY_PATH` -- path to the luseepy checkout
  * `LUSEE_IMAGE` -- docker image that has everything to run lusee
-
-Additionally, some scripts require prefabricated data and you may need to set up its location:
-
  *  `LUSEE_DRIVE_DIR` -- path to the checkout of the LuSEE-Night Google Drive
+
+
 
 
 ## Tests and Singularity

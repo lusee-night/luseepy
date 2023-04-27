@@ -1,7 +1,7 @@
 import fitsio
 import healpy as hp
 import numpy as np
-from .mono_sky_models import T_C, T_DarkAges, T_DarkAges_Scaled
+from .MonoSkyModels import T_C, T_DarkAges, T_DarkAges_Scaled
 
 class ConstSky:
     def __init__ (self,Nside, lmax, T, freq=None, zero_cone = True):
@@ -36,6 +36,9 @@ class ConstSkyCane1979(ConstSky):
         ConstSky.__init__(self, Nside, lmax, T, freq)
 
 class DarkAgesMonopole(ConstSky):
+    """
+    Dark Ages Monopole.
+    """
     def __init__(self, Nside, lmax, scaled = True, nu_min = 16.4,
                      nu_rms = 14.0, A = 0.04, freq=None):
         self.freq = np.arange(1.0,50.1) if freq is None else freq
@@ -49,6 +52,9 @@ class DarkAgesMonopole(ConstSky):
         
 
 class GalCenter (ConstSky):
+    """
+    The Galaxy Center class.
+    """
     def __init__ (self,Nside, lmax, T, freq=None):
         self.Nside = Nside
         self.Npix = Nside**2 * 12
@@ -63,20 +69,35 @@ class GalCenter (ConstSky):
     
 
 class FitsSky:
+    """
+    The 'Fit Sky' class
+    """
     def __init__ (self, fname, lmax):
-        header = fitsio.read_header(fname)
-        fits = fitsio.FITS(fname,'r')
-        maps  = fits[0].read()
-        self.maps = maps
-        fstart = header['freq_start']
-        fend = header['freq_end']
-        fstep = header['freq_step']
-        self.freq = np.arange(fstart, fend+1e-3*fstep, fstep)
+        header      = fitsio.read_header(fname)
+        fits        = fitsio.FITS(fname,'r')
+        maps        = fits[0].read()
+        self.maps   = maps
+        fstart      = header['freq_start']
+        fend        = header['freq_end']
+        fstep       = header['freq_step']
+        self.freq   = np.arange(fstart, fend+1e-3*fstep, fstep)
+
         assert (len(self.freq) == maps.shape[0])
+
         self.mapalm = np.array([hp.map2alm(m,lmax = lmax) for m in maps])
-        self.frame = "galactic"
+        self.frame  = "galactic"
 
     def get_alm (self, ndx, freq):
+        """
+        Returns a map.
+
+        :param ndx: index
+        :type ndx: int
+
+        :returns: The map
+        :rtype: array
+
+        """
         assert (np.all(self.freq[ndx]==freq))
         return self.mapalm[ndx]
 

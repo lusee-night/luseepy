@@ -1,6 +1,11 @@
 #
 # Global cache object
 #
+
+# ============= DEPRECATED ======================
+# ============= DO NOT USE ======================
+
+
 import shelve
 import atexit
 
