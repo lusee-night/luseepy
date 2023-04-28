@@ -3,10 +3,15 @@
 
 ## About
 A set of python utilities for performing various LuSEE Night related calculations.
+_Caveat_: as of April 2023, this software is undergoing various changes, and documentation
+is being fixed. Pardon the dust.
+
+## Cached Data
+
+There are datasets stored on the LuSEE-Night [Google Drive](https://drive.google.com/drive/folders/0AM52i9DVjqkAUk9PVA){:target="_blank"}.
 
 ## Docker
-We build images for "vanilla" luseepy and also for Jupyter notebooks, based on same.
-See [here](Docker/README.md).
+For details, see the [README](docker/README.md) file in the `docker` folder.
 
 ## Developing
 
@@ -45,18 +50,18 @@ and then connect to the address given in the terminal output.
 
 ## Environment variables
 
-Among others, the following environment variables are set up by
-the `setup_env.sh` script:
+Among others, the following environment variables are set up by the `setup_env.sh` script:
+
  * `LUSEEPY_PATH` -- path to the luseepy checkout
  * `LUSEE_IMAGE` -- docker image that has everything to run lusee
- *  `LUSEE_DRIVE_DIR` -- path to the checkout of the LuSEE-Night Google Drive
-
-
+ * `LUSEE_DRIVE_DIR` -- path to the checkout of the LuSEE-Night Google Drive
 
 
 ## Tests and Singularity
 
-The ```tests``` folder contains CI-related and other testing scripts. Here's an example of a simple test run with Singularity, on a SDCC/BNL node, from the ```luseepy``` folder:
+The `tests` folder contains CI-related and other testing scripts. Here's an example
+of a simple test run with Singularity, on a SDCC/BNL node, from the `luseepy` folder:
+
 ```bash
 singularity exec -B /direct/phenix+u/mxmp/projects/luseepy --env PYTHONPATH=/direct/phenix+u/mxmp/projects/luseepy docker://lusee/lusee-night-foundation:0.1 ./tests/LunarCalendarTest.py
 ```
