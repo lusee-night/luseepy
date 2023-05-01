@@ -12,7 +12,23 @@ from    lunarsky            import MCMF, SkyCoord, LunarTopo
 
 class Satellite:
     """
-    A class to calculate satellite parameters and position
+    A class to calculate satellite parameters and position. Default values for moon.
+    
+    :param semi_major_km: Semi-major axis of body in km.
+    :type semi_major_km: Float
+    :param eccentricity: Eccentricity of orbit.
+    :type eccentricity: Float
+    :param inclination_deg: Inclination of orbit.
+    :type inclination_deg: Float
+    :param raan_deg: Right-ascension angle in degrees.
+    :type raan_deg: Float
+    :param argument_of_pericenter_deg: Argument of pericenter of orbit in degrees.
+    :type argument_of_pericenter_deg: Float
+    :param aposelene_ref_time: Aposelene Reference Time.
+    :type aposelene_ref_time: :py:func:'lunarsky.time()' object
+  
+    :return: Position of satellite body.
+    :rtype: Float
     """
     ### ------------
     def __init__(self,
