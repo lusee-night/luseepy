@@ -39,9 +39,21 @@ The Satellite classes
 
 .. autoclass:: lusee.Satellite
 
+.. autofunction:: lusee.Satellite.predict_position_mcmf
+
 .. autoclass:: lusee.ObservedSatellite
 
-.. autofunction:: lusee.ObservedSatellite.get_transit_indices   
+.. autofunction:: lusee.ObservedSatellite.alt_rad
+
+.. autofunction:: lusee.ObservedSatellite.az_rad
+
+.. autofunction:: lusee.ObservedSatellite.dist_km
+
+.. autofunction:: lusee.ObservedSatellite.get_transit_indices
+
+.. autofunction:: lusee.ObservedSatellite.plot_tracks
+
+.. autofunction:: lusee.ObservedSatellite.get_track_coverage   
 
 The Sky Models classes
 ----------------------
