@@ -90,7 +90,7 @@ class Observation:
         get a track in alt,az coordinates for an object in the solar system
         on the self.times time stamps.
         objid can be 'sun', 'moon' (as debug, should be alt=-90),
-        or plantes id (jupyter, etc)
+        or plantes id (jupiter, etc)
         """
 #        cache_key = f"track_solar_{objid}"
 #        if cache_key in self.cache:

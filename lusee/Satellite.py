@@ -12,23 +12,20 @@ from    lunarsky            import MCMF, SkyCoord, LunarTopo
 
 class Satellite:
     """
-    A class to calculate satellite parameters and position. Default values for moon.
+    Class that calculates satellite parameters and position
     
-    :param semi_major_km: Semi-major axis of body in km.
-    :type semi_major_km: Float
-    :param eccentricity: Eccentricity of orbit.
-    :type eccentricity: Float
-    :param inclination_deg: Inclination of orbit.
-    :type inclination_deg: Float
-    :param raan_deg: Right-ascension angle in degrees.
-    :type raan_deg: Float
-    :param argument_of_pericenter_deg: Argument of pericenter of orbit in degrees.
-    :type argument_of_pericenter_deg: Float
-    :param aposelene_ref_time: Aposelene Reference Time.
-    :type aposelene_ref_time: :py:func:'lunarsky.time()' object
-  
-    :return: Position of satellite body.
-    :rtype: Float
+    :param semi_major_km: Semi-major axis of body in km
+    :type semi_major_km: float
+    :param eccentricity: Eccentricity of orbit
+    :type eccentricity: float
+    :param inclination_deg: Inclination of orbit
+    :type inclination_deg: float
+    :param raan_deg: Right-ascension angle in degrees
+    :type raan_deg: float
+    :param argument_of_pericenter_deg: Argument of pericenter of orbit in degrees
+    :type argument_of_pericenter_deg: float
+    :param aposelene_ref_time: Aposelene Reference Time
+    :type aposelene_ref_time: lunarsky.time
     """
     ### ------------
     def __init__(self,
@@ -67,6 +64,16 @@ class Satellite:
 
     ### ------------
     def predict_position_mcmf(self, times):
+        """    
+        Function that returns an array of satellite positions for input times
+        
+        :param times: Array of lunarsky.time times at which to evaluate satellite position
+        :type times: array[lunarsky.time]
+        
+        :return: Position of satellite body
+        :rtype: Numpy array
+        """
+        
         ## neeed to do this like this
         dt = np.array([float((t - self.t0) / TimeDelta(1 * u.d)) for t in times])
 
@@ -97,7 +104,13 @@ class Satellite:
 ##############################################
 class ObservedSatellite:
     """
-    Satellite observables
+    Class that calculates satellite observables
+    
+    :param observation: luseepy.observation class
+    :type observation: class
+    :param satellite: luseepy.satellite class
+    :type satellite: class
+    
     """    
     def __init__(self, observation, satellite):
         self.observation = observation
@@ -107,17 +120,36 @@ class ObservedSatellite:
         self.satpos = self.sky_coords.transform_to(LunarTopo(location=observation.loc))
 
     def alt_rad(self):
+        """
+        Function that returns satellite altitude in radians
+        
+        :returns: satellite altitude
+        :rtype: numpy array
+        """
         return np.array(self.satpos.alt).astype(float) / 180.0 * np.pi
 
     def az_rad(self):
+        """
+        Function that returns satellite azimuth in radians
+        
+        :returns: satellite azimuth
+        :rtype: numpy array
+        """
+        
         return np.array(self.satpos.az).astype(float) / 180.0 * np.pi
 
     def dist_km(self):
+        """
+        Function that returns distance to satellite in km
+        
+        :returns: satellite distance
+        :rtype: numpy array
+        """
         return np.array(self.satpos.distance / u.km).astype(float)
 
     def get_transit_indices(self):
         """
-        Returns an array of transit indices.
+        Function that returns an array of transit indices for satellite and observation times specified in ObservedSatellite class
 
         :returns: Transit Indices
         :rtype: array
@@ -144,7 +176,11 @@ class ObservedSatellite:
     ### ------------
     def plot_tracks(self, ax, lin_map = False):
         """
-        A utility for plot trajectories.
+        Function that plots satellite trajectories
+        
+        :param ax: Plot axis object
+        :param lin_map: Use linear approximation for small altitudes? 
+        :type lin_map: boolean
         """
         transits = self.get_transit_indices()
         az = self.az_rad()
@@ -159,6 +195,18 @@ class ObservedSatellite:
             ax.plot(X[s:e], Y[s:e])
 
     def get_track_coverage(self, Nphi=10, Nmu=10):
+        """
+        Function that returns array of alt-az bins showing where satellite transit passed. Bins are 1 if satellite passed through bin, 0 if not.
+        
+        :param Nphi: Number of az bins
+        :type Nphi: int
+        :param Nmu: Number of alt bins
+        :type Nmu: int
+        
+        :returns: Binned satellite transits
+        :rtype: numpy array
+        
+        """
         transits = self.get_transit_indices()
         altbin = (np.sin(self.alt_rad())*Nmu).astype(int)
         azbin = (self.az_rad()/(2*np.pi)*Nphi).astype(int)
