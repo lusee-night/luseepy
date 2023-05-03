@@ -19,11 +19,11 @@ The Simulator
 
 Utility functions
 
-.. autofunction:: mean_alm
+.. autofunction:: simulation.mean_alm
 
-.. autofunction:: rot2eul
+.. autofunction:: simulation.rot2eul
 
-.. autofunction:: eul2rot
+.. autofunction:: simulation.eul2rot
 
 The main simulation class
 
