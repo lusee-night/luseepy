@@ -12,7 +12,7 @@ from    lunarsky            import MCMF, SkyCoord, LunarTopo
 
 class Satellite:
     """
-    Class that calculates satellite parameters and position
+    Class that defines satellite parameters and position
     
     :param semi_major_km: Semi-major axis of body in km
     :type semi_major_km: float
@@ -106,9 +106,9 @@ class ObservedSatellite:
     """
     Class that calculates satellite observables
     
-    :param observation: luseepy.observation class
+    :param observation: Observation parameters, from lusee.observation class
     :type observation: class
-    :param satellite: luseepy.satellite class
+    :param satellite: Satellite parameters, from lusee.satellite class
     :type satellite: class
     
     """    
@@ -123,7 +123,7 @@ class ObservedSatellite:
         """
         Function that returns satellite altitude in radians
         
-        :returns: satellite altitude
+        :returns: Satellite altitude
         :rtype: numpy array
         """
         return np.array(self.satpos.alt).astype(float) / 180.0 * np.pi
@@ -132,7 +132,7 @@ class ObservedSatellite:
         """
         Function that returns satellite azimuth in radians
         
-        :returns: satellite azimuth
+        :returns: Satellite azimuth
         :rtype: numpy array
         """
         
@@ -142,7 +142,7 @@ class ObservedSatellite:
         """
         Function that returns distance to satellite in km
         
-        :returns: satellite distance
+        :returns: Satellite distance
         :rtype: numpy array
         """
         return np.array(self.satpos.distance / u.km).astype(float)

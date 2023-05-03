@@ -17,10 +17,17 @@ As an alternative, there are Docker images in development (TBD).
 The Simulator
 --------------
 
-The main simulator class
+Utility functions
+
+.. autofunction:: lusee.mean_alm
+
+.. autofunction:: lusee.rot2eul
+
+.. autofunction:: lusee.eul2rot
+
+The main simulation class
 
 .. autoclass:: lusee.Simulator
-
 
 Beam preparation
 

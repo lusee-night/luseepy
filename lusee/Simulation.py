@@ -12,18 +12,54 @@ import pickle
 import os
 
 def mean_alm(alm1, alm2, lmax):
+    """
+    Function that calculates the mean of the product of two a_lm arrrays
+    
+    :param alm1: First a_lm array
+    :type alm1: array
+    :param alm2: Second a_lm array
+    :type alm1: array
+    :param lmax: Maximum l value of beams
+    :type lmax: int
+    
+    :returns: Average alm
+    :rtype: float
+    
+    """
+    
     prod = alm1*np.conj(alm2)
     sm = (np.real(prod[:lmax+1]).sum()+2*np.real(prod[lmax+1:]).sum())/(4*np.pi)
     return sm
 
 def rot2eul(R):
+    """
+    Function that converts from rotation matrix to Euler angles
+    
+    :param R: Rotation matrix
+    :type R: array
+    
+    :returns: Euler angles
+    :rtype: numpy array
+    
+    """
+    
     beta = -np.arcsin(R[2,0])
     alpha = np.arctan2(R[2,1]/np.cos(beta),R[2,2]/np.cos(beta))
     gamma = np.arctan2(R[1,0]/np.cos(beta),R[0,0]/np.cos(beta))
     return np.array((alpha, beta, gamma))
 
 def eul2rot(theta) :
-
+    """
+    Function that converts from Euler angles to rotation matrix
+    
+    :param theta: Euler angles
+    :type theta: array
+    
+    :returns: Rotation matrix
+    :rtype: numpy array
+    
+    """
+    
     R = np.array([[np.cos(theta[1])*np.cos(theta[2]),       np.sin(theta[0])*np.sin(theta[1])*np.cos(theta[2]) - np.sin(theta[2])*np.cos(theta[0]),      np.sin(theta[1])*np.cos(theta[0])*np.cos(theta[2]) + np.sin(theta[0])*np.sin(theta[2])],
                   [np.sin(theta[2])*np.cos(theta[1]),       np.sin(theta[0])*np.sin(theta[1])*np.sin(theta[2]) + np.cos(theta[0])*np.cos(theta[2]),      np.sin(theta[1])*np.sin(theta[2])*np.cos(theta[0]) - np.sin(theta[0])*np.cos(theta[2])],
                   [-np.sin(theta[1]),                        np.sin(theta[0])*np.cos(theta[1]),                                                           np.cos(theta[0])*np.cos(theta[1])]])
@@ -35,6 +71,30 @@ def eul2rot(theta) :
 class Simulator:
     """
     Simulator class
+    
+    :param obs: Observation parameters, from lusee.observation class
+    :type obs: class
+    :param beams: Instrument beams, from lusee.beam class
+    :type beams: class
+    :param sky_model: Simulated model of the sky, from lusee.skymodels
+    :type sky_model: class
+    :param combinations: Indices for beam combinations/cross correlations to simulate
+    :type combinations: list[tuple]
+    :param lmax: Maximum l value of beams
+    :type lmax: int
+    :param taper: Instrument beam taper
+    :type taper: float
+    :param Tground: Temperature of lunar ground
+    :type Tground: float
+    :param freq: Frequencies at which instrument observes sky. If empty, taken from lusee.beam class.
+    :type freq: list[float]
+    :param cross_power: Cross power for beam combinations. If empty, taken from lusee.beamcouplings.
+    :type cross_power: list[float]
+    :param beam_smooth: Standard deviation of Gaussian filter for beam smoothing
+    :type beam_smooth: float
+    :param extra_opt: Any extra options to pass to simulation. Currently includes "dump_beams" (saves instrument beams to file) and "cache_transform" (loads beam transformations from file).
+    :type extra_opt: list[str]
+    
     """
 
     def __init__ (self, obs, beams, sky_model, 
@@ -82,11 +142,12 @@ class Simulator:
 
     def prepare_beams(self,beams, combinations):
         """
-        Beam Preparation
+        Function that prepares beams for simulator
 
-        
-        :param combinations: Indices for beams
-        :type combinations: tuple
+        :param beams: Instrument beams, from lusee.beam object
+        :type beams: class
+        :param combinations: Indices for beam combinations/cross correlations to simulate
+        :type combinations: list[tuple]
 
         """
         
@@ -133,10 +194,13 @@ class Simulator:
                                 
     def simulate (self,times=None):
         """
-        Main simulation loop.
+        Main simulation function. Produces mock observation of sky model from self.sky_model with beams from self.beams
 
-        :param times: array of times
+        :param times: List of times, defaults to lusee.observation.times if empty 
         :type times: list
+        
+        :returns: Waterfall style observation data for input times and self.freq
+        :rtype: numpy array
 
         """
         if times is None:
@@ -199,9 +263,9 @@ class Simulator:
             
     def write(self, out_file):
         """
-        Write out the data.
+        Function that writes out instrument beam patterns from self.beams to fits file
         
-        :param out_file: name of the output file
+        :param out_file: Name of the output file
         :type out_file: str
 
         """        
