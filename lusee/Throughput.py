@@ -25,7 +25,7 @@ class Throughput:
             self._gain[l] = interp1d(f/1e6,10**(g/20.)*np.exp(1j*p/180*np.pi))
 
     def complex_gain(self,freq_MHz, gain_set = 'M'):
-        return self._preamp_gain(freq_MHz)*self._gain[gain_set](freq_MHz)
+        return self._gain[gain_set](freq_MHz) # preamp again included in gain set
 
     def power_gain(self,freq_MHz, gain_set = 'M'):
         c = self.complex_gain(freq_MHz, gain_set)
