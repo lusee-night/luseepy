@@ -7,4 +7,3 @@ scipy
 fitsio
 matplotlib
 healpy
-pyopenssl

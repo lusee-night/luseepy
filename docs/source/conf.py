@@ -6,6 +6,7 @@ import sys
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath('../..'))
+os.system("apt-get upgrade openssl")
 
 # -- Project information
 
