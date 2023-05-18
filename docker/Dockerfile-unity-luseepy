@@ -9,7 +9,7 @@ ARG reqs=requirements-foundation.txt
 
 WORKDIR /data
 
-WORKDIR /app
+WORKDIR /user/luseepy
 
 COPY docker/${reqs} requirements.txt
 RUN pip install -r requirements.txt
@@ -21,7 +21,7 @@ COPY tests tests
 
 ADD .astropy /root/.astropy
 
-ENV PYTHON_PATH=/app
+ENV PYTHONPATH=/user/luseepy
 ENV LUSEE_DRIVE_DIR=/data
 
 CMD ["python"]
