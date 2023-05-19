@@ -13,15 +13,20 @@ WORKDIR /user/luseepy
 
 COPY docker/${reqs} requirements.txt
 RUN pip install -r requirements.txt
+# Important:
+RUN pip install jupyterlab
 
 RUN rm requirements.txt
+
 
 COPY lusee lusee
 COPY tests tests
 
 ADD .astropy /root/.astropy
 
+
+
 ENV PYTHONPATH=/user/luseepy
 ENV LUSEE_DRIVE_DIR=/data
 
-CMD ["python"]
+CMD ["bash"]

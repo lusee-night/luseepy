@@ -30,22 +30,24 @@ image is done like this:
 docker build . -f docker/Dockerfile -t lusee/lusee-night-unity-luseepy:0.1 --build-arg reqs=requirements-foundation.txt
 ```
 
-### Jupyter Lab
+This image also includes __Jupyter Lab__ software. Jupyter
+is not started automatically, i.e. by default the user gets `bash` running and a functional
+Python/refspec/luseepy environment. To get Jupyter running, one first starts the conainer like
+this (or in a similar manner):
 
-An image with Jupyter included is built on top of `lusee/lusee-night-unity-luseepy:0.1`
-and is named `lusee/lusee-night-unity-jupyter:0.1`.
 
 ```bash
-docker run -p 8000:8888 -e JUPYTER_ENABLE_LAB=yes -e JUPYTER_TOKEN=docker lusee/lusee-night-unity-jupyter:0.1
+docker run -p 8888:8888 -e JUPYTER_ENABLE_LAB=yes -e JUPYTER_TOKEN=docker lusee/lusee-night-unity-luseepy:0.1
 ```
 
-By default, internally this command is invoked at start up:
+Once the container is running, this command is invoked to bring up Jupyter:
 
 ```bash
 jupyter lab --allow-root --ip 0.0.0.0 --port 8888
 ```
 
-The port 8888 can be mapped to any other convenient port on the host machine.
+The port 8888 can be mapped to any other convenient port on the host machine,
+and then access through `localhost`.
 
 ## Misc dependencies
 
