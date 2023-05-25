@@ -54,8 +54,6 @@ class Data(Observation):
         self.NComb = len(self.comb2ndx)
         self.T = Throughput() if throughput is None else throughput
         self.T2Vsq = self.T.T2Vsq(self.freq)
-        #self._calc_conversion_factors()
-                         
 
     def __getitem__(self, req):
         """
