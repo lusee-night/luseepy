@@ -24,7 +24,9 @@ from . import MonoSkyModels as monosky
 from .PCAanalyzer import PCAanalyzer, CompositePCAanalyzer
 from .Throughput import Throughput
 
-__version__ = '20220831'
+__version__ = '0.2'
+__comment__ = 'The first official update after the improved name convention, and addition of Readthedocs functionality'
+
 
 
 

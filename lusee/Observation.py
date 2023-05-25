@@ -108,8 +108,8 @@ class Observation:
             for time_ in self.times
         ]
 
-        alt = np.array([np.float(altaz_.alt / u.rad) for altaz_ in altaz])
-        az = np.array([np.float(altaz_.az / u.rad) for altaz_ in altaz])
+        alt = np.array([float(altaz_.alt / u.rad) for altaz_ in altaz])
+        az = np.array([float(altaz_.az / u.rad) for altaz_ in altaz])
         track = (alt, az)
 #        self.cache[cache_key] = track
         return track
@@ -131,8 +131,8 @@ class Observation:
             for time_ in times
         ]
 
-        alt = np.array([np.float(altaz_.alt / u.rad) for altaz_ in altaz])
-        az = np.array([np.float(altaz_.az / u.rad) for altaz_ in altaz])
+        alt = np.array([float(altaz_.alt / u.rad) for altaz_ in altaz])
+        az = np.array([float(altaz_.az / u.rad) for altaz_ in altaz])
         track = (alt, az)
         return track
 

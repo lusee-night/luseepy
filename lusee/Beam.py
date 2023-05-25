@@ -179,14 +179,19 @@ class Beam:
         P = np.abs(self.Etheta**2)+np.abs(self.Ephi**2)
         return P
 
-    def power_stokes(self):
+    def power_stokes(self, cross=None):
         """ return power in the beam """
-        I = np.abs(self.Etheta**2)+np.abs(self.Ephi**2)
-        Q = np.abs(self.Etheta**2)-np.abs(self.Ephi**2)
-        T = 2*self.Etheta*np.conj(self.Ephi)
-        U = np.real(T)
-        V = np.imag(T)
-        
+        if cross is None:
+            I = np.abs(self.Etheta*self.Etheta)+np.abs(self.Ephi*self.Ephi)
+            Q = np.abs(self.Etheta**2)-np.abs(self.Ephi**2)
+            T = 2*self.Etheta*np.conj(self.Ephi)
+            U = np.real(T)
+            V = np.imag(T)
+        else:
+            I = self.Etheta*np.conj(cross.Etheta) + self.Ephi*np.conj(cross.Ephi)
+            Q = self.Etheta*np.conj(cross.Etheta) - self.Ephi*np.conj(cross.Ephi)
+            U = self.Etheta*np.conj(cross.Ephi)+self.Ephi*np.conj(cross.Etheta)
+            V = +1j*self.Etheta*np.conj(cross.Ephi)-self.Ephi*np.conj(cross.Etheta)
         return [I,Q,U,V]
 
     
@@ -212,19 +217,38 @@ class Beam:
         return f_ground
         
     
-    def power_hp(self, ellmax, Nside, freq_ndx=None, theta_tapr=None):
+    def power_hp(self, ellmax, Nside, freq_ndx=None, theta_tapr=None, cross=None, stokes=False):
         """ returns healpix rendering of the power """
-        P = self.power()
+        if not stokes:
+            P = self.power() if cross is None else self.power_cross(cross)
+            P = [P] # lets' make it a list
+        else:
+            P = self.power_stokes(cross)
+
         if theta_tapr is not None:
             P *= theta_tapr[None,:,None]
         take_zero = False
         
         flist = range(self.Nfreq) if freq_ndx is None else np.atleast_1d(freq_ndx)
-        result =  [grid2healpix(self.theta,self.phi[:-1], P[i,:,:-1], ellmax, Nside) for i in flist]
-        if type(freq_ndx)==int:
+        if cross is None:
+            result =  [[grid2healpix(self.theta,self.phi[:-1], P_[i,:,:-1], ellmax, Nside) 
+                    for i in flist] for P_ in P]
+        else:
+            result =  [[grid2healpix(self.theta,self.phi[:-1], np.real(P_[i,:,:-1]), ellmax, Nside) 
+                +1j*grid2healpix(self.theta,self.phi[:-1], np.imag(P_[i,:,:-1]), ellmax, Nside)
+                    for i in flist] for P_ in P]
+
+        if not stokes:
             result = result[0]
+            if type(freq_ndx)==int:
+                result = result[0]
+        else:
+            if type(freq_ndx)==int:
+                result = [result_[0] for result_ in result]
         return result
-    
+
+
+
     def copy(self,Etheta=None, Ephi=None):
         ret = copy.deepcopy(self)
         if Etheta is not None:
