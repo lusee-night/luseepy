@@ -6,7 +6,6 @@ import sys
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath('../..'))
-os.system("yum updates openssl")
 
 # -- Project information
 
