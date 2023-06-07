@@ -13,6 +13,7 @@ print ("Setting up object with FITS beams")
 beams = []
 for ofs,c in enumerate(["N","E","S","W"]):
     cB = B.rotate(-90*ofs)
+    cB.id = c
     beams.append(cB)
     
 lmax    = 64
