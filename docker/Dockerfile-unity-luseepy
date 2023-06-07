@@ -7,6 +7,8 @@ FROM lusee/lusee-night-refspec-cppyy:0.1
 
 ARG reqs=requirements-foundation.txt
 
+ADD .astropy /root/.astropy
+
 WORKDIR /data
 
 WORKDIR /user/luseepy
@@ -15,18 +17,13 @@ COPY docker/${reqs} requirements.txt
 RUN pip install -r requirements.txt
 # Important:
 RUN pip install jupyterlab
-
+#
 RUN rm requirements.txt
-
-
+#
 COPY lusee lusee
 COPY tests tests
-
-ADD .astropy /root/.astropy
-
-
-
-ENV PYTHONPATH=/user/luseepy:/user/cppyy
+#
+ENV PYTHONPATH=/user/luseepy:/user/refspec/cppyy
 ENV LUSEE_DRIVE_DIR=/data
 
 CMD ["bash"]
