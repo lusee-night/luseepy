@@ -26,7 +26,7 @@ COPY lusee lusee
 COPY tests tests
 #
 ENV REFSPEC_PATH=/user/refspec
-ENV PYTHONPATH=/user/luseepy:$REFSPEC_PATH/cppyy
+ENV PYTHONPATH=/user/luseepy:$PYTHONPATH
 ENV LUSEE_DRIVE_DIR=/data/
 #
 CMD ["bash"]
