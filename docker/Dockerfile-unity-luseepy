@@ -14,7 +14,9 @@ WORKDIR /data
 WORKDIR /user/luseepy
 
 COPY docker/${reqs} requirements.txt
+RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
+#
 # Important:
 RUN pip install jupyterlab
 #
@@ -23,7 +25,8 @@ RUN rm requirements.txt
 COPY lusee lusee
 COPY tests tests
 #
-ENV PYTHONPATH=/user/luseepy:/user/refspec/cppyy
-ENV LUSEE_DRIVE_DIR=/data
-
+ENV REFSPEC_PATH=/user/refspec
+ENV PYTHONPATH=/user/luseepy:$REFSPEC_PATH/cppyy
+ENV LUSEE_DRIVE_DIR=/data/
+#
 CMD ["bash"]
