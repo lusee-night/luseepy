@@ -3,7 +3,7 @@
 # 
 # Note a copy of the "astropy cache"
 
-FROM lusee/lusee-night-refspec-cppyy:0.1
+FROM lusee/lusee-night-refspec-cppyy:1.0
 
 ARG reqs=requirements-foundation.txt
 
