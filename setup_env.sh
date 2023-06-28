@@ -1,5 +1,5 @@
 
-export LUSEE_IMAGE="lusee/lusee-night-unity-luseepy:0.1"
+export LUSEE_IMAGE="lusee/lusee-night-unity-luseepy:1.0"
 
 # This part was folded in the image: -e PYTHONPATH=/user/luseepy:/user/refspec/cppyy -e LD_LIBRARY_PATH=/user:/usr/local/lib
 export PYTHON_SETUP=" -e LUSEE_DRIVE_DIR -e REFSPEC_PATH"
@@ -16,9 +16,7 @@ lpython_dev() { docker run  -e HOME $PYTHON_SETUP $DEV_MOUNT -w $PWD -v $HOME:$H
 
 
 ljupyter() { port=9500; docker run  -e HOME $PYTHON_SETUP -w $PWD -v $HOME:$HOME  --user $(id -u):$(id -g) -itp $port:$port $LUSEE_IMAGE  /bin/bash -c "/usr/local/bin/jupyter lab  --ip='*' --port=$port --no-browser  "; }
-#ljupyter_dev() { port=9600; docker run  -e HOME $PYTHON_SETUP $DEV_MOUNT -w $PWD -v $HOME:$HOME  --user $(id -u):$(id -g) -itp $port:$port $LUSEE_IMAGE  /bin/bash -c "/usr/local/bin/jupyter lab  --ip='*' --port=$port --no-browser  "; }
-
-ljupyter_dev() { port=9600; docker run  -e HOME $PYTHON_SETUP $DEV_MOUNT -w $PWD -v $HOME:$HOME  --user $(id -u):$(id -g) -itp $port:$port $LUSEE_IMAGE  /bin/bash ; }
+ljupyter_dev() { port=9600; docker run  -e HOME $PYTHON_SETUP $DEV_MOUNT -w $PWD -v $HOME:$HOME  --user $(id -u):$(id -g) -itp $port:$port $LUSEE_IMAGE  /bin/bash -c "/usr/local/bin/jupyter lab  --ip='*' --port=$port --no-browser  "; }
 
 ################################
 # --- ATTIC ---

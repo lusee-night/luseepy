@@ -66,3 +66,16 @@ of a simple test run with Singularity, on a SDCC/BNL node, from the `luseepy` fo
 singularity exec -B /direct/phenix+u/mxmp/projects/luseepy --env PYTHONPATH=/direct/phenix+u/mxmp/projects/luseepy docker://lusee/lusee-night-foundation:0.1 ./tests/LunarCalendarTest.py
 ```
 
+
+## Cutting a new version
+
+Cutting a new version entails:
+ * having a clean (non dev) version in `__init__.py`
+ * updating `setup_env.sh`
+ * tagging the github
+ * making new docker image
+ * bumping version again in `__init__.py` to a +0.1 and a dev
+ 
+Any small fixes after the fact should be cumping version by 0.01.
+Large changes that break API should bump version into next integer.
+

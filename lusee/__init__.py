@@ -24,8 +24,8 @@ from . import MonoSkyModels as monosky
 from .PCAanalyzer import PCAanalyzer, CompositePCAanalyzer
 from .Throughput import Throughput
 
-__version__ = '1.0'
-__comment__ = 'The first official cut'
+__version__ = '1.2-dev'
+__comment__ = 'Development version'
 
 
 
