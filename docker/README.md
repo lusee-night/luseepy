@@ -10,8 +10,10 @@ Codename is `unity-luseepy`.
 Images are kept on __Docker Hub__ in repositories belongning to the _lusee_ identity.
 
 _We base our luseepy images on the refspec Docker images_.  The `refspec` images
-are originally derived from `python:3.10.1-bullseye` (Debian). The contain
+are originally derived from `python:3.10.1-bullseye` (Debian). They contain
 the `refspec` library and its Python bindings through the `cppyy` package.
+Currently, the principal image is names `lusee/lusee-night-refspec-cppyy`.
+The _luseepy_ image is built on top of that.
 
 As usual, building the images is done from the folder one level above the `docker` folder,
 and so dockerfiles need to be specified with the `-f` option.
