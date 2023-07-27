@@ -2,16 +2,17 @@
 ![workflow](https://github.com/lusee-night/luseepy/actions/workflows/luseepy-test.yml/badge.svg)
 
 ## About
-A set of python utilities for performing various LuSEE Night related calculations.
-_Caveat_: as of April 2023, this software is undergoing various changes, and documentation
-is being fixed. Pardon the dust.
+A set of python utilities for performing various LuSEE-Night related calculations.
+
 
 ## Cached Data
 
 There are datasets stored on the LuSEE-Night [Google Drive](https://drive.google.com/drive/folders/0AM52i9DVjqkAUk9PVA){:target="_blank"}.
 
 ## Docker
-For details, see the [README](docker/README.md) file in the `docker` folder.
+For details, see the [README](docker/README.md) file in the `docker` folder. The current setup
+involves building the _luseepy_ image based on the _refspec_ image. The latter contains C++ based
+software interfaces by means of the _cppyy_ package.
 
 ## Developing
 
@@ -19,7 +20,7 @@ To develop on your laptop, the easiest thing is to use the latest docker environ
 Please install docker and pull the image
 
 ```
-docker pull lusee/lusee-night-jupyter:0.1
+docker pull lusee/lusee-night-unity-luseepy:1.0 # or other appropriate version.
 ```
 Next, checkout the lusee repo
 ```
@@ -38,12 +39,14 @@ Now you have 4 utility functions:
  * `ljupyter` starts jupyter notebook using shipped luseepy on port 9500
  * `ljupyter_dev` starts jupyter notebook using git checkout luseepy on port 9600
  
-You can now try running
+To better understand the settings, it's worth it to take a look at the contents of `setup_env.sh`.
+In the current version, the `HOME` directory is mounted in the container, so it's possible to
+develop against the full current version of the luseepy/refspec suite. For example, you can now try running
+
 ```
+# Simple calendar test
 lpython tests/LunarCalendarTest.py
-```
-To start jupyter, simply say
-```
+# to start jupyter
 ljupyter
 ```
 and then connect to the address given in the terminal output.
@@ -57,7 +60,9 @@ Among others, the following environment variables are set up by the `setup_env.s
  * `LUSEE_DRIVE_DIR` -- path to the checkout of the LuSEE-Night Google Drive
 
 
-## Tests and Singularity
+## Singularity
+
+__NB. The example below corresponds to an early verion of software, and reference to the image below is deprected.__
 
 The `tests` folder contains CI-related and other testing scripts. Here's an example
 of a simple test run with Singularity, on a SDCC/BNL node, from the `luseepy` folder:
