@@ -5,7 +5,7 @@
 
 FROM lusee/lusee-night-refspec-cppyy:1.0
 
-ARG reqs=requirements-foundation.txt
+ARG reqs=requirements-unity-luseepy.txt
 
 ADD .astropy /root/.astropy
 

@@ -1,10 +1,7 @@
-### DEPRECATED
+### DEPRECATED ###
 
-
-##### Adding Jupyter to the luseepy image
-#
 # NB. Keep it for reference, we are migrating the Jupyter installation
-# to the underlying Unity image (e.g. deprecated)
+# to the underlying Unity image (e.g. this file is now deprecated)
 
 FROM lusee/lusee-night-unity-luseepy:0.1
 
