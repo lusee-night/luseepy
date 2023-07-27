@@ -29,9 +29,11 @@ which also has a reasonable default. For example, building the "unity"
 image is done like this:
 
 ```bash
-docker build . -f docker/Dockerfile -t lusee/lusee-night-unity-luseepy:0.1 --build-arg reqs=requirements-foundation.txt
+docker build . -f docker/Dockerfile -t lusee/lusee-night-unity-luseepy:0.1 --build-arg reqs=requirements-unity-luseepy.txt
 ```
 
+
+### Jupyter - approach one
 This image also includes __Jupyter Lab__ software. Jupyter
 is not started automatically, i.e. by default the user gets `bash` running and a functional
 Python/refspec/luseepy environment. To get Jupyter running, one first starts the conainer like
@@ -50,6 +52,11 @@ jupyter lab --allow-root --ip 0.0.0.0 --port 8888
 
 The port 8888 can be mapped to any other convenient port on the host machine,
 and then access through `localhost`.
+
+### Jupyter - approach two
+
+It is very convenient to use the "ljupyter" shell function defined in the setup script
+one level above this folder. Please read the corresponding README.
 
 ## Misc dependencies
 
