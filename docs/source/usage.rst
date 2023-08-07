@@ -19,15 +19,15 @@ The Beams
 
 Utility functions
 
-.. autofunction:: getLegendre
+.. automodule:: beam.getLegendre
 
-.. autofunction:: grid2healpix_alm_reference
+.. automodule:: beam.grid2healpix_alm_reference
 
-.. autofunction:: grid2healpix_alm_fast
+.. automodule:: beam.grid2healpix_alm_fast
 
-.. autofunction:: grid2healpix
+.. automodule:: beam.grid2healpix
 
-.. autofunction:: project_to_theta_phi
+.. automodule:: beam.project_to_theta_phi
 
 The main beam class
 
