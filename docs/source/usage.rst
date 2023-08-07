@@ -17,7 +17,7 @@ As an alternative, there are Docker images in development (TBD).
 The Beams
 --------------
 
-.. currentmodule:: Beam
+.. currentmodule:: ../../lusee/Beam.py
 
 Utility functions
 
