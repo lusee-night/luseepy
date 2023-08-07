@@ -13,6 +13,19 @@ import os
 
 
 def getLegendre(lmax, theta):
+    """
+    Test doc string
+    
+    :param lmax: max l
+    :type lmax: int
+    :param theta: angle
+    :type theta: float
+    
+    :returns: Legangre poly
+    :rtype: array
+    
+    """
+    
     L=legendre(lmax,np.cos(theta),normalization='ortho')
     L[:,1:]/=np.sqrt(2) # m>0 divide by sqrt(2)
     L[:,1::2]*=-1 # * (-1)**m
