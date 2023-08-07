@@ -17,7 +17,7 @@ As an alternative, there are Docker images in development (TBD).
 The Beams
 --------------
 
-.. currentmodule:: lusee/Beam
+.. currentmodule:: lusee.Beam
 
 Utility functions
 
