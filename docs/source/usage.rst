@@ -14,6 +14,47 @@ To use luseepy, go to the GitHub repo
 
 As an alternative, there are Docker images in development (TBD).
 
+The Beams
+--------------
+
+Utility functions
+
+.. autofunction:: getLegendre
+
+.. autofunction:: grid2healpix_alm_reference
+
+.. autofunction:: grid2healpix_alm_fast
+
+.. autofunction:: grid2healpix
+
+.. autofunction:: project_to_theta_phi
+
+The main beam class
+
+.. autoclass:: lusee.Beam
+
+.. autofunction:: lusee.Beam.rotate
+
+.. autofunction:: lusee.Beam.flip_over_yz
+
+.. autofunction:: lusee.Beam.power
+
+.. autofunction:: lusee.Beam.power_stokes
+
+.. autofunction:: lusee.Beam.cross_power
+
+.. autofunction:: lusee.Beam.sky_fraction
+
+.. autofunction:: lusee.Beam.ground_fraction
+
+.. autofunction:: lusee.Beam.power_hp
+
+.. autofunction:: lusee.Beam.copy
+
+.. autofunction:: lusee.Beam.plotE
+
+.. autofunction:: lusee.Beam.get_healpix
+
 The Simulator
 --------------
 
