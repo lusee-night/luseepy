@@ -7,3 +7,4 @@ scipy
 fitsio
 matplotlib
 healpy
+pandas
