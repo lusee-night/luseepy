@@ -17,18 +17,19 @@ As an alternative, there are Docker images in development (TBD).
 The Beams
 --------------
 
+.. currentmodule:: Beam
+
 Utility functions
 
-.. automodule:: Beam.py
-   :members:
+.. autofunction:: getLegendre
 
-.. automodule:: beam.grid2healpix_alm_reference
+.. autofunction:: grid2healpix_alm_reference
 
-.. automodule:: beam.grid2healpix_alm_fast
+.. autofunction:: grid2healpix_alm_fast
 
-.. automodule:: beam.grid2healpix
+.. autofunction:: grid2healpix
 
-.. automodule:: beam.project_to_theta_phi
+.. autofunction:: project_to_theta_phi
 
 The main beam class
 
