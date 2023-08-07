@@ -19,7 +19,8 @@ The Beams
 
 Utility functions
 
-.. automodule:: beam.getLegendre
+.. automodule:: Beam.py
+   :members:
 
 .. automodule:: beam.grid2healpix_alm_reference
 
