@@ -60,13 +60,15 @@ The main beam class
 The Simulator
 --------------
 
+.. currentmodule:: lusee.Simulation
+
 Utility functions
 
-.. autofunction:: simulation.mean_alm
+.. autofunction:: mean_alm
 
-.. autofunction:: simulation.rot2eul
+.. autofunction:: rot2eul
 
-.. autofunction:: simulation.eul2rot
+.. autofunction:: eul2rot
 
 The main simulation class
 
