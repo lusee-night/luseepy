@@ -14,15 +14,15 @@ import os
 
 def getLegendre(lmax, theta):
     """
-    Test doc string
+    Function that returns Legendre polynomial functions up to specified degree
     
-    :param lmax: max l
+    :param lmax: Maximum degree of Legendre functions
     :type lmax: int
-    :param theta: angle
+    :param theta: Argument of Legendre function
     :type theta: float
     
-    :returns: Legangre poly
-    :rtype: array
+    :returns: 2D array of Legendre functions, array indices are l and m
+    :rtype: numpy array
     
     """
     
@@ -33,6 +33,22 @@ def getLegendre(lmax, theta):
 
 
 def grid2healpix_alm_reference(theta,phi, img, lmax):
+    """
+    Function that calculates a_lm array for input image
+
+    :param theta: Input spherical angle coordinates
+    :type theta: numpy array
+    :param phi: Input spherical angle coordinates
+    :type phi: numpy array
+    :param img: Input image (2D)
+    :type img: numpy array
+    :param lmax: Maximum l value
+    :type lmax: int
+
+    :returns: 2D a_lm spherical harmonic array
+    :rtype: numpy array
+    """
+    
     lmax = lmax + 1 ## different conventions
     dphi = phi[1]-phi[0]
     dtheta = theta[1]-theta[0]
