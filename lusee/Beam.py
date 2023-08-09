@@ -34,7 +34,7 @@ def getLegendre(lmax, theta):
 
 def grid2healpix_alm_reference(theta,phi, img, lmax):
     """
-    Function that calculates a_lm array for input image
+    Function that calculates a_lm spherical harmonic decomposition for input image
 
     :param theta: Input spherical angle coordinates
     :type theta: numpy array
@@ -68,6 +68,22 @@ def grid2healpix_alm_reference(theta,phi, img, lmax):
 
 
 def grid2healpix_alm_fast(theta,phi, img, lmax):
+    """
+    Function that calculates a_lm spherical harmonic decomposition for input image, using fast method
+
+    :param theta: Input spherical angle coordinates
+    :type theta: numpy array
+    :param phi: Input spherical angle coordinates
+    :type phi: numpy array
+    :param img: Input image (2D)
+    :type img: numpy array
+    :param lmax: Maximum l value
+    :type lmax: int
+
+    :returns: 2D a_lm spherical harmonic array
+    :rtype: numpy array
+    """
+    
     # lmax has different definitions
     dtheta = theta[1]-theta[0]
     dA_theta = np.sin(theta)*dtheta
@@ -89,6 +105,26 @@ def grid2healpix_alm_fast(theta,phi, img, lmax):
 
 
 def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
+    """
+    Function that converts from theta-phi orthogonal spherical coordinates to heapix coordinates
+
+    :param theta: Input spherical angle coordinates
+    :type theta: numpy array
+    :param phi: Input spherical angle coordinates
+    :type phi: numpy array
+    :param img: Input image (2D)
+    :type img: numpy array
+    :param lmax: Maximum l value
+    :type lmax: int
+    :param Nside: Size of output Healpix map
+    :type Nside: int
+    :param fast: Whether to use fast a_lm method
+    :type fast: boolean
+
+    :returns: Healpix map of size Nside
+    :rtype: numpy array
+    """
+    
     if fast:
         alm = grid2healpix_alm_fast(theta,phi,img,lmax)
     else:
@@ -98,6 +134,20 @@ def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
 
 
 def project_to_theta_phi(theta_rad,phi_rad, E):
+    """
+    Function that projects E_theta and E_phi components of instrument beam from E field in cartesian coordinates, E(x, y, z) 
+
+    :param theta: Input spherical angle coordinates
+    :type theta: numpy array
+    :param phi: Input spherical angle coordinates
+    :type phi: numpy array
+    :param E: Electric field
+    :type E: numpy array
+
+    :returns: [Etheta, Ephi], Theta and phi components of electric field at [theta, phi] coordinates
+    :rtype: numpy array
+    """
+    
     #create projection matrices
     theta = theta
     phi= phi
@@ -120,6 +170,61 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
 
 
 class Beam:
+    """
+    The main beam class, contains beam data and meta parameters 
+
+    :param id: ID string for beam, optional
+    :type id: str
+    :param version: Beam version
+    :type version: str
+    :param Etheta: Theta component of electric field
+    :type Etheta: numpy array
+    :param Ephi: Phi component of electric field
+    :type Ephi: numpy array
+    :param ZRe: Real component of antenna impedance
+    :type ZRe: float
+    :param ZIm: Imaginary component of antenna impedance
+    :type ZIm: float
+    :param Z: Complex impedance
+    :type Z: 
+    :param gain:
+    :type gain:
+    :param f_ground:
+    :type f_ground:
+    :param gain_conv:
+    :type gain_conv:
+    :param freq:
+    :type freq:
+    :param freq_min:
+    :type freq_min:
+    :param freq_max:
+    :type freq_max:
+    :param Nfreq:
+    :type Nfreq:
+    :param theta_min:
+    :type theta_min:
+    :param theta_max:
+    :type theta_max:
+    :param Ntheta:
+    :type Ntheta:
+    :param phi_min:
+    :type phi_min:
+    :param phi_max:
+    :type phi_max:
+    :param Nphi:
+    :type Nphi:
+    :param header:
+    :type header:
+    :param theta_deg:
+    :type theta_deg:
+    :param phi_deg:
+    :type phi_deg:
+    :param theta:
+    :type theta:
+    :param phi:
+    :type phi:
+    """
+    
     def __init__ (self, fname = None, id = None):
         if fname is None:
             fname = base = os.environ['LUSEE_DRIVE_DIR']+"Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
