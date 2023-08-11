@@ -22,7 +22,7 @@ def getLegendre(lmax, theta):
     :type theta: float
     
     :returns: 2D array of Legendre functions, array indices are l and m
-    :rtype: np.array
+    :rtype: np.ndarray
     
     """
     
@@ -37,16 +37,16 @@ def grid2healpix_alm_reference(theta,phi, img, lmax):
     Function that calculates a_lm spherical harmonic decomposition for input image
 
     :param theta: Input spherical angle coordinates
-    :type theta: np.array
+    :type theta: np.ndarray
     :param phi: Input spherical angle coordinates
-    :type phi: np.array
+    :type phi: np.ndarray
     :param img: Input image (2D)
-    :type img: np.array
+    :type img: np.ndarray
     :param lmax: Maximum l value
     :type lmax: int
 
     :returns: 2D a_lm spherical harmonic array
-    :rtype: np.array
+    :rtype: np.ndarray
     """
     
     lmax = lmax + 1 ## different conventions
@@ -72,16 +72,16 @@ def grid2healpix_alm_fast(theta,phi, img, lmax):
     Function that calculates a_lm spherical harmonic decomposition for input image, using fast method
 
     :param theta: Input spherical angle coordinates
-    :type theta: np.array
+    :type theta: np.ndarray
     :param phi: Input spherical angle coordinates
-    :type phi: np.array
+    :type phi: np.ndarray
     :param img: Input image (2D)
-    :type img: np.array
+    :type img: np.ndarray
     :param lmax: Maximum l value
     :type lmax: int
 
     :returns: 2D a_lm spherical harmonic array
-    :rtype: np.array
+    :rtype: np.ndarray
     """
     
     # lmax has different definitions
@@ -109,11 +109,11 @@ def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
     Function that converts from theta-phi orthogonal spherical coordinates to heapix coordinates
 
     :param theta: Input spherical angle coordinates
-    :type theta: np.array
+    :type theta: np.ndarray
     :param phi: Input spherical angle coordinates
-    :type phi: np.array
+    :type phi: np.ndarray
     :param img: Input image (2D)
-    :type img: np.array
+    :type img: np.ndarray
     :param lmax: Maximum l value
     :type lmax: int
     :param Nside: Size of output Healpix map
@@ -122,7 +122,7 @@ def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
     :type fast: bool
 
     :returns: Healpix map of size Nside
-    :rtype: np.array
+    :rtype: np.ndarray
     """
     
     if fast:
@@ -138,14 +138,14 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
     Function that projects E_theta and E_phi components of instrument beam from E field in cartesian coordinates, E(x, y, z) 
 
     :param theta: Input spherical angle coordinates
-    :type theta: np.array
+    :type theta: np.ndarray
     :param phi: Input spherical angle coordinates
-    :type phi: np.array
+    :type phi: np.ndarray
     :param E: Electric field
-    :type E: np.array
+    :type E: np.ndarray
 
     :returns: [Etheta, Ephi], Theta and phi components of electric field at [theta, phi] coordinates
-    :rtype: np.array
+    :rtype: np.ndarray
     """
     
     #create projection matrices
@@ -178,21 +178,21 @@ class Beam:
     :param version: Beam version
     :type version: int
     :param Etheta: Theta component of electric field
-    :type Etheta: np.array[complex]
+    :type Etheta: np.ndarray[complex]
     :param Ephi: Phi component of electric field
-    :type Ephi: np.array[complex]
+    :type Ephi: np.ndarray[complex]
     :param ZRe: Real component of antenna impedance
-    :type ZRe: np.array
+    :type ZRe: np.ndarray
     :param ZIm: Imaginary component of antenna impedance
-    :type ZIm: np.array
+    :type ZIm: np.ndarray
     :param Z: Complex impedance
-    :type Z: np.array[complex]
+    :type Z: np.ndarray[complex]
     :param gain: Antenna gain
-    :type gain: np.array
+    :type gain: np.ndarray
     :param f_ground: Ground fraction
-    :type f_ground: np.array
+    :type f_ground: np.ndarray
     :param gain_conv: Gain convention
-    :type gain_conv: np.array
+    :type gain_conv: np.ndarray
     :param freq: Frequency list
     :type freq: np.ndarray
     :param freq_min: Minimum frequency    
@@ -216,13 +216,13 @@ class Beam:
     :param header: File header
     :type header: dict
     :param theta_deg: Array of theta bins in degrees
-    :type theta_deg: numpy.ndarray
+    :type theta_deg: np.ndarray
     :param phi_deg: Array of theta bins in degrees
-    :type phi_deg: numpy.ndarray
+    :type phi_deg: np.ndarray
     :param theta: Array of theta bins in radians
-    :type theta: numpy.ndarray
+    :type theta: np.ndarray
     :param phi: Array of phi bins in radians
-    :type phi: numpy.ndarray
+    :type phi: np.ndarray
     """
     
     def __init__ (self, fname = None, id = None):
