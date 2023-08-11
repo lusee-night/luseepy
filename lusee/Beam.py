@@ -22,7 +22,7 @@ def getLegendre(lmax, theta):
     :type theta: float
     
     :returns: 2D array of Legendre functions, array indices are l and m
-    :rtype: numpy array
+    :rtype: np.array
     
     """
     
@@ -37,16 +37,16 @@ def grid2healpix_alm_reference(theta,phi, img, lmax):
     Function that calculates a_lm spherical harmonic decomposition for input image
 
     :param theta: Input spherical angle coordinates
-    :type theta: numpy array
+    :type theta: np.array
     :param phi: Input spherical angle coordinates
-    :type phi: numpy array
+    :type phi: np.array
     :param img: Input image (2D)
-    :type img: numpy array
+    :type img: np.array
     :param lmax: Maximum l value
     :type lmax: int
 
     :returns: 2D a_lm spherical harmonic array
-    :rtype: numpy array
+    :rtype: np.array
     """
     
     lmax = lmax + 1 ## different conventions
@@ -72,16 +72,16 @@ def grid2healpix_alm_fast(theta,phi, img, lmax):
     Function that calculates a_lm spherical harmonic decomposition for input image, using fast method
 
     :param theta: Input spherical angle coordinates
-    :type theta: numpy array
+    :type theta: np.array
     :param phi: Input spherical angle coordinates
-    :type phi: numpy array
+    :type phi: np.array
     :param img: Input image (2D)
-    :type img: numpy array
+    :type img: np.array
     :param lmax: Maximum l value
     :type lmax: int
 
     :returns: 2D a_lm spherical harmonic array
-    :rtype: numpy array
+    :rtype: np.array
     """
     
     # lmax has different definitions
@@ -109,20 +109,20 @@ def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
     Function that converts from theta-phi orthogonal spherical coordinates to heapix coordinates
 
     :param theta: Input spherical angle coordinates
-    :type theta: numpy array
+    :type theta: np.array
     :param phi: Input spherical angle coordinates
-    :type phi: numpy array
+    :type phi: np.array
     :param img: Input image (2D)
-    :type img: numpy array
+    :type img: np.array
     :param lmax: Maximum l value
     :type lmax: int
     :param Nside: Size of output Healpix map
     :type Nside: int
     :param fast: Whether to use fast a_lm method
-    :type fast: boolean
+    :type fast: bool
 
     :returns: Healpix map of size Nside
-    :rtype: numpy array
+    :rtype: np.array
     """
     
     if fast:
@@ -138,14 +138,14 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
     Function that projects E_theta and E_phi components of instrument beam from E field in cartesian coordinates, E(x, y, z) 
 
     :param theta: Input spherical angle coordinates
-    :type theta: numpy array
+    :type theta: np.array
     :param phi: Input spherical angle coordinates
-    :type phi: numpy array
+    :type phi: np.array
     :param E: Electric field
-    :type E: numpy array
+    :type E: np.array
 
     :returns: [Etheta, Ephi], Theta and phi components of electric field at [theta, phi] coordinates
-    :rtype: numpy array
+    :rtype: np.array
     """
     
     #create projection matrices
@@ -176,53 +176,53 @@ class Beam:
     :param id: ID string for beam, optional
     :type id: str
     :param version: Beam version
-    :type version: str
+    :type version: int
     :param Etheta: Theta component of electric field
-    :type Etheta: numpy array
+    :type Etheta: np.array[complex]
     :param Ephi: Phi component of electric field
-    :type Ephi: numpy array
+    :type Ephi: np.array[complex]
     :param ZRe: Real component of antenna impedance
-    :type ZRe: float
+    :type ZRe: np.array
     :param ZIm: Imaginary component of antenna impedance
-    :type ZIm: float
+    :type ZIm: np.array
     :param Z: Complex impedance
-    :type Z: 
-    :param gain:
-    :type gain:
-    :param f_ground:
-    :type f_ground:
-    :param gain_conv:
-    :type gain_conv:
-    :param freq:
-    :type freq:
-    :param freq_min:
-    :type freq_min:
-    :param freq_max:
-    :type freq_max:
-    :param Nfreq:
-    :type Nfreq:
-    :param theta_min:
-    :type theta_min:
-    :param theta_max:
-    :type theta_max:
-    :param Ntheta:
-    :type Ntheta:
-    :param phi_min:
-    :type phi_min:
-    :param phi_max:
-    :type phi_max:
-    :param Nphi:
-    :type Nphi:
-    :param header:
-    :type header:
-    :param theta_deg:
-    :type theta_deg:
-    :param phi_deg:
-    :type phi_deg:
-    :param theta:
-    :type theta:
-    :param phi:
-    :type phi:
+    :type Z: np.array[complex]
+    :param gain: Antenna gain
+    :type gain: np.array
+    :param f_ground: Ground fraction
+    :type f_ground: np.array
+    :param gain_conv: Gain convention
+    :type gain_conv: np.array
+    :param freq: Frequency list
+    :type freq: np.ndarray
+    :param freq_min: Minimum frequency    
+    :type freq_min: float
+    :param freq_max: Maximum frequency
+    :type freq_max: float
+    :param Nfreq: Number of frequencies
+    :type Nfreq: int
+    :param theta_min: Minimum theta angle
+    :type theta_min: float
+    :param theta_max: Maximum theta angle
+    :type theta_max: float
+    :param Ntheta: Number of theta bins
+    :type Ntheta: int
+    :param phi_min: Minimum phi angle
+    :type phi_min: float
+    :param phi_max: Maximum phi angle
+    :type phi_max: float
+    :param Nphi: Number of phi bins
+    :type Nphi: int
+    :param header: File header
+    :type header: dict
+    :param theta_deg: Array of theta bins in degrees
+    :type theta_deg: numpy.ndarray
+    :param phi_deg: Array of theta bins in degrees
+    :type phi_deg: numpy.ndarray
+    :param theta: Array of theta bins in radians
+    :type theta: numpy.ndarray
+    :param phi: Array of phi bins in radians
+    :type phi: numpy.ndarray
     """
     
     def __init__ (self, fname = None, id = None):
