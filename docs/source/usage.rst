@@ -33,6 +33,8 @@ Utility functions
 
 The main beam class
 
+.. currentmodule:: None
+
 .. autoclass:: lusee.Beam
 
 .. autofunction:: lusee.Beam.rotate
@@ -51,7 +53,7 @@ The main beam class
 
 .. autofunction:: lusee.Beam.power_hp
 
-.. autofunction:: lusee.Beam.copy
+.. autofunction:: lusee.Beam.copy_beam
 
 .. autofunction:: lusee.Beam.plotE
 
