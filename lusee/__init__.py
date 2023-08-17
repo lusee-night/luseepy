@@ -9,7 +9,7 @@
 from .Observation   import Observation
 from .Data          import Data
 from .Satellite     import Satellite, ObservedSatellite
-from .Beam          import Beam, grid2healpix, grid2healpix_alm_fast
+from .Beam_module   import Beam, grid2healpix, grid2healpix_alm_fast
 from .BeamGauss     import BeamGauss
 from .BeamCouplings import BeamCouplings
 from .Simulation    import Simulator
