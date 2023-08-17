@@ -169,7 +169,7 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
     return Etheta, Ephi
 
 
-class Beam:
+class Beam_class:
     """
     The main beam class, contains beam data and meta parameters 
 
