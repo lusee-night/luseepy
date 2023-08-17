@@ -129,7 +129,7 @@ def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
         alm = grid2healpix_alm_fast(theta,phi,img,lmax)
     else:
         alm = grid2healpix_alm_reference(theta,phi,img,lmax)
-    return hp.sphtfunc.alm2map (alm,Nside)
+    return hp.sphtfunc.alm2map(alm,Nside)
 
 
 
@@ -265,7 +265,7 @@ class Beam:
         self.theta = self.theta_deg/180*np.pi
         self.phi = self.phi_deg/180*np.pi
         if (self.phi_max != 360) or (self.phi_min != 0):
-            print ("Code might implicitly assume phi wraparound ... use with care.")
+            print("Code might implicitly assume phi wraparound ... use with care.")
         
     def rotate(self,deg):
         """
@@ -285,7 +285,7 @@ class Beam:
             raise NotImplemented
         
         if deg==0:
-            return self.copy()
+            return self.copy_beam()
         rad = deg/180*np.pi
         cosrad = np.cos(rad)
         sinrad = np.sin(rad)
@@ -307,7 +307,7 @@ class Beam:
         #E = np.einsum('fabj,ij->fabi',E,rotmat)
 
 
-        return self.copy (Etheta=Etheta, Ephi=Ephi)
+        return self.copy_beam(Etheta=Etheta, Ephi=Ephi)
      
     def flip_over_yz(self):
         """
@@ -323,7 +323,7 @@ class Beam:
         o = int(270 // self.phi_step)
         Ephi = np.concatenate ((self.Ephi[:,:,n:0:-1],self.Ephi[:,:,self.Nphi:n-1:-1]),axis=2)
         #E[:,:,:,0]*=-1 ## X flips over
-        return self.copy (E=E)
+        return self.copy_beam(E=E)
 
     def power(self):
         """
@@ -464,7 +464,7 @@ class Beam:
 
 
 
-    def copy(self,Etheta=None, Ephi=None):
+    def copy_beam(self,Etheta=None, Ephi=None):
         """
         Function that copies a beam object. Optional field array inputs to, eg. rotate copied beam.
 
