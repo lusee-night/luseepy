@@ -33,7 +33,6 @@ Utility functions
 
 The main beam class
 
-#Reset module so things will hopefully display properly
 .. currentmodule:: None
 
 .. autoclass:: lusee.Beam
@@ -93,6 +92,8 @@ The Satellite classes
 ---------------------
 
 .. autoclass:: lusee.Satellite
+
+.. currentmodule:: None
 
 .. autofunction:: lusee.Satellite.predict_position_mcmf
 
