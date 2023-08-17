@@ -171,7 +171,7 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
 
 class Beam_class:
     """
-    The main beam class, contains beam data and meta parameters 
+    The main beam class, contains beam data and meta parameters
 
     :param id: ID string for beam, optional
     :type id: str
