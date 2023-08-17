@@ -35,29 +35,29 @@ The main beam class
 
 .. currentmodule:: None
 
-.. autoclass:: lusee.Beam_class
+.. autoclass:: lusee.Beam
 
-.. autofunction:: lusee.Beam_class.rotate
+.. autofunction:: lusee.Beam.rotate
 
-.. autofunction:: lusee.Beam_class.flip_over_yz
+.. autofunction:: lusee.Beam.flip_over_yz
 
-.. autofunction:: lusee.Beam_class.power
+.. autofunction:: lusee.Beam.power
 
-.. autofunction:: lusee.Beam_class.power_stokes
+.. autofunction:: lusee.Beam.power_stokes
 
-.. autofunction:: lusee.Beam_class.cross_power
+.. autofunction:: lusee.Beam.cross_power
 
-.. autofunction:: lusee.Beam_class.sky_fraction
+.. autofunction:: lusee.Beam.sky_fraction
 
-.. autofunction:: lusee.Beam_class.ground_fraction
+.. autofunction:: lusee.Beam.ground_fraction
 
-.. autofunction:: lusee.Beam_class.power_hp
+.. autofunction:: lusee.Beam.power_hp
 
-.. autofunction:: lusee.Beam_class.copy_beam
+.. autofunction:: lusee.Beam.copy_beam
 
-.. autofunction:: lusee.Beam_class.plotE
+.. autofunction:: lusee.Beam.plotE
 
-.. autofunction:: lusee.Beam_class.get_healpix
+.. autofunction:: lusee.Beam.get_healpix
 
 The Simulator
 --------------
