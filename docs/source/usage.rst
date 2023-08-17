@@ -33,6 +33,7 @@ Utility functions
 
 The main beam class
 
+#Reset module so things will hopefully display properly
 .. currentmodule:: None
 
 .. autoclass:: lusee.Beam
