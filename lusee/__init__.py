@@ -9,7 +9,7 @@
 from .Observation   import Observation
 from .Data          import Data
 from .Satellite     import Satellite, ObservedSatellite
-from .Beam_module   import Beam, grid2healpix, grid2healpix_alm_fast, grid2healpix_alm_reference, getLegendre, project_to_theta_phi
+from .Beam          import Beam, grid2healpix, grid2healpix_alm_fast, grid2healpix_alm_reference, getLegendre, project_to_theta_phi
 from .BeamGauss     import BeamGauss
 from .BeamCouplings import BeamCouplings
 from .Simulation    import Simulator
