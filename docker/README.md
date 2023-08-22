@@ -33,6 +33,13 @@ docker build . -f docker/Dockerfile -t lusee/lusee-night-unity-luseepy:0.1 --bui
 ```
 
 
+### The legacy dockerfile
+
+There is an appropriately labeled `legacy` Dockerfile, which differs
+from the main official one in that it's using a locally cached data in the
+`.astropy` folder. This file is kept to give the user a bit more flexibility
+in how these data are managed.
+
 ### Jupyter - approach one
 This image also includes __Jupyter Lab__ software. Jupyter
 is not started automatically, i.e. by default the user gets `bash` running and a functional
