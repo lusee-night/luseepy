@@ -191,7 +191,7 @@ class Beam:
             I = self.Etheta*np.conj(cross.Etheta) + self.Ephi*np.conj(cross.Ephi)
             Q = self.Etheta*np.conj(cross.Etheta) - self.Ephi*np.conj(cross.Ephi)
             U = self.Etheta*np.conj(cross.Ephi)+self.Ephi*np.conj(cross.Etheta)
-            V = +1j*self.Etheta*np.conj(cross.Ephi)-self.Ephi*np.conj(cross.Etheta)
+            V = +1j*(self.Etheta*np.conj(cross.Ephi)-self.Ephi*np.conj(cross.Etheta))
         return [I,Q,U,V]
 
     
