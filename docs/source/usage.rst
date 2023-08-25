@@ -38,3 +38,10 @@ The Sky Models classes
 .. automodule:: lusee.SkyModels
    :members:
 
+
+The Lunar Calendar
+----------------------
+
+.. automodule:: lusee.LunarCalendar
+   :members:
+
