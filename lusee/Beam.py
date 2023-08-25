@@ -22,7 +22,7 @@ def getLegendre(lmax, theta):
     :type theta: float
     
     :returns: 2D array of Legendre functions, array indices are l and m
-    :rtype: ndarray
+    :rtype: numpy array
     
     """
     
@@ -37,16 +37,16 @@ def grid2healpix_alm_reference(theta,phi, img, lmax):
     Function that calculates a_lm spherical harmonic decomposition for input image
 
     :param theta: Input spherical angle coordinates
-    :type theta: ndarray
+    :type theta: numpy array
     :param phi: Input spherical angle coordinates
-    :type phi: ndarray
+    :type phi: numpy array
     :param img: Input image (2D)
-    :type img: ndarray
+    :type img: numpy array
     :param lmax: Maximum l value
     :type lmax: int
 
     :returns: 2D a_lm spherical harmonic array
-    :rtype: ndarray
+    :rtype: numpy array
     """
     
     lmax = lmax + 1 ## different conventions
@@ -72,16 +72,16 @@ def grid2healpix_alm_fast(theta,phi, img, lmax):
     Function that calculates a_lm spherical harmonic decomposition for input image, using fast method
 
     :param theta: Input spherical angle coordinates
-    :type theta: ndarray
+    :type theta: numpy array
     :param phi: Input spherical angle coordinates
-    :type phi: ndarray
+    :type phi: numpy array
     :param img: Input image (2D)
-    :type img: ndarray
+    :type img: numpy array
     :param lmax: Maximum l value
     :type lmax: int
 
     :returns: 2D a_lm spherical harmonic array
-    :rtype: ndarray
+    :rtype: numpy array
     """
     
     # lmax has different definitions
@@ -109,11 +109,11 @@ def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
     Function that converts from theta-phi orthogonal spherical coordinates to heapix coordinates
 
     :param theta: Input spherical angle coordinates
-    :type theta: ndarray
+    :type theta: numpy array
     :param phi: Input spherical angle coordinates
-    :type phi: ndarray
+    :type phi: numpy array
     :param img: Input image (2D)
-    :type img: ndarray
+    :type img: numpy array
     :param lmax: Maximum l value
     :type lmax: int
     :param Nside: Size of output Healpix map
@@ -122,7 +122,7 @@ def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
     :type fast: bool
 
     :returns: Healpix map of size Nside
-    :rtype: ndarray
+    :rtype: numpy array
     """
     
     if fast:
@@ -138,14 +138,14 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
     Function that projects E_theta and E_phi components of instrument beam from E field in cartesian coordinates, E(x, y, z) 
 
     :param theta: Input spherical angle coordinates
-    :type theta: ndarray
+    :type theta: numpy array
     :param phi: Input spherical angle coordinates
-    :type phi: ndarray
+    :type phi: numpy array
     :param E: Electric field
-    :type E: ndarray
+    :type E: numpy array
 
     :returns: [Etheta, Ephi], Theta and phi components of electric field at [theta, phi] coordinates
-    :rtype: ndarray
+    :rtype: numpy array
     """
     
     #create projection matrices
@@ -178,23 +178,23 @@ class Beam:
     :param version: Beam version
     :type version: int
     :param Etheta: Theta component of electric field
-    :type Etheta: ndarray[complex]
+    :type Etheta: numpy array[complex]
     :param Ephi: Phi component of electric field
-    :type Ephi: ndarray[complex]
+    :type Ephi: numpy array[complex]
     :param ZRe: Real component of antenna impedance
-    :type ZRe: ndarray
+    :type ZRe: numpy array
     :param ZIm: Imaginary component of antenna impedance
-    :type ZIm: ndarray
+    :type ZIm: numpy array
     :param Z: Complex impedance
-    :type Z: ndarray[complex]
+    :type Z: numpy array[complex]
     :param gain: Antenna gain
-    :type gain: ndarray
+    :type gain: numpy array
     :param f_ground: Ground fraction
-    :type f_ground: ndarray
+    :type f_ground: numpy array
     :param gain_conv: Gain convention
-    :type gain_conv: ndarray
+    :type gain_conv: numpy array
     :param freq: Frequency list
-    :type freq: ndarray
+    :type freq: numpy array
     :param freq_min: Minimum frequency    
     :type freq_min: float
     :param freq_max: Maximum frequency
@@ -216,13 +216,13 @@ class Beam:
     :param header: File header
     :type header: dict
     :param theta_deg: Array of theta bins in degrees
-    :type theta_deg: ndarray
+    :type theta_deg: numpy array
     :param phi_deg: Array of theta bins in degrees
-    :type phi_deg: ndarray
+    :type phi_deg: numpy array
     :param theta: Array of theta bins in radians
-    :type theta: ndarray
+    :type theta: numpy array
     :param phi: Array of phi bins in radians
-    :type phi: ndarray
+    :type phi: numpy array
     """
     
     def __init__ (self, fname = None, id = None):
@@ -424,14 +424,14 @@ class Beam:
         :param freq_ndx: Optional list of frequency bin indices. Integer indices, not freq values
         :type freq_ndx: list(int)
         :param theta_tapr: Optional tapering profile to apply to beam in theta direction
-        :type theta_tapr: ndarray
+        :type theta_tapr: numpy array
         :param cross: Optional second beam object for cross-power
         :type cross: class
         :param stokes: Whether to compute Stokes parameters
         :type stokes: bool
         
         :returns: Healpix map containing beam power
-        :rtype: ndarray or list(ndarray) if type(freq_ndx) is not int
+        :rtype: numpy array or list(numpy array) if type(freq_ndx) is not int
         """
         
         if not stokes:
@@ -469,9 +469,9 @@ class Beam:
         Function that copies a beam object. Optional field array inputs to, eg. rotate copied beam.
 
         :param Etheta: Optional new theta component of E-field
-        :type Etheta: ndarray[complex]
+        :type Etheta: numpy array[complex]
         :param Ephi: Optional new phi component of E-field
-        :type Ephi: ndarray[complex]
+        :type Ephi: numpy array[complex]
         
         :returns: Beam copy
         :rtype: class
@@ -518,12 +518,12 @@ class Beam:
         :param lmax: Maximum l value
         :type lmax: int
         :param field: Field to map (eg. Etheta)
-        :type field: ndarray[complex]
+        :type field: numpy array[complex]
         :param freq_ndx: Optional list of frequency bin indices. Integer indices, not freq values
         :type freq_ndx: list(int)
         
         :returns: Healpix field map
-        :rtype: ndarray
+        :rtype: numpy array
         """
         
         if freq_ndx is None:
