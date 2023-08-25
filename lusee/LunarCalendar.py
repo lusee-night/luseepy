@@ -23,11 +23,22 @@ import os
 
 class LunarCalendar:
     '''
-    The LunarCalendar class which allows to define the cache
-    file name and whether it is to be used in the firstplace
+    Class that defines the cache file name and sets whether it is to be used
+
+    :param cache: Cache file name
+    :type lmax: str
+    :param cleanup: Whether to remove cache on close
+    :type cleanup: boolean
+    :param verbose: Whether to print extended function details and errors
+    :type verbose: boolean
     '''
     #######################################
     def close_db(self):
+        '''
+        Function that closes cache, removes it if cleanup set to true
+
+        :returns: None
+        '''
         if self.db:
             self.db.close()
             if self.cleanup:
@@ -51,8 +62,13 @@ class LunarCalendar:
     #######################################
     def get_sun_alt(self, times):
         '''
-        Returns Sun altitude at a given Moon location 
-        for a set of times
+        Function that returns Sun altitude at a given Moon location for a set of times
+
+        :param times: Array of times at which to calculate sun alt
+        :type times: numpy array
+
+        :returns: Altitudes
+        :rtype: numpy array
         '''
 
         loc = lunarsky.MoonLocation.from_selenodetic(180.0, 0)
@@ -76,11 +92,17 @@ class LunarCalendar:
     #######################################
     def get_lunar_nights(self, year=2025):
         ''' 
-        Gets a list of lunar noon-noon cycles in year.
+        Function that calculates a list of lunar noon-to-noon cycles in a year.
         Returns a list of tuples.
         Each tuple is (time_start, time_end)
         Where times are astropy times at lunar "noon" (Sun transits) on the farside
         time_end corresponds to time_start of the next day.
+
+        :param year: Year for which to calculate
+        :type year: int
+
+        :returns: Start and end times of lunar cycles in specified year
+        :rtype: list(tuple)
         '''
 
         # check if we use cache
@@ -127,7 +149,15 @@ class LunarCalendar:
     #######################################
     def get_lunar_start_end(self, lunar_night=2500):
         '''
-        Returns noon-noon dates for the lunar date
+        Function that calculates dates for specified noon-to-noon lunar cycle.
+        Format of cycles is: two digit year in 21st century, followed by zero-indexed two digit cycle count for that year.
+        E.g.: 2600 is the first lunar cycle in 2026.
+
+        :param lunar_night: Lunar cycle number
+        :type lunar_night: int
+
+        :returns: Cycle start and end dates
+        :rtype: tuple
         '''
         
         if self.verbose:
