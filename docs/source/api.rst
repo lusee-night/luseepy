@@ -8,4 +8,5 @@ API for lusee
    lusee.Simulation
    lusee.Satellite
    lusee.ObservedSatellite
+   lusee.LunarCalendar
    
