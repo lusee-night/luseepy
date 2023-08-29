@@ -70,7 +70,7 @@ class Satellite:
         :param times: Array of lunarsky.time times at which to evaluate satellite position
         :type times: array[lunarsky.time]
         
-        :return: Position of satellite body
+        :returns: Position of satellite body
         :rtype: Numpy array
         """
         
