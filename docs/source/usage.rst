@@ -14,6 +14,12 @@ To use luseepy, go to the GitHub repo
 
 As an alternative, there are Docker images in development (TBD).
 
+The Observation
+--------------
+
+.. automodule:: lusee.Observation
+   :members:
+
 The Beams
 --------------
 
