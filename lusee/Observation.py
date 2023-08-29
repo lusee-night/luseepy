@@ -22,6 +22,28 @@ from    datetime        import timedelta
 from    .LunarCalendar  import LunarCalendar
 
 class Observation:
+    """
+    Class that initializes a basic Lunar Observation object for
+    an observatory in selenographic coordinates. 
+
+    lunar day can be specified as:
+       int = lunar day as per LunarCalendar
+       "CY##" or "CY####"  = full calendar year 1/1 to 12/31
+       "FY##" or "FY####"  = full fiscale year  10/1 to 9/30
+       "UTC to UTC", i.e. '2025-02-01 13:00:00 to 2025-04-01 16:00:00'
+
+    :param lunar_day: Lunar day on which observation takes place
+    :type lunar_day: int or str, see above
+    :param lun_lat_deg: Lunar latitude of observatory in degrees
+    :type lun_lat_deg: float
+    :param lun_long_deg: Lunar longitude of observatory in degrees
+    :type lun_long_deg: float
+    :param lun_height_m: Height of observatory above lunar surface in meters
+    :type lun_height_m: float
+    :param deltaT_sec: Time resolution of observations
+    :type deltaT_sec: float
+    """
+    
     def __init__(
         self,
         lunar_day       =   2500,
@@ -30,18 +52,6 @@ class Observation:
         lun_height_m    =   0,
         deltaT_sec      =   15*60,
     ):
-        """
-        Initializes a basic Lunar Observation object for
-        an observatory in selenographic coordinates. 
-        deltaT specifies the time resolution of observations
-
-        lunar day can be specified as:
-           int = lunar day as per LunarCalendar
-           "CY##" or "CY####"  = full calendar year 1/1 to 12/31
-           "FY##" or "FY####"  = full fiscale year  10/1 to 9/30
-           "UTC to UTC", i.e. '2025-02-01 13:00:00 to 2025-04-01 16:00:00'
-
-        """
         self.lunar_day  = lunar_day
         self.lun_lat_deg    = lun_lat_deg  
         self.lun_long_deg   = lun_long_deg 
@@ -87,10 +97,14 @@ class Observation:
 
     def get_track_solar(self, objid):
         """
-        get a track in alt,az coordinates for an object in the solar system
-        on the self.times time stamps.
-        objid can be 'sun', 'moon' (as debug, should be alt=-90),
-        or plantes id (jupiter, etc)
+        Function that calculates a track in (alt, az) coordinates for an object in the solar system at the self.times time stamps.
+        objid can be 'sun', 'moon' (as debug, should be alt=-90), or planet id (jupiter, etc)
+
+        :param objid: Object ID ('sun', 'moon', 'jupiter', etc.)
+        :type objid: str
+
+        :returns: (Alt, Az) coordinates of object at self.times 
+        :rtype: numpy array
         """
 #        cache_key = f"track_solar_{objid}"
 #        if cache_key in self.cache:
@@ -115,9 +129,16 @@ class Observation:
         return track
 
     def get_track_ra_dec(self, ra, dec, times = None):
-        """ get a track in alt,az coordinates for an object with celecstial coordinates
-            in ra,dec on the self.times time stamps.
-            ra,dec are in degrees
+        """ 
+        Function that calculates a track in (alt, az) coordinates for an object with celestial coordinates in (ra, dec) at the self.times time stamps.
+        (ra, dec) are given in degrees
+
+        :param ra: Right Ascension
+        :type ra: numpy array
+        :param dec: Declination
+        :type dec: numpy array
+        :param times: Times for observation. Defaults to self.times if not specified
+        :type times: numpy array
         """
         if times is None:
             times = self.times
