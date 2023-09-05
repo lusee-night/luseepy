@@ -26,11 +26,11 @@ class Observation:
     Class that initializes a basic Lunar Observation object for
     an observatory in selenographic coordinates. 
 
-    lunar day can be specified as:
-       int = lunar day as per LunarCalendar
-       "CY##" or "CY####"  = full calendar year 1/1 to 12/31
-       "FY##" or "FY####"  = full fiscale year  10/1 to 9/30
-       "UTC to UTC", i.e. '2025-02-01 13:00:00 to 2025-04-01 16:00:00'
+    Lunar day can be specified as:
+|       int = lunar day as per LunarCalendar
+|       "CY##" or "CY####"  = full calendar year 1/1 to 12/31
+|       "FY##" or "FY####"  = full fiscale year  10/1 to 9/30
+|       "UTC to UTC", i.e. '2025-02-01 13:00:00 to 2025-04-01 16:00:00'
 
     :param lunar_day: Lunar day on which observation takes place
     :type lunar_day: int or str, see above
@@ -97,7 +97,7 @@ class Observation:
 
     def get_track_solar(self, objid):
         """
-        Function that calculates a track in (alt, az) coordinates for an object in the solar system at the self.times time stamps.
+        Function that calculates a track in (Alt, Az) coordinates for an object in the solar system at the self.times time stamps.
         objid can be 'sun', 'moon' (as debug, should be alt=-90), or planet id (jupiter, etc)
 
         :param objid: Object ID ('sun', 'moon', 'jupiter', etc.)
@@ -130,8 +130,8 @@ class Observation:
 
     def get_track_ra_dec(self, ra, dec, times = None):
         """ 
-        Function that calculates a track in (alt, az) coordinates for an object with celestial coordinates in (ra, dec) at the self.times time stamps.
-        (ra, dec) are given in degrees
+        Function that calculates a track in (Alt, Az) coordinates for an object with celestial coordinates in (RA, Dec) at the self.times time stamps.
+        (RA, Dec) are given in degrees
 
         :param ra: Right Ascension
         :type ra: numpy array
@@ -139,6 +139,9 @@ class Observation:
         :type dec: numpy array
         :param times: Times for observation. Defaults to self.times if not specified
         :type times: numpy array
+
+        :returns: (Alt, Az) coordinates of object at self.times 
+        :rtype: numpy array
         """
         if times is None:
             times = self.times
@@ -158,9 +161,19 @@ class Observation:
         return track
 
     def get_track_l_b(self, l, b, times= None):
-        """ get a track in l,b coordinates for an object with celecstial coordinates
-            in l,b galactic on the self.times time stamps.
-            ra,dec are in degrees
+        """ 
+        Function that calculates a track in (Alt, Az) coordinates for an object with celestial coordinates (l, b) in the galactic coordinate system, at the self.times time stamps.
+        (l, b) are given in degrees
+
+        :param l: Galactic longitude, zero angle is from sun to galactic center
+        :type l: numpy array
+        :param b: Galactic latitude, measures angle above the galactic plane 
+        :type b: numpy array
+        :param times: Times for observation. Defaults to self.times if not specified
+        :type times: numpy array
+        
+        :returns: (Alt, Az) coordinates of object at self.times 
+        :rtype: numpy array
         """
         if times is None:
             times = self.times
@@ -172,9 +185,20 @@ class Observation:
         return self.get_track_ra_dec(float(c.icrs.ra/u.deg), float(c.icrs.dec/u.deg), times=times)
 
     def get_ra_dec_from_alt_az (self, alt, az, times = None):
-        """ get a track in ra_dec given alt, az.
-            alt, az are astro convention (from N towards E)
-            returns ra dec in *radians*
+        """ 
+        Function that calculates a track in (RA, Dec) given coordinates in lunarcentric (Alt, Az).
+        Alt and Az are given following the astronomical convention (angles measured from N towards E).
+        Returns (RA, Dec) in *radians*
+
+        :param alt: Altitude
+        :type alt: numpy array
+        :param az: Azimuth
+        :type az: numpy array
+        :param times: Times for observation. Defaults to self.times if not specified
+        :type times: numpy array
+
+        :returns: (RA, Dec) coordinates of object at self.times 
+        :rtype: numpy array        
         """
 
         if times is None:
@@ -187,9 +211,20 @@ class Observation:
         return ra, dec
 
     def get_l_b_from_alt_az (self, alt, az, times = None):
-        """ get a track in l b given alt, az.
-            alt, az are astro convention (from N towards E)
-            returns ra dec in *radians*
+        """ 
+        Function that calculates a track in (l, b) galactic coordinates given coordinates in lunarcentric (Alt, Az).
+        Alt and Az are given following the astronomical convention (angles measured from N towards E).
+        Returns (l, b) in *radians*
+
+        :param alt: Altitude
+        :type alt: numpy array
+        :param az: Azimuth
+        :type az: numpy array
+        :param times: Times for observation. Defaults to self.times if not specified
+        :type times: numpy array
+
+        :returns: (l, b) coordinates of object at self.times 
+        :rtype: numpy array   
         """
 
         if times is None:
