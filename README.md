@@ -84,3 +84,21 @@ Cutting a new version entails:
 Any small fixes after the fact should be cumping version by 0.01.
 Large changes that break API should bump version into next integer.
 
+
+## Starting with simulations
+
+Go to `simulation` sub-directory. Make sure the `$LUSEE_DRIVE_DIR` points to the stuff from the LUSEE Drive that the simulations needs (ULSA maps, beam). Run a short simulation as
+
+```
+python driver/run_sim.py config/realistic_example.yaml
+```
+
+In the same directory, open a jupyter notebook and plot the results for the NE cross-correlation, imaginary part as:
+```
+import lusee
+D=lusee.Data('output/sim_output.fits')
+plt.imshow(D[:,'01I',:],aspect='auto',extent=(D.freq[0], D.freq[-1],len(D.times),0))
+plt.colorbar()
+plt.xlabel('frequency (MHz)')
+plt.ylabel('time number')
+```
