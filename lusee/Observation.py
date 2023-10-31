@@ -23,12 +23,18 @@ from    .LunarCalendar  import LunarCalendar
 # ---
 
 class Observation:
+    default_time            = 2500 # default to lunar day number 2500
+    default_lun_lat_deg     = -23.814
+    default_lun_long_deg    = 182.258
+    default_lun_height_m    = 0
+
+
     def __init__(
         self,
-        time       =   2500,
-        lun_lat_deg     =   -23.814,
-        lun_long_deg    =   182.258,
-        lun_height_m    =   0,
+        time            =   default_time,
+        lun_lat_deg     =   default_lun_lat_deg,
+        lun_long_deg    =   default_lun_long_deg,
+        lun_height_m    =   default_lun_height_m,
         deltaT_sec      =   15*60,
     ):
         """
@@ -36,14 +42,15 @@ class Observation:
         an observatory in selenographic coordinates. 
         deltaT specifies the time resolution of observations
 
-        lunar day can be specified as:
-           int = lunar day as per LunarCalendar
-           "CY##" or "CY####"  = full calendar year 1/1 to 12/31
-           "FY##" or "FY####"  = full fiscale year  10/1 to 9/30
-           "UTC to UTC", i.e. '2025-02-01 13:00:00 to 2025-04-01 16:00:00'
+        "time" day can be specified as:
+           int:                 lunar day as per LunarCalendar
+           "CY##" or "CY####":  full calendar year 1/1 to 12/31
+           "FY##" or "FY####":  full fiscal year  10/1 to 9/30
+           "UTC to UTC" string: e.g. '2025-02-01 13:00:00 to 2025-04-01 16:00:00'
+           (start, end):        e.g. ("2025-02-10 00:00:00", "2025-02-11 23:45:00")
 
         """
-        self.time      = time
+        self.time           = time
     
         self.lun_lat_deg    = lun_lat_deg  
         self.lun_long_deg   = lun_long_deg 
@@ -53,7 +60,7 @@ class Observation:
         self.lun_lat        = lun_lat_deg   / 180*np.pi
         self.lun_long       = lun_long_deg  / 180*np.pi
         
-        self.loc = MoonLocation.from_selenodetic(lon=lun_long_deg, lat=lun_lat_deg, height=lun_height_m)
+        self.loc = MoonLocation.from_selenodetic(lon=self.lun_long_deg, lat=self.lun_lat_deg, height=self.lun_height_m)
 
         if type(time) == int:
             lc = LunarCalendar()
@@ -118,7 +125,7 @@ class Observation:
 
     # ---
     def get_track_ra_dec(self, ra, dec, times = None):
-        """ get a track in alt,az coordinates for an object with celecstial coordinates
+        """ get a track in alt,az coordinates for an object with celestial coordinates
             in ra,dec on the self.times time stamps.
             ra,dec are in degrees
         """
@@ -141,7 +148,7 @@ class Observation:
 
     # ---
     def get_track_l_b(self, l, b, times= None):
-        """ get a track in l,b coordinates for an object with celecstial coordinates
+        """ get a track in l,b coordinates for an object with celestial coordinates
             in l,b galactic on the self.times time stamps.
             ra,dec are in degrees
         """
