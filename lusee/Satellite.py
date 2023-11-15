@@ -85,7 +85,7 @@ class ObservedSatellite:
     """    
     def __init__(self, observation, satellite):
         self.observation = observation
-        self.satelite = satellite
+        self.satellite = satellite
         self.posxyz = satellite.predict_position_mcmf(observation.times)
         self.sky_coords = SkyCoord(MCMF(*(self.posxyz.T*u.km)))
         self.satpos = self.sky_coords.transform_to(LunarTopo(location=observation.loc))
@@ -154,4 +154,20 @@ class ObservedSatellite:
 
         return m
     
+##############################################
+class SimpleSatellite:
+    fctr = 1./(180.0*np.pi)
+    """
+    Simplified Satellite class with only basic coordinates
+    """    
+    def __init__(self, observation):
+
+        self.observation = observation
+        mySat       = Satellite()
+        posxyz      = mySat.predict_position_mcmf(observation.times)
+        sky_coords  = SkyCoord(MCMF(*(posxyz.T*u.km)))
     
+        satpos      = sky_coords.transform_to(LunarTopo(location=observation.loc))
+        self.alt    = np.array(satpos.alt).astype(float)*self.fctr
+        self.az     = np.array(satpos.az).astype(float)*self.fctr
+        self.mjd    = [timepoint.mjd for timepoint in observation.times]
