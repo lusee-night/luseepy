@@ -42,12 +42,12 @@ class Observation:
         an observatory in selenographic coordinates. 
         deltaT specifies the time resolution of observations
 
-        "time" day can be specified as:
+        "time_range" day can be specified as:
            int:                 lunar day as per LunarCalendar
            "CY##" or "CY####":  full calendar year 1/1 to 12/31
            "FY##" or "FY####":  full fiscal year  10/1 to 9/30
            "UTC to UTC" string: e.g. '2025-02-01 13:00:00 to 2025-04-01 16:00:00'
-           (start, end):        e.g. ("2025-02-10 00:00:00", "2025-02-11 23:45:00")
+           (start, end) tuple:  e.g. ("2025-02-10 00:00:00", "2025-02-11 23:45:00")
 
         """
         self.time_range     = time_range
