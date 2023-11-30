@@ -80,24 +80,38 @@ class Satellite:
 ##############################################
 class ObservedSatellite:
     """
-    Satellite observables
-    """    
+    The _Observed_ Satellite (from a location).
+    The location 'loc' is contained in the "Observation" object.
+    """
+
+
+    ###
     def __init__(self, observation, satellite):
         self.observation    = observation
         self.satellite      = satellite
         self.posxyz         = satellite.predict_position_mcmf(observation.times)
         self.sky_coords     = SkyCoord(MCMF(*(self.posxyz.T*u.km)))
-        self.satpos         = self.sky_coords.transform_to(LunarTopo(location=observation.loc))
 
+        # The magic happens here:
+        self.satpos = self.sky_coords.transform_to(LunarTopo(location=observation.loc))
+
+        self.alt    = self.alt_rad()
+        self.az     = self.az_rad()
+        self.mjd    = [timepoint.mjd for timepoint in observation.times]
+
+    ###
     def alt_rad(self):
         return (np.array(self.satpos.alt).astype(float)/180.0)*np.pi
 
+    ###
     def az_rad(self):
         return (np.array(self.satpos.az).astype(float)/180.0)*np.pi
 
+    ###
     def dist_km(self):
         return np.array(self.satpos.distance / u.km).astype(float)
 
+    ###
     def get_transit_indices(self):
         """
         Returns an array of transit indices.
@@ -124,7 +138,8 @@ class ObservedSatellite:
                 tostate = not tostate
         return passes
 
-    ### ------------
+    ### --------------------------------
+    ###
     def plot_tracks(self, ax, lin_map = False):
         """
         A utility for plot trajectories.
@@ -141,6 +156,7 @@ class ObservedSatellite:
         for s, e in transits:
             ax.plot(X[s:e], Y[s:e])
 
+    ###
     def get_track_coverage(self, Nphi=10, Nmu=10):
         transits = self.get_transit_indices()
         altbin = (np.sin(self.alt_rad())*Nmu).astype(int)
@@ -153,20 +169,22 @@ class ObservedSatellite:
 
         return m
     
-##############################################
-class SimpleSatellite:
-    fctr = np.pi/180.0
-    """
-    Simplified Satellite class with only basic coordinates
-    """    
-    def __init__(self, observation):
+####################################################
+# RETIRED CODE, WILL BE REMOVED IN THE NEXT CLEANUP
+#
+# class SimpleSatellite:
+#     fctr = np.pi/180.0
+#     """
+#     Simplified Satellite class with only basic coordinates
+#     """    
+#     def __init__(self, observation):
 
-        self.observation = observation
-        mySat       = Satellite()
-        posxyz      = mySat.predict_position_mcmf(observation.times)
-        sky_coords  = SkyCoord(MCMF(*(posxyz.T*u.km)))
+#         self.observation = observation
+#         mySat       = Satellite()
+#         posxyz      = mySat.predict_position_mcmf(observation.times)
+#         sky_coords  = SkyCoord(MCMF(*(posxyz.T*u.km)))
     
-        satpos      = sky_coords.transform_to(LunarTopo(location=observation.loc))
-        self.alt    = np.array(satpos.alt).astype(float)*self.fctr
-        self.az     = np.array(satpos.az).astype(float)*self.fctr
-        self.mjd    = [timepoint.mjd for timepoint in observation.times]
+#         satpos      = sky_coords.transform_to(LunarTopo(location=observation.loc))
+#         self.alt    = np.array(satpos.alt).astype(float)*self.fctr
+#         self.az     = np.array(satpos.az).astype(float)*self.fctr
+#         self.mjd    = [timepoint.mjd for timepoint in observation.times]

@@ -38,11 +38,10 @@ class Observation:
         deltaT_sec      =   15*60,
     ):
         """
-        Initializes a basic Lunar Observation object for
-        an observatory in selenographic coordinates. 
-        deltaT specifies the time resolution of observations
+        Initializes a basic Lunar Observation object for an observatory in selenographic coordinates. 
+        'deltaT' specifies the time resolution of observations (step)
 
-        "time_range" day can be specified as:
+        The "time_range" can be specified as:
            int:                 lunar day as per LunarCalendar
            "CY##" or "CY####":  full calendar year 1/1 to 12/31
            "FY##" or "FY####":  full fiscal year  10/1 to 9/30
@@ -53,13 +52,15 @@ class Observation:
         self.time_range     = time_range
     
         self.lun_lat_deg    = lun_lat_deg  
-        self.lun_long_deg   = lun_long_deg 
+        self.lun_long_deg   = lun_long_deg
+
         self.lun_height_m   = lun_height_m
         self.deltaT_sec     = deltaT_sec
 
         self.lun_lat        = lun_lat_deg   / 180*np.pi
         self.lun_long       = lun_long_deg  / 180*np.pi
         
+        # Locattion on the Moon:
         self.loc = MoonLocation.from_selenodetic(lon=self.lun_long_deg, lat=self.lun_lat_deg, height=self.lun_height_m)
 
         if type(time_range) == int:
