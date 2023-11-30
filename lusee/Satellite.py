@@ -16,12 +16,12 @@ class Satellite:
     """
     ### ------------
     def __init__(self,
-        semi_major_km               =5738,
-        eccentricity                =0.56489,
-        inclination_deg             =57.097,
-        raan_deg                    =0,
-        argument_of_pericenter_deg  =72.625,
-        aposelene_ref_time          =Time("2024-05-01T00:00:00"),
+        semi_major_km               = 5738,
+        eccentricity                = 0.56489,
+        inclination_deg             = 57.097,
+        raan_deg                    = 0,
+        argument_of_pericenter_deg  = 72.625,
+        aposelene_ref_time          = Time("2024-05-01T00:00:00"),
     ):
         ## first period
         M_moon = 7.34767309e22 * u.kg
@@ -42,9 +42,8 @@ class Satellite:
         ## and the other perpendicular to it
 
         ## Ok, this is some hocus pocus that might or might not be right
-        r = R.from_euler(
-            "zxz", [argument_of_pericenter_deg, inclination_deg, raan_deg], degrees=True
-        )
+        r = R.from_euler("zxz", [argument_of_pericenter_deg, inclination_deg, raan_deg], degrees=True)
+
         self.pericent_norm = r.apply(np.array([1.0, 0.0, 0.0]))
         self.periperp_norm = r.apply(np.array([0.0, 1.0, 0.0]))
         self.t0 = aposelene_ref_time
@@ -84,17 +83,17 @@ class ObservedSatellite:
     Satellite observables
     """    
     def __init__(self, observation, satellite):
-        self.observation = observation
-        self.satellite = satellite
-        self.posxyz = satellite.predict_position_mcmf(observation.times)
-        self.sky_coords = SkyCoord(MCMF(*(self.posxyz.T*u.km)))
-        self.satpos = self.sky_coords.transform_to(LunarTopo(location=observation.loc))
+        self.observation    = observation
+        self.satellite      = satellite
+        self.posxyz         = satellite.predict_position_mcmf(observation.times)
+        self.sky_coords     = SkyCoord(MCMF(*(self.posxyz.T*u.km)))
+        self.satpos         = self.sky_coords.transform_to(LunarTopo(location=observation.loc))
 
     def alt_rad(self):
-        return np.array(self.satpos.alt).astype(float) / 180.0 * np.pi
+        return (np.array(self.satpos.alt).astype(float)/180.0)*np.pi
 
     def az_rad(self):
-        return np.array(self.satpos.az).astype(float) / 180.0 * np.pi
+        return (np.array(self.satpos.az).astype(float)/180.0)*np.pi
 
     def dist_km(self):
         return np.array(self.satpos.distance / u.km).astype(float)
@@ -156,7 +155,7 @@ class ObservedSatellite:
     
 ##############################################
 class SimpleSatellite:
-    fctr = 1./(180.0*np.pi)
+    fctr = np.pi/180.0
     """
     Simplified Satellite class with only basic coordinates
     """    

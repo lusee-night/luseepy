@@ -23,7 +23,7 @@ from    .LunarCalendar  import LunarCalendar
 # ---
 
 class Observation:
-    default_time            = 2500 # default to lunar day number 2500
+    default_time_range      = 2500 # default to lunar day number 2500
     default_lun_lat_deg     = -23.814
     default_lun_long_deg    = 182.258
     default_lun_height_m    = 0
@@ -31,7 +31,7 @@ class Observation:
 
     def __init__(
         self,
-        time            =   default_time,
+        time_range      =   default_time_range,
         lun_lat_deg     =   default_lun_lat_deg,
         lun_long_deg    =   default_lun_long_deg,
         lun_height_m    =   default_lun_height_m,
@@ -50,7 +50,7 @@ class Observation:
            (start, end):        e.g. ("2025-02-10 00:00:00", "2025-02-11 23:45:00")
 
         """
-        self.time           = time
+        self.time_range     = time_range
     
         self.lun_lat_deg    = lun_lat_deg  
         self.lun_long_deg   = lun_long_deg 
@@ -62,31 +62,31 @@ class Observation:
         
         self.loc = MoonLocation.from_selenodetic(lon=self.lun_long_deg, lat=self.lun_lat_deg, height=self.lun_height_m)
 
-        if type(time) == int:
+        if type(time_range) == int:
             lc = LunarCalendar()
-            self.time_start, self.time_end = lc.get_lunar_start_end(time)
-        elif(type(time)==str):
-            assert(type(time)==str)
+            self.time_start, self.time_end = lc.get_lunar_start_end(time_range)
+        elif(type(time_range)==str):
+            assert(type(time_range)==str)
             ## parse the string to determine syntax
-            if time[0:2]=='CY':
-                year = int(time[2:])
+            if time_range[0:2]=='CY':
+                year = int(time_range[2:])
                 if year<100: year+=2000
                 self.time_start = Time(datetime(year,   1, 1, 1))
                 self.time_end   = Time(datetime(year+1, 1, 1))
-            elif time[0:2]=='FY':
-                year = int(time[2:])
+            elif time_range[0:2]=='FY':
+                year = int(time_range[2:])
                 if year<100:
                     year+=2000
                 self.time_start = Time(datetime(year-1, 10, 1))
                 self.time_end   = Time(datetime(year , 10, 1))
-            elif " to " in time:
-                start, end      = time.split(" to ")
+            elif " to " in time_range:
+                start, end      = time_range.split(" to ")
                 self.time_start = Time(start)
                 self.time_end   = Time(end)
             else:
                 raise NotImplementedError
-        elif(type(time)==tuple):
-            self.time_from_range(time)
+        elif(type(time_range)==tuple):
+            self.set_time_range(time_range)
         else:
             raise NotImplementedError                    
 
@@ -95,7 +95,7 @@ class Observation:
 
 
     # ---
-    def time_from_range(self, tpl):
+    def set_time_range(self, tpl):
         self.time_start = Time(tpl[0])
         self.time_end   = Time(tpl[1])
     
