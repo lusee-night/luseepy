@@ -169,22 +169,3 @@ class ObservedSatellite:
 
         return m
     
-####################################################
-# RETIRED CODE, WILL BE REMOVED IN THE NEXT CLEANUP
-#
-# class SimpleSatellite:
-#     fctr = np.pi/180.0
-#     """
-#     Simplified Satellite class with only basic coordinates
-#     """    
-#     def __init__(self, observation):
-
-#         self.observation = observation
-#         mySat       = Satellite()
-#         posxyz      = mySat.predict_position_mcmf(observation.times)
-#         sky_coords  = SkyCoord(MCMF(*(posxyz.T*u.km)))
-    
-#         satpos      = sky_coords.transform_to(LunarTopo(location=observation.loc))
-#         self.alt    = np.array(satpos.alt).astype(float)*self.fctr
-#         self.az     = np.array(satpos.az).astype(float)*self.fctr
-#         self.mjd    = [timepoint.mjd for timepoint in observation.times]
