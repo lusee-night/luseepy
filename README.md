@@ -7,7 +7,7 @@ A set of python utilities for performing various LuSEE-Night related calculation
 
 ## Cached Data
 
-There are datasets stored on the LuSEE-Night [Google Drive](https://drive.google.com/drive/folders/0AM52i9DVjqkAUk9PVA){:target="_blank"}.
+There are datasets stored in the LuSEE-Night [Google Drive](https://drive.google.com/drive/folders/0AM52i9DVjqkAUk9PVA).
 
 ## Docker
 For details, see the [README](docker/README.md) file in the `docker` folder. The current setup
