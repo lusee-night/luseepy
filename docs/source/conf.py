@@ -14,7 +14,7 @@ copyright = '2022, LuSEE-Night'
 author = 'M.Potekhin'
 
 release = '0.2'
-version = '0.2'
+#version = '0.2'
 
 
 # Mock imports, because it fails to build in readthedocs
