@@ -29,7 +29,7 @@ which also has a reasonable default. For example, building the "unity"
 image is done like this:
 
 ```bash
-docker build . -f docker/Dockerfile -t lusee/lusee-night-unity-luseepy:0.1 --build-arg reqs=requirements-unity-luseepy.txt
+docker build . -f docker/Dockerfile-unity-luseepy -t lusee/lusee-night-unity-luseepy:0.1 --build-arg reqs=requirements-unity-luseepy.txt
 ```
 
 
@@ -38,7 +38,8 @@ docker build . -f docker/Dockerfile -t lusee/lusee-night-unity-luseepy:0.1 --bui
 There is an appropriately labeled `legacy` Dockerfile, which differs
 from the main official one in that it's using a locally cached data in the
 `.astropy` folder. This file is kept to give the user a bit more flexibility
-in how these data are managed.
+in how these data are managed. The updated file actually forces generation
+of these data at runtime.
 
 ### Jupyter - approach one
 This image also includes __Jupyter Lab__ software. Jupyter

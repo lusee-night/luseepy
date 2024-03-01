@@ -1,7 +1,4 @@
-##### USED PRIMARILY TO BUILD THE "UNITY FOUNDATION" IMAGE
-#
-# 
-# Note a copy of the "astropy cache"
+# Note that we force generationof the "astropy cache"
 
 FROM lusee/lusee-night-refspec-cppyy:1.0
 
