@@ -2,22 +2,20 @@
 
 ## About
 
-This is work in progress. Please see relavant branches in the `refspec` project
-for more information. The aim is to create a small number of unified images
-containing expanded functionality, covering both `refspec` and `luseepy`.
-Codename is `unity-luseepy`.
+The aim of this project is to create a software stack which includes
+the `refspec` _(Refernce Spectrometer)_ and the `luseepy` toolkit on top of it.
+The main method of deployment for this software is a Docker
+image covering both `refspec` and `luseepy`. Images thus created contain "unity-luseepy"
+in their names. They are kept on __Docker Hub__ in repositories belongning to the
+_lusee_ identity.
 
-Images are kept on __Docker Hub__ in repositories belongning to the _lusee_ identity.
-
-_We base our luseepy images on the refspec Docker images_.  The `refspec` images
-are originally derived from `python:3.10.1-bullseye` (Debian). They contain
-the `refspec` library and its Python bindings through the `cppyy` package.
+The `refspec` images are built on top of the base `python:3.10.1-bullseye` (Debian).
+They contain the C++ `refspec` library and its Python bindings through the `cppyy` package.
 Currently, the principal image is names `lusee/lusee-night-refspec-cppyy`.
 The _luseepy_ image is built on top of that.
 
 As usual, building the images is done from the folder one level above the `docker` folder,
 and so dockerfiles need to be specified with the `-f` option.
-
 
 ## Images
 
@@ -29,7 +27,7 @@ which also has a reasonable default. For example, building the "unity"
 image is done like this:
 
 ```bash
-docker build . -f docker/Dockerfile-unity-luseepy -t lusee/lusee-night-unity-luseepy:0.1 --build-arg reqs=requirements-unity-luseepy.txt
+docker build . -f docker/Dockerfile-unity-luseepy -t lusee/lusee-night-unity-luseepy:1.0 --build-arg reqs=requirements-unity-luseepy.txt
 ```
 
 
@@ -40,6 +38,17 @@ from the main official one in that it's using a locally cached data in the
 `.astropy` folder. This file is kept to give the user a bit more flexibility
 in how these data are managed. The updated file actually forces generation
 of these data at runtime.
+
+### Jupyter in VScode
+
+The user has the ability to run Jupyter notebooks transparently within the VScode
+environment, if they choose so. The easiest way to ensure that the OS environment
+is inherited from the shell is to start VScode from the command line, e.g.
+
+```bash
+$ code
+```
+
 
 ### Jupyter - approach one
 This image also includes __Jupyter Lab__ software. Jupyter
