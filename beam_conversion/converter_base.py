@@ -19,14 +19,21 @@ class BeamConverter:
     def add_common_options (self, default_output):
         self.parser.add_argument('root_name', nargs=1, help='root name')
         self.parser.add_argument('--thetamax', default = 90, type=float, help='do not include data beyond this theta')
+        self.parser.add_argument('--freqmin', default = 0, type=float, help='do not include data below this frequency [MHz]')
+        self.parser.add_argument('--freqmax', default = 100, type=float, help='do not include data above this frequency [MHz]')
+        self.parser.add_argument('--split-impedance',  action="store_true", help='Allow impedance to be split into many files')
         self.parser.add_argument('-g', '--gain', action='store_true', help='add gain field to the output file')
         self.parser.add_argument('-o', '--output_file', type=str, default = default_output, help='output filename')
 
     def process_common_options(self,args):
+        print (args)
         self.root = args.root_name[0]
         self.save_gain = args.gain
         self.thetamax = args.thetamax
+        self.freqmin = args.freqmin
+        self.freqmax = args.freqmax
         self.output_file = args.output_file
+        self.split_impedance = args.split_impedance
                             
       
     def find_single_file(self, pattern, filt = None, ok_if_not_found = False):

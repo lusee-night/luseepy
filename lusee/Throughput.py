@@ -6,12 +6,12 @@ from .Beam import Beam
 
 class Throughput:
 
-    def __init__ (self, B=None, noise_e = 2, Cfront = 35, R4 = 1e6):
+    def __init__ (self, beam=None, noise_e = 2, Cfront = 35, R4 = 1e6):
         self.noise_e = noise_e
         self.Cfront = 35
         self.R4 = R4
         self._load_spice_sims()
-        self.beam = B if B is not None else Beam()
+        self.beam = beam if beam is not None else Beam()
         
     def _load_spice_sims(self):
         path = os.path.join(os.environ['LUSEE_DRIVE_DIR'],'Simulations/ElectronicsModel/Model54')

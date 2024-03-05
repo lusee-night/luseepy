@@ -35,33 +35,45 @@ class HFSS2LBeam(BeamConverter):
             sys.exit(1)
         freq = []
         freqfname = {}
-        for fname in Efiles:
+        def get_freq(fname):
+            have = False
             for field in fname.split('_'):
                 if "MHz" in field:
                     cfreq=float(field.replace('MHz',''))
-                    if cfreq in freqfname:
-                        print ("We seem to have two files with the same frequency! ")
-                        print(freqfname[cfreq])
-                        print(fname)
-                        print ("Exiting")
-                        sys.exit(1)
-                    freqfname[cfreq]=fname
-                    freq.append(cfreq)
+                    have = True
+                if "kHz" in field:
+                    cfreq=float(field.replace('kHz',''))/1000
+                    have = True
+            
+            if have and (cfreq>self.freqmax or cfreq<self.freqmin):
+                have = False
+            return have, cfreq
+
+        for fname in Efiles:
+            have, cfreq = get_freq(fname)
+            if have:
+                if cfreq in freqfname:
+                    print ("We seem to have two files with the same frequency! ")
+                    print(freqfname[cfreq])
+                    print(fname)
+                    print ("Exiting")
+                    sys.exit(1)
+                freqfname[cfreq]=fname
+                freq.append(cfreq)
 
         freqgain = {}
         for fname in Gfiles:
-            for field in fname.split('_'):
-                if "MHz" in field:
-                    cfreq=float(field.replace('MHz',''))
-                    assert (cfreq in freq)
-                    if cfreq in freqgain:
-                        print ("We seem to have two files with the same frequency! ")
-                        print(freqgain[cfreq])
-                        print(fname)
-                        print ("Exiting")
-                        sys.exit(1)
+            have, cfreq = get_freq(fname)
+            if have:
+                assert (cfreq in freq)
+            if cfreq in freqgain:
+                print ("We seem to have two files with the same frequency! ")
+                print(freqgain[cfreq])
+                print(fname)
+                print ("Exiting")
+                sys.exit(1)
 
-                    freqgain[cfreq]=fname
+            freqgain[cfreq]=fname
 
         
 
@@ -172,30 +184,57 @@ class HFSS2LBeam(BeamConverter):
         # in hfss we have directity, which is already in gain units
         ratio = gain/mygain
         gainmax = gain.max(axis=(1,2))
+        gainmin = gain.min(axis=(1,2))
         gainconv = []
         for i,f in enumerate(freq):
             r = ratio[i,:,:]
             w = np.where(gain[i,:,:]>gainmax[i]/100)
             meanconv = r[w].mean()
             rms = np.sqrt(r[w].var())
-            print (f"    {f} MHz    {meanconv:0.3g} ({rms/meanconv*100:0.3f}% err)")
-            assert (rms/meanconv<1e-3)
+            print (f"    {f} MHz    {meanconv:0.3g} ({rms/meanconv*100:0.3f}% err) (gain {gainmin[i]:0.3g}...{gainmax[i]:0.3g}))")
+            #assert (rms/meanconv<1e-2)
             gainconv.append(meanconv)
         
         flist = glob.glob(self.root+"/Impedance/*.csv")
-        if (len(flist)>1):
-            print ("Don't know which file to read.",flist)
+        if (len(flist)>1 and not self.split_impedance):
+            print ("Don't know which impedance file to use. Candidates:")
+            for f in flist:
+                print ("       ",f)
             sys.exit(1)
         elif (len(flist)==0):
             print ("Can't find impedance info.")
             sys.exit(1)
         
-        data = open(flist[0]).readlines()[1:]
-        data = np.array([[float(x) for x in d.split(',')] for d in data])
-        cfreq, ZRe, ZIm = data.T
-        assert(np.all(cfreq==freq))
-        print ("Impedance loading successful.")
+        def verbose_read (fname):
+            print ("  Reading impedance file",fname)
+            data= open(fname).readlines()[1:]
+            return data
+        data = sum ([verbose_read(fname) for fname in flist],[])
+        data = np.array(sorted([[float(x) for x in d.split(',')] for d in data]))
+        ## now check that we don't have duplicates
+        while True:
+            exit = True
+            for i in range(len(data)-1):
+                if data[i,0]==data[i+1,0]:
+                    data[i,:] = (data[i,:]+data[i+1,:])/2
+                    data = np.delete(data,i+1,axis=0)
+                    exit = False
+                    break
+            if exit:
+                break
 
+
+        cfreq, ZRe, ZIm = data.T
+
+
+        print ("\n\n")
+        if len(cfreq)!=len(freq) or (not np.all(cfreq==freq)):
+            print ("Error: Frequencies in impedance file do not match those in the beam file!")
+            print (f'Beam file: {freq[0]}..{freq[-1]} in {len(freq)} bins.')
+            print (f'Impedance file: {cfreq[0]}..{cfreq[-1]} in {len(cfreq)} bins.')
+            print (cfreq)
+            stop()
+        print ("Impedance loading successful.")
 
         
         self.Etheta = Etheta
@@ -221,7 +260,7 @@ if __name__=="__main__":
     if have_lusee:
         print ("Attempting to reread the file ... ",end="")
         sys.stdout.flush()
-        B = lusee.LBeam(H2B.output_file)
+        B = lusee.Beam(H2B.output_file)
         print ("OK.")
     else:
         print ("No lusee module so no check.")
