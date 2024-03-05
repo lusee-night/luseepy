@@ -123,12 +123,14 @@ class SimDriver(dict):
                 for i in range(self.Nbeams):
                     for j in range(i,self.Nbeams):
                         combs.append((i,j))
-    
+
+        
         print ("  setting up Simulation object...")
         S = lusee.Simulator (O,self.beams, self.sky, freq = self.freq, lmax = self.lmax,
                              combinations=combs, Tground = od['Tground'],
                              cross_power = self.couplings, beam_smooth = self.beam_smooth,
                              extra_opts = self['simulation'] )
+        print (f"  We will simulate {len(O.times)} timesteps x {len(combs)} data products (some complex) x {len(self.freq)} frequency bins.")
         print ("  Simulating...")
         S.simulate(times=O.times)
         

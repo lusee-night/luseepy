@@ -1,6 +1,29 @@
 # these files are work in progress, but we should keep them
 # as a track name conversions between Sim files and exported files
 
+source ./setup_env.sh
+
+
+export OUTROOT=$LUSEE_DRIVE_DIR/Simulations/BeamModels/Firefly/
+
+
+
+
+export ROOT=$LUSEE_DRIVE_DIR/AntennaResponse/SimulationFiles/LuSEE_Firefly/Radiator_12_deg_simple/hfss_lbl/
+lpython_dev beam_conversion/hfss.py  --split-impedance -g  --thetamax 181 $ROOT/monopole -o $OUTROOT/firefly_v1_simple.fits
+lpython_dev beam_conversion/hfss.py  --split-impedance -g  --thetamax 181 $ROOT/dipole_180deg -o $OUTROOT/firefly_v1_simple.2port.fits
+lpython_dev beam_conversion/hfss.py  --split-impedance -g  --thetamax 181 $ROOT/dipole_0deg -o $OUTROOT/firefly_v1_simple.2portX.fits
+
+
+export ROOT=$LUSEE_DRIVE_DIR/AntennaResponse/SimulationFiles/LuSEE_Firefly/Radiator_12_deg_comm/hfss_lbl/
+lpython_dev beam_conversion/hfss.py  --split-impedance -g  --thetamax 181 $ROOT/monopole -o $OUTROOT/firefly_v1_comm.fits
+lpython_dev beam_conversion/hfss.py  --split-impedance -g  --thetamax 181 $ROOT/dipole_180deg -o $OUTROOT/firefly_v1_comm.2port.fits
+lpython_dev beam_conversion/hfss.py  --split-impedance -g  --thetamax 181 $ROOT/dipole_0deg -o $OUTROOT/firefly_v1_comm.2portX.fits
+
+exit 0 
+
+
+
 #export ROOT=$LUSEE_DRIVE_DIR/AntennaResponse/SimulationFiles/ShortDipoleComparison/dipole_in_vacuum/
 
 export ROOT=$LUSEE_DRIVE_DIR/AntennaResponse/SimulationFiles/LuSEELanderFreeSpaceComparison/monopole_1m_75deg/hfss_lbl
