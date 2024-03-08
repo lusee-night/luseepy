@@ -3,8 +3,8 @@ requests
 fitsio==1.1.7
 ares==0.7.1
 astropy # ==5.0.1
-pyshtools # adding to debug new behavior 20230424
 astropy-healpix==0.6
 lunarsky
 h5py
 pygdsm==1.3.0
+pyshtools==4.10 # adding to debug new behavior 20230424

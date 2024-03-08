@@ -1,7 +1,5 @@
-##### USED PRIMARILY TO BUILD THE "UNITY FOUNDATION" IMAGE
-#
-# 
-# Note a copy of the "astropy cache"
+# Note a copy of the local "astropy cache" into the image
+# This is the difference between this and "non-legacy" file.
 
 FROM lusee/lusee-night-refspec-cppyy:1.0
 

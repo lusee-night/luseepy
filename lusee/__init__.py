@@ -25,8 +25,6 @@ from .PCAanalyzer import PCAanalyzer, CompositePCAanalyzer
 from .Throughput import Throughput
 
 __version__ = '1.2'
-__comment__ = 'Release version'
-
-
+__comment__ = '1.2 release'
 
 
