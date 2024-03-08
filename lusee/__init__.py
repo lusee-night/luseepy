@@ -28,5 +28,3 @@ __version__ = '1.2'
 __comment__ = '1.2 release'
 
 
-
-
