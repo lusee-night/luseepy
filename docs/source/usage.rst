@@ -38,7 +38,13 @@ The Satellite classes
 .. automodule:: lusee.Satellite
    :members:
 
-The Sky Models classes
+The Monopole Sky Model classes
+----------------------
+
+.. automodule:: lusee.MonoSkyModels
+   :members:
+
+The Sky Model classes
 ----------------------
 
 .. automodule:: lusee.SkyModels
