@@ -180,7 +180,7 @@ class ObservedSatellite:
         
         :param ax: Plot axis object
         :param lin_map: Use linear approximation for small altitudes? 
-        :type lin_map: boolean
+        :type lin_map: bool
         """
         transits = self.get_transit_indices()
         az = self.az_rad()

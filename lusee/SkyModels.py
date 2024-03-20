@@ -6,7 +6,7 @@ from .MonoSkyModels import T_C, T_DarkAges, T_DarkAges_Scaled
 class ConstSky:
     """
     Class that initializes a healpix sky map with a frequency dependent monopole signal given by one of the available Constant Sky models: 
-    1) the Cane et al. (1979) radio background model, or 
+    1) the Cane (1979) radio background model, or 
     2) the Dark Ages monopole model
 
     :param Nside: Size of Healpix map to create
@@ -67,7 +67,7 @@ class ConstSky:
 
 class ConstSkyCane1979(ConstSky):
     """
-    Class that constructs a monopole sky temperature map using the Cane et al. (1979) radio background sky model. Uses ConstSky class to initialize map.
+    Class that constructs a monopole sky temperature map using the Cane (1979) radio background sky model. Uses ConstSky class to initialize map.
 
     :param Nside: Size of Healpix map to create
     :type Nside: int
@@ -138,7 +138,7 @@ class FitsSky:
     Class that reads in a sky map from a FITS file, and reads in the freq list from the FITS header. Computes map A_lms with healpy map2alm, up to specified lmax.
 
     :param fname: Filename to read in
-    :type fname: string
+    :type fname: str
     :param lmax: Maximum l value for maps
     :type lmax: int
     """

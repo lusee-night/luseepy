@@ -28,9 +28,9 @@ class LunarCalendar:
     :param cache: Cache file name
     :type lmax: str
     :param cleanup: Whether to remove cache on close
-    :type cleanup: boolean
+    :type cleanup: bool
     :param verbose: Whether to print extended function details and errors
-    :type verbose: boolean
+    :type verbose: bool
     '''
     #######################################
     def close_db(self):
