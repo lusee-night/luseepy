@@ -1,5 +1,4 @@
-
-export LUSEE_IMAGE="lusee/lusee-night-unity-luseepy:1.0"
+export LUSEE_IMAGE="lusee/lusee-night-unity-luseepy:1.2"
 
 # This part was folded in the image: -e PYTHONPATH=/user/luseepy:/user/refspec/cppyy -e LD_LIBRARY_PATH=/user:/usr/local/lib
 export PYTHON_SETUP=" -e LUSEE_DRIVE_DIR -e REFSPEC_PATH"
