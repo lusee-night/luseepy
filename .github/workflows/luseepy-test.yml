@@ -15,14 +15,14 @@ jobs:
        PYTHONPATH: .:..
        LUSEE_DRIVE_DIR: Drive
        LUSEE_OUTPUT_DIR: ./output
-    container: lusee/lusee-night-unity-luseepy:1.0
+    container: lusee/lusee-night-unity-luseepy:1.2
     steps:
       - uses: actions/checkout@v2
       - run: wget "https://drive.google.com/uc?export=download&id=1cdKZpq81DmLBy_gbGy-DpNYXbvnQAJG9" -O drive.tgz
       - run: tar zxvf drive.tgz
       - run: ls -l
-#      - run: python tests/LunarCalendarTest.py  -v
-#      - run: python tests/CoordTest.py
-#      - run: python tests/SimTest.py
-#      - run: cd simulation; ln -s ../Drive .; mkdir output; python driver/run_sim.py config/example.yaml; ls -l output
-#      - run: python tests/SimReadTest.py simulation/output/sim_example.fits
+      - run: python tests/LunarCalendarTest.py  -v
+      - run: python tests/CoordTest.py
+      - run: python tests/SimTest.py
+      - run: cd simulation; ln -s ../Drive .; mkdir output; python driver/run_sim.py config/example.yaml; ls -l output
+      - run: python tests/SimReadTest.py simulation/output/sim_example.fits
