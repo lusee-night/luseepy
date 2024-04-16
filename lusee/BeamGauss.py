@@ -3,8 +3,22 @@ import numpy as np
 
 def gauss_beam(theta,phi,sigma, theta_c,phi_c=0.):
     """
-    Creates a map-level gaussian beam in theta, phi of width sigma, centered at theta=theta_c and phi=phi_c
-    Uses a naive gaussian function, with wrap around for theta, phi
+    Function that creates a map-level gaussian beam in theta and phi of width sigma, centered at theta=theta_c and phi=phi_c.
+    Uses a naive gaussian function, with wrap around for theta, and phi. Used by BeamGauss class to create a Gaussiam Beam object.
+
+    :param theta: Array of theta coordinates
+    :type theta: array
+    :param phi: Array of phi coordinates
+    :type phi: array
+    :param sigma: Beam width (standard deviation)
+    :type sigma: float
+    :param theta_c: Beam center theta
+    :type theta_c: float
+    :param phi_c: Beam center phi
+    :type phi_c: float
+    
+    :returns: Gaussian beam in theta and phi
+    :rtype: array
     """
     
     phiprime=np.min((phi-phi_c,2*np.pi-phi+phi_c),axis=0) #phi wrap around
@@ -15,7 +29,15 @@ def gauss_beam(theta,phi,sigma, theta_c,phi_c=0.):
 
 class BeamGauss(Beam):
     """
-    Gaussian Beam object, centered at the given declination (and phi=360-azimuth=0) and of width sigma. 
+    Class that creates a Gaussian Beam object, centered at the given declination (and phi=360-azimuth=0) and of width sigma. 
+
+    :param Beam: Beam object
+    :type Beam: class
+    :param Beam: 
+    :type Beam: 
+    :param Beam: 
+    :type Beam: 
+    
     """
     def __init__ (self, dec_deg, sigma_deg, phi_deg=90, one_over_freq_scaling=False, id = None):
         """

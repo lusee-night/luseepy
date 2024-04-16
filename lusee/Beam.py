@@ -171,7 +171,7 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
 
 class Beam:
     """
-    The main beam class, contains beam data and meta parameters
+    The main beam class, contains beam data and meta parameters. Only filename of beam to load and ID string are explicitly set in class initialization. All others are normally read in from the beam FITS file, but are included here in documentation for completeness.
 
     :param id: ID string for beam, optional
     :type id: str
