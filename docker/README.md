@@ -2,74 +2,78 @@
 
 ## About
 
-This is work in progress. After substantial work completed in the `refspec` project,
-there is an effort to create a number of unified images containing expanded
-functionality, covering both `refspec` and `luseepy`.
+The aim of this project is to create a software stack which includes
+the `refspec` _(Refernce Spectrometer)_ and the `luseepy` toolkit on top of it.
+The main method of deployment for this software is a Docker
+image covering both `refspec` and `luseepy`. Images thus created contain "unity-luseepy"
+in their names. They are kept on __Docker Hub__ in repositories belongning to the
+_lusee_ identity.
 
-Images are kept on __Docker Hub__ in repositories belongning to the _lusee_ identity.
+The `refspec` images are built on top of the base `python:3.10.1-bullseye` (Debian).
+They contain the C++ `refspec` library and its Python bindings through the `cppyy` package.
+Currently, the principal image is names `lusee/lusee-night-refspec-cppyy`.
+The _luseepy_ image is built on top of that.
 
-## Basic OS and the Python version
-
-This folder helps create and manage Python-based images for the **luseepy**
-package CI and other containerized applications. **NEW**: instead of being
-based directly on `python:3.10.1-bullseye` (Debian), these images will use
-the ones created within the `refspec` project.
-
-The "lowest denominator" base (python:3.10.1-bullseye) remains the same, but
-there is the added `refspec` library and its Python bindings through the `cppyy` package.
-
-Building the images is done from the folder one level above the `docker` folder,
+As usual, building the images is done from the folder one level above the `docker` folder,
 and so dockerfiles need to be specified with the `-f` option.
-
 
 ## Images
 
-For efficiency reasons, images are built in layers, in the following order:
-
-* foundation
-* base
-* jupyter
-
-### The "foundation" Image
+### The "unity" Image
 
 This is the minimal useable image based on ```requirements-foundation.txt```.
 The main "Dockerfile" in the "docker" folder uses a ```build-arg``` argument,
-which allows to use any initial requirements file as needed. For example, building the "foundation"
+which also has a reasonable default. For example, building the "unity"
 image is done like this:
 
 ```bash
-docker build . -f docker/Dockerfile -t lusee/lusee-night-foundation:0.1 --build-arg reqs=requirements-foundation.txt
+docker build . -f docker/Dockerfile-unity-luseepy -t lusee/lusee-night-unity-luseepy:1.0 --build-arg reqs=requirements-unity-luseepy.txt
 ```
-This image is published on __Docker Hub__:
-* [lusee/lusee-night-foundation:0.1](https://hub.docker.com/repository/docker/lusee/lusee-night-foundation)
-
-```Dockerfile-foundation``` is kept for historical reasons and is deprecated.
-
-### The "base" image
-
-* Based on "foundation", with added ```ARES``` package.
-* Uses ```Dockerfile-base```.
-* Docker Hub reference: [lusee/lusee-night-base:0.1](https://hub.docker.com/repository/docker/lusee/lusee-night-base)
 
 
-### The "jupyter" image
+### The legacy dockerfile
 
-* Based on "base", with added ```pyshtools``` and ```jupyterlab``` packages.
-*  Uses ```Dockerfile-jupyter```.
-* Docker Hub reference: [lusee/lusee-night-jupyter:0.1](https://hub.docker.com/repository/docker/lusee/lusee-night-jupyter)
+There is an appropriately labeled `legacy` Dockerfile, which differs
+from the main official one in that it's using a locally cached data in the
+`.astropy` folder. This file is kept to give the user a bit more flexibility
+in how these data are managed. The updated file actually forces generation
+of these data at runtime.
 
----
+### Jupyter in VScode
 
-# Misc Notes
-
-## Build
-
-It is suggested that the build is from a folder one level above
-this "docker" location. Example:
+The user has the ability to run Jupyter notebooks transparently within the VScode
+environment, if they choose so. The easiest way to ensure that the OS environment
+is inherited from the shell is to start VScode from the command line, e.g.
 
 ```bash
-docker build -f docker/Dockerfile-jupyter -t buddhasystem/lusee-night-luseepy-jupyter:0.1 .
+$ code
 ```
+
+
+### Jupyter - approach one
+This image also includes __Jupyter Lab__ software. Jupyter
+is not started automatically, i.e. by default the user gets `bash` running and a functional
+Python/refspec/luseepy environment. To get Jupyter running, one first starts the conainer like
+this (or in a similar manner):
+
+
+```bash
+docker run -p 8888:8888 -e JUPYTER_ENABLE_LAB=yes -e JUPYTER_TOKEN=docker lusee/lusee-night-unity-luseepy:0.1
+```
+
+Once the container is running, this command is invoked to bring up Jupyter:
+
+```bash
+jupyter lab --allow-root --ip 0.0.0.0 --port 8888
+```
+
+The port 8888 can be mapped to any other convenient port on the host machine,
+and then access through `localhost`.
+
+### Jupyter - approach two
+
+It is very convenient to use the "ljupyter" shell function defined in the setup script
+one level above this folder. Please read the corresponding README.
 
 ## Misc dependencies
 

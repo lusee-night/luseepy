@@ -1,0 +1,12 @@
+### DEPRECATED ###
+
+# NB. Keep it for reference, we are migrating the Jupyter installation
+# to the underlying Unity image (e.g. this file is now deprecated)
+
+FROM lusee/lusee-night-unity-luseepy:0.1
+
+
+RUN pip install jupyterlab
+
+CMD jupyter lab --allow-root --ip 0.0.0.0 --port 8888
+

@@ -6,12 +6,12 @@ from .Beam import Beam
 
 class Throughput:
 
-    def __init__ (self, B=None, noise_e = 2, Cfront = 35, R4 = 1e6):
+    def __init__ (self, beam=None, noise_e = 2, Cfront = 35, R4 = 1e6):
         self.noise_e = noise_e
         self.Cfront = 35
         self.R4 = R4
         self._load_spice_sims()
-        self.beam = B if B is not None else Beam()
+        self.beam = beam if beam is not None else Beam()
         
     def _load_spice_sims(self):
         path = os.path.join(os.environ['LUSEE_DRIVE_DIR'],'Simulations/ElectronicsModel/Model54')
@@ -25,7 +25,7 @@ class Throughput:
             self._gain[l] = interp1d(f/1e6,10**(g/20.)*np.exp(1j*p/180*np.pi))
 
     def complex_gain(self,freq_MHz, gain_set = 'M'):
-        return self._preamp_gain(freq_MHz)*self._gain[gain_set](freq_MHz)
+        return self._gain[gain_set](freq_MHz) # preamp again included in gain set
 
     def power_gain(self,freq_MHz, gain_set = 'M'):
         c = self.complex_gain(freq_MHz, gain_set)

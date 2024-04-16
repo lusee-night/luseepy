@@ -1,8 +1,11 @@
-# Note that we force generationof the "astropy cache"
+# Note a copy of the local "astropy cache" into the image
+# This is the difference between this and "non-legacy" file.
 
 FROM lusee/lusee-night-refspec-cppyy:1.0
 
 ARG reqs=requirements-unity-luseepy.txt
+
+ADD .astropy /root/.astropy
 
 WORKDIR /data
 
@@ -11,10 +14,6 @@ WORKDIR /user/luseepy
 COPY docker/${reqs} requirements.txt
 RUN pip install --upgrade pip
 RUN pip install -r requirements.txt
-
-# force astropy to create /root/.astropy directory
-RUN python -c "import astropy.coordinates, astropy.time; astropy.coordinates.get_body('moon',astropy.time.Time('2026-01-01'))" && ls -l /root/.astropy
-
 #
 # Important:
 RUN pip install jupyterlab

@@ -4,6 +4,12 @@ from    .Observation import Observation
 from .LunarCalendar  import LunarCalendar
 from .Throughput import Throughput
 
+class ThroughputBeam:
+    ## dummy class to carry impedance for throughput
+    def __init__(self, freq,Z):
+        self.freq = freq
+        self.Z = Z
+
 class Data(Observation):
     def __init__(self, filename, throughput=None):
         """
@@ -52,10 +58,10 @@ class Data(Observation):
         self.Nfreq = len(self.freq)
         self.Ntimes = len(self.times)
         self.NComb = len(self.comb2ndx)
-        self.T = Throughput() if throughput is None else throughput
-        self.T2Vsq = self.T.T2Vsq(self.freq)
-        #self._calc_conversion_factors()
-                         
+        tbeam = ThroughputBeam(self.freq, self.ZRe[0]+1j*self.ZIm[0])
+        ## this might need fixing.
+        self.T = [Throughput(beam=tbeam) if throughput is None else throughput]*Nbeams
+        self.T2Vsq = [T.T2Vsq(self.freq) for T in self.T]
 
     def __getitem__(self, req):
         """
@@ -66,7 +72,7 @@ class Data(Observation):
         """
         
         day,comb,freq = req
-        fact = +1
+        fact = np.ones(self.Nfreq) # frequency scaling
         if type(comb) == str:
             if comb[0]=="-":
                 fact=-1
@@ -84,23 +90,32 @@ class Data(Observation):
             else:
                 what = 'R' if (i==j) else 'C'
 
-        if len(what)>1:
-            wfact = what[1:]
-            if wfact == "V":
-                fact *= np.sqrt(self.T2Vsq[i]*self.T2Vsq[j])
-            else:
-                print ('X',fact,'y')
-                raise NotImplemented
-            what=what[0]
+       
+        vwhat = what[1:]
+        what = what[0] 
+    
         ndx = self.comb2ndx[(i,j)]
         if what == "R":
-            return fact*self.data[day,ndx,freq]
+            toret = self.data[day,ndx,freq]
         if what == "I":
             assert (i!=j)
-            return fact*self.data[day,ndx+1,freq]
+            toret= self.data[day,ndx+1,freq]
         if what == "C":
             assert (i!=j)
-            return fact*self.data[day,ndx,freq]+1j*self.data[day,ndx+1,freq]
+            toret=self.data[day,ndx,freq]+1j*self.data[day,ndx+1,freq]
+
+
+        if vwhat == "":
+            return toret
+        elif vwhat == "V":
+                ## ffact can be scalar +1 or -1
+                T2V = np.sqrt(self.T2Vsq[i]*self.T2Vsq[j])[freq]
+                if toret.ndim == 1:
+                    return toret*T2V
+                else:
+                    return toret*T2V[None,:]
+        else:
+            raise NotImplemented
 
         # Should not get here.
         raise NotImplemented

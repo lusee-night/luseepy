@@ -29,12 +29,12 @@ class Satellite:
     """
     ### ------------
     def __init__(self,
-        semi_major_km               =5738,
-        eccentricity                =0.56489,
-        inclination_deg             =57.097,
-        raan_deg                    =0,
-        argument_of_pericenter_deg  =72.625,
-        aposelene_ref_time          =Time("2024-05-01T00:00:00"),
+        semi_major_km               = 5738,
+        eccentricity                = 0.56489,
+        inclination_deg             = 57.097,
+        raan_deg                    = 0,
+        argument_of_pericenter_deg  = 72.625,
+        aposelene_ref_time          = Time("2024-05-01T00:00:00"),
     ):
         ## first period
         M_moon = 7.34767309e22 * u.kg
@@ -55,9 +55,8 @@ class Satellite:
         ## and the other perpendicular to it
 
         ## Ok, this is some hocus pocus that might or might not be right
-        r = R.from_euler(
-            "zxz", [argument_of_pericenter_deg, inclination_deg, raan_deg], degrees=True
-        )
+        r = R.from_euler("zxz", [argument_of_pericenter_deg, inclination_deg, raan_deg], degrees=True)
+
         self.pericent_norm = r.apply(np.array([1.0, 0.0, 0.0]))
         self.periperp_norm = r.apply(np.array([0.0, 1.0, 0.0]))
         self.t0 = aposelene_ref_time
@@ -113,12 +112,19 @@ class ObservedSatellite:
     
     """    
     def __init__(self, observation, satellite):
-        self.observation = observation
-        self.satelite = satellite
-        self.posxyz = satellite.predict_position_mcmf(observation.times)
-        self.sky_coords = SkyCoord(MCMF(*(self.posxyz.T*u.km)))
+        self.observation    = observation
+        self.satellite      = satellite
+        self.posxyz         = satellite.predict_position_mcmf(observation.times)
+        self.sky_coords     = SkyCoord(MCMF(*(self.posxyz.T*u.km)))
+
+        # The magic happens here:
         self.satpos = self.sky_coords.transform_to(LunarTopo(location=observation.loc))
 
+        self.alt    = self.alt_rad()
+        self.az     = self.az_rad()
+        self.mjd    = [timepoint.mjd for timepoint in observation.times]
+
+    ###
     def alt_rad(self):
         """
         Function that returns satellite altitude in radians
@@ -126,8 +132,9 @@ class ObservedSatellite:
         :returns: Satellite altitude
         :rtype: numpy array
         """
-        return np.array(self.satpos.alt).astype(float) / 180.0 * np.pi
+        return (np.array(self.satpos.alt).astype(float)/180.0)*np.pi
 
+    ###
     def az_rad(self):
         """
         Function that returns satellite azimuth in radians
@@ -135,9 +142,9 @@ class ObservedSatellite:
         :returns: Satellite azimuth
         :rtype: numpy array
         """
-        
-        return np.array(self.satpos.az).astype(float) / 180.0 * np.pi
+        return (np.array(self.satpos.az).astype(float)/180.0)*np.pi
 
+    ###
     def dist_km(self):
         """
         Function that returns distance to satellite in km
@@ -147,6 +154,7 @@ class ObservedSatellite:
         """
         return np.array(self.satpos.distance / u.km).astype(float)
 
+    ###
     def get_transit_indices(self):
         """
         Function that returns an array of transit indices for satellite and observation times specified in ObservedSatellite class
@@ -173,7 +181,8 @@ class ObservedSatellite:
                 tostate = not tostate
         return passes
 
-    ### ------------
+    ### --------------------------------
+    ###
     def plot_tracks(self, ax, lin_map = False):
         """
         Function that plots satellite trajectories
@@ -194,6 +203,7 @@ class ObservedSatellite:
         for s, e in transits:
             ax.plot(X[s:e], Y[s:e])
 
+    ###
     def get_track_coverage(self, Nphi=10, Nmu=10):
         """
         Function that returns array of alt-az bins showing where satellite transit passed. Bins are 1 if satellite passed through bin, 0 if not.
@@ -217,5 +227,4 @@ class ObservedSatellite:
             m[altbin[s:e],azbin[s:e]] = 1
 
         return m
-    
     

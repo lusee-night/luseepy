@@ -352,12 +352,12 @@ class Beam:
             Q = np.abs(self.Etheta**2)-np.abs(self.Ephi**2)
             T = 2*self.Etheta*np.conj(self.Ephi)
             U = np.real(T)
-            V = np.imag(T)
+            V = -np.imag(T)
         else:
             I = self.Etheta*np.conj(cross.Etheta) + self.Ephi*np.conj(cross.Ephi)
             Q = self.Etheta*np.conj(cross.Etheta) - self.Ephi*np.conj(cross.Ephi)
             U = self.Etheta*np.conj(cross.Ephi)+self.Ephi*np.conj(cross.Etheta)
-            V = +1j*self.Etheta*np.conj(cross.Ephi)-self.Ephi*np.conj(cross.Etheta)
+            V = +1j*(self.Etheta*np.conj(cross.Ephi)-self.Ephi*np.conj(cross.Etheta))
         return [I,Q,U,V]
 
     

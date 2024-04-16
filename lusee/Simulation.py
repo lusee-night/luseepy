@@ -275,7 +275,7 @@ class Simulator:
         fits = fitsio.FITS(out_file,'rw',clobber=True)
         header = {
             "version":      0.1,
-            "lunar_day":    self.obs.lunar_day,
+            "lunar_day":    self.obs.time_range,
             "lun_lat_deg":  self.obs.lun_lat_deg,
             "lun_long_deg": self.obs.lun_long_deg,
             "lun_height_m": self.obs.lun_height_m,
