@@ -26,6 +26,18 @@ The Beams
 .. automodule:: lusee.Beam
    :members:
 
+The Gaussian Beam
+--------------
+
+.. automodule:: lusee.BeamGauss
+   :members:
+
+The Beam Couplings
+--------------
+
+.. automodule:: lusee.BeamCouplings
+   :members:
+
 The Simulator
 --------------
 
@@ -57,3 +69,20 @@ The Lunar Calendar
 .. automodule:: lusee.LunarCalendar
    :members:
 
+The Throughput
+--------------
+
+.. automodule:: lusee.Throughput
+   :members:
+
+The Data
+--------------
+
+.. automodule:: lusee.Data
+   :members:
+
+The PCA Analyzer
+--------------
+
+.. automodule:: lusee.PCAanalyzer
+   :members:

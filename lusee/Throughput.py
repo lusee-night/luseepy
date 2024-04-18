@@ -5,6 +5,18 @@ import  astropy.constants  as const
 from .Beam import Beam
 
 class Throughput:
+    """
+    Class that holds front-end throughput parameters
+
+    :param beam: Beam class object
+    :type beam: class
+    :param noise_e: Amplifier noise in nV/rtHz
+    :type noise_e: float
+    :param Cfront: Front-end capacitance in pico-farads
+    :type Cfront: float
+    :param R4: Front-end resistance in Ohms
+    :type R4: float
+    """
 
     def __init__ (self, beam=None, noise_e = 2, Cfront = 35, R4 = 1e6):
         self.noise_e = noise_e
@@ -25,19 +37,58 @@ class Throughput:
             self._gain[l] = interp1d(f/1e6,10**(g/20.)*np.exp(1j*p/180*np.pi))
 
     def complex_gain(self,freq_MHz, gain_set = 'M'):
+        """
+        Function that calculates the complex gain of the front-end amplifiers at a specified frequency
+
+        :param freq_MHz: Frequency in MHz
+        :type freq_MHz: float
+        :param gain_set: Gain setting
+        :type gain_set: str
+
+        :returns: Complex gain at input frequency
+        :rtype: complex
+        """
         return self._gain[gain_set](freq_MHz) # preamp again included in gain set
 
     def power_gain(self,freq_MHz, gain_set = 'M'):
+        """
+        Function that calculates the gain of the front-end amplifiers in power at a specified frequency
+
+        :param freq_MHz: Frequency in MHz
+        :type freq_MHz: float
+        :param gain_set: Gain setting
+        :type gain_set: str
+
+        :returns: Gain in power
+        :rtype: float
+        """
         c = self.complex_gain(freq_MHz, gain_set)
         return np.abs(c**2)
     
     def setCfront(self,Cfront):
+        """
+        Function that sets the front-end capacitance in the Throughput class
+
+        :param Cfront: Front-end capacitance in pico-farads
+        :type Cfront: float
+
+        :returns: None
+        :rtype: None
+        """
         self.Cfront = Cfront
         #self._calc_conversion_factors()
 
 
     def AntennaImpedanceInterp(self,f):
-        #extrapolates antenna impedance
+        """
+        Function that extrapolates antenna impedance as a function of frequency
+
+        :param f: Array of frequencies at which to calculate impedance
+        :type f: array
+
+        :returns: Antenna impedance
+        :rtype: array
+        """
         out = np.zeros_like(f,complex)
         bfreq = self.beam.freq
         fmin = bfreq[0]
@@ -50,6 +101,15 @@ class Throughput:
 
         
     def Gamma_VD(self,freq):
+        """
+        Function that calculates gamma at a specified frequency for antenna impedance matching
+
+        :param freq: Frequency in Hz
+        :type freq: float
+
+        :returns: Gamma_VD
+        :rtype: float
+        """
         omega = 2*np.pi*freq*1e6
         Zrec  = 1/(1j*omega*(self.Cfront*1e-12) + 1/self.R4)
         ZAnt = self.AntennaImpedanceInterp(freq)
@@ -57,6 +117,15 @@ class Throughput:
         return Gamma_VD
     
     def T2Vsq(self,freq):
+        """
+        Function that calculates 4*k_B*R*Gamma^2 for antenna match
+
+        :param freq: Frequency
+        :type freq: float
+
+        :returns: T2Vsq
+        :rtype: float
+        """
         kB = const.k_B.value
         c = const.c.value
         ## 1 / i w C , 1e6 = MHz, 1e-12 is pico (farad)
@@ -66,6 +135,15 @@ class Throughput:
 
 
     def SG2V(self,freq):
+        """
+        Function that calculates 4*lambda*R*Gamma^2 for antenna match
+
+        :param freq: Frequency
+        :type freq: float
+
+        :returns: T2Vsq
+        :rtype: float
+        """
         kB = const.k_B.value
         c = const.c.value
         ## 1 / i w C , 1e6 = MHz, 1e-12 is pico (farad)
