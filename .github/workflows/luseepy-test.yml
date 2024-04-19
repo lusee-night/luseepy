@@ -1,6 +1,6 @@
 name: luseepy-test
 on:
-  # Triggers the workflow on push or pull request events but only for the main branch
+  # TBD -- needs to be triggered on all branches, keep one for dev purposes for now
   push:
     branches: [ maxim-ci ]
   pull_request:
@@ -18,11 +18,12 @@ jobs:
     container: lusee/lusee-night-unity-luseepy:1.2
     steps:
       - uses: actions/checkout@v4
+      - run: pwd
       - run: wget "https://drive.google.com/uc?export=download&id=1cdKZpq81DmLBy_gbGy-DpNYXbvnQAJG9" -O drive.tgz
       - run: tar zxvf drive.tgz
       - run: ls -l
       - run: python tests/LunarCalendarTest.py  -v
-#      - run: python tests/CoordTest.py
-#      - run: python tests/SimTest.py
+      - run: python tests/CoordTest.py
+      - run: python tests/SimTest.py
 #      - run: cd simulation; ln -s ../Drive .; mkdir output; python driver/run_sim.py config/example.yaml; ls -l output
 #      - run: python tests/SimReadTest.py simulation/output/sim_example.fits
