@@ -3,8 +3,22 @@ import numpy as np
 
 def gauss_beam(theta,phi,sigma, theta_c,phi_c=0.):
     """
-    Creates a map-level gaussian beam in theta, phi of width sigma, centered at theta=theta_c and phi=phi_c
-    Uses a naive gaussian function, with wrap around for theta, phi
+    Function that creates a map-level gaussian beam in theta and phi of width sigma, centered at theta=theta_c and phi=phi_c.
+    Uses a naive gaussian function, with wrap around for theta, and phi. Used by BeamGauss class to create a Gaussiam Beam object.
+
+    :param theta: Array of theta coordinates
+    :type theta: array
+    :param phi: Array of phi coordinates
+    :type phi: array
+    :param sigma: Beam width (standard deviation)
+    :type sigma: float
+    :param theta_c: Beam center theta
+    :type theta_c: float
+    :param phi_c: Beam center phi
+    :type phi_c: float
+    
+    :returns: Gaussian beam in theta and phi
+    :rtype: array
     """
     
     phiprime=np.min((phi-phi_c,2*np.pi-phi+phi_c),axis=0) #phi wrap around
@@ -15,15 +29,22 @@ def gauss_beam(theta,phi,sigma, theta_c,phi_c=0.):
 
 class BeamGauss(Beam):
     """
-    Gaussian Beam object, centered at the given declination (and phi=360-azimuth=0) and of width sigma. 
+    Class that creates a Gaussian Beam object, centered at the given declination (and phi=360-azimuth=0) and of width sigma. 
+
+    :param Beam: Beam object
+    :type Beam: class
+    :param dec_deg: Declination of the center of the gaussian beam, in degrees 
+    :type dec_deg: float
+    :param sigma_deg: Sigma of the gaussian beam at 1MHz, in degrees 
+    :type dec_deg: float
+    :param phi_deg: Phi center of the gaussian beam, in degrees, phi=0->E, phi=90->N
+    :type phi_deg: float
+    :param one_over_freq_scaling: Whether to scale beam sigma with 1/f
+    :type one_over_freq_scaling: bool
+    :param id: ID string for beam, optional
+    :type id: str
     """
-    def __init__ (self, dec_deg, sigma_deg, phi_deg=90, one_over_freq_scaling=False, id = None):
-        """
-        dec_deg : declination of the center of the gaussian beam, in degrees
-        phi_deg : phi center of the gaussian beam, in degrees, phi=0->E, phi=90->N
-        sigma_deg : sigma of the gaussian beam at 1MHz, in degrees
-        """
-        
+    def __init__ (self, dec_deg, sigma_deg, phi_deg=90, one_over_freq_scaling=False, id = None):     
         self.version=2.1 #what should this be? 
         # v1 so that self.freq=np.linspace as below
         # >v2 so that self.ground_fraction() can be calculated

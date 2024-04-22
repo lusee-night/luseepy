@@ -5,17 +5,30 @@ from .LunarCalendar  import LunarCalendar
 from .Throughput import Throughput
 
 class ThroughputBeam:
+    """
+    Dummy class that contains complex impedance for Throughput class
+
+    :param freq: Frequency
+    :type freq: float
+    :param Z: Complex impedance
+    :type Z: numpy array[complex]
+    """
     ## dummy class to carry impedance for throughput
     def __init__(self, freq,Z):
         self.freq = freq
         self.Z = Z
 
 class Data(Observation):
+    """
+    Class that holds data from an observation
+
+    :param filename: Filename of observation to load
+    :type filename: str
+    :param throughput: Front-end throughput parameters
+    :type throughput: class
+    """
+    
     def __init__(self, filename, throughput=None):
-        """
-           noise_e is amplifier noise in nV/rtHz
-           Cfront is front-end capacticance in pico-farads
-        """
         header = dict(fitsio.read_header(filename))
         version = header['VERSION']
         lunar_day    = header['LUNAR_DAY']
@@ -64,12 +77,10 @@ class Data(Observation):
         self.T2Vsq = [T.T2Vsq(self.freq) for T in self.T]
 
     def __getitem__(self, req):
-        """
-         Can do things like
-           O[0,"01R",:]
-        or 
-          O[0,(0,1,'R'),:]
-        """
+        # Can do things like
+        #   O[0,"01R",:]
+        # or 
+        #   O[0,(0,1,'R'),:]
         
         day,comb,freq = req
         fact = np.ones(self.Nfreq) # frequency scaling
