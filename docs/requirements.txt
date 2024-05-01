@@ -7,3 +7,5 @@ scipy
 fitsio
 matplotlib
 healpy
+pandas
+sphinx-rtd-theme

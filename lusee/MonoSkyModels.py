@@ -6,9 +6,15 @@ from scipy.io import readsav
 import os
 
 def B_NB(f):
-    ''' return sky brightness (W/m**2/Hz/sr) at frequency f (MHz) 
-        according to the model of Novaco and Brown 1978 ApJ 221 (1978): 114-123
-	'''
+    """
+    Function that returns sky brightness, B, in [W/m**2/Hz/sr] at a frequency, f, in [MHz] according to the model of Novaco and Brown from ApJ 221 (1978): 114-123
+
+    :param f: Frequency in [MHz]
+    :type f: float
+
+    :returns: Sky brightness in [W/m**2/Hz/sr]
+    :rtype: float
+    """
     B0 = 1.36e-19
     plB = -0.76
     pltau = -0.64
@@ -16,12 +22,27 @@ def B_NB(f):
     return B0 * f**plB * np.exp(-1.*tau)
 
 def T_NB(f):
+    """
+    Function that returns sky temperature, T, in [K] at frequency, f, in [MHz] according to the model of Novaco and Brown from ApJ 221 (1978): 114-123
+
+    :param f: Frequency in [MHz]
+    :type f: float
+
+    :returns: Sky temperature, T,  in [K]
+    :rtype: float      
+    """
     return B2T(B_NB(f),f)
 
 def B_C(f):
-    ''' return sky brightness (W/m**2/Hz/sr) at frequency f(MHz) 
-        according to the model of Cane 1979 MNRAS 189.3 (1979): 465-478.
-	'''
+    """ 
+    Function that returns sky brightness, B, in [W/m**2/Hz/sr] at frequency, f, in [MHz] according to the model of Cane from MNRAS 189.3 (1979): 465-478.
+
+    :param f: Frequency in [MHz]
+    :type f: float
+
+    :returns: Sky brightness in [W/m**2/Hz/sr]
+    :rtype: float   
+	"""
     Ig = 2.48e-20
     Ieg = 1.06e-20
     plg = -0.52
@@ -31,31 +52,80 @@ def B_C(f):
     return Ig * f**plg * (1 - np.exp(-1.*tau))/tau + Ieg * f**pleg * np.exp(-1.0 * tau)
 
 def T_C(f):
+    """
+    Function that returns sky temperature, T, in [K] at frequency, f, in [MHz] according to the model of Cane from MNRAS 189.3 (1979): 465-478.
+
+    :param f: Frequency in [MHz]
+    :type f: float
+
+    :returns: Sky temperature, T,  in [K]
+    :rtype: float      
+    """
     return B2T(B_C(f),f)
 
 
 def T_J(f):
-    ''' return sky brightness in K at frequency f(MHz) 
-        according to Eq 2 of Chen et al (Exp Astronomy 2018 45:231-253)
-	'''
+    """
+    Function that returns sky temperature, T, in [K] at frequency, f, in [MHz] according to Eq. 2 of Chen et al (Exp Astronomy 2018 45:231-253)
+
+    :param f: Frequency in [MHz]
+    :type f: float
+
+    :returns: Sky temperature, T, in [K]
+    :rtype: float  
+    """
     T = 16.3e6*(f/2)**(-2.53)
     T[f<2] = 16.3e6*(f[f<2]/2)**(-0.3)
     return T
 
 
 def T2B(T, f):
-    ''' return brightness temperature in W/m*2/Hz/sr from T in K and f in MHz) '''
+    """ 
+    Function that returns sky brightness, B, in [W/m*2/Hz/sr] from temperature, T, in [K] and frequency, f, in [MHz] 
+
+    :param T: Sky temperature in [K]
+    :type T: float
+    :param f: Frequency in [MHz]
+    :type f: float
+
+    :returns: Sky brightness, B, in [W/m*2/Hz/sr]
+    :rtype: float  
+    """
     B = 2 * const.k_B * T*u.K * (f * u.MHz)**2 / (const.c)**2
     return B.to(u.W / u.m / u.m / u.Hz)
 
 def B2T(B, f):
-    ''' return brightness temperature in K from brightness in W/m*2/Hz/sr and f in MHz '''
+    """ 
+    Function that returns sky temperature, T, in [K] from brightness, B, in [W/m*2/Hz/sr] and frequency, f, in [MHz]
+
+    :param B: Sky brightness in [W/m*2/Hz/sr]
+    :type B: float
+    :param f: Frequency in [MHz]
+    :type f: float
+
+    :returns: Sky temperature, T, in [K]
+    :rtype: float
+    """
     B_units = u.W / u.m / u.m / u.Hz
     T = B * B_units * (const.c)**2 / 2 / const.k_B / (f * u.MHz)**2
     return T.to(u.K)
 
 def B2V(B, f, leff, gamma):
-    ''' return V^2/Hz for dipole of effective length leff [m] and preamp coupling efficiency gamma c.f. Zaslavsky (11) '''
+    """ 
+    Function that returns power spectral density in [V^2/Hz] for a dipole of effective length leff in [m] and preamp coupling efficiency gamma c.f. Zaslavsky (11) 
+
+    :param B: Sky brightness in [W/m*2/Hz/sr]
+    :type B: float
+    :param f: Frequency in [MHz]
+    :type f: float
+    :param leff: Effective dipole length in [m]
+    :type leff: float
+    :param gamma: Preamplifier coupling efficiency
+    :type gamma: float
+    
+    :returns: Power spectral density in [V^2/Hz]
+    :rtype: float 
+    """
     return 4*np.pi / 3. * 377 * B * (leff*gamma)**2
 
 
@@ -908,6 +978,12 @@ T_DarkAges = interp1d(_DA_nu,_DA_TSig)
 ## Now a scaled and cut dark ages signal
 
 def _interp_to_zero():
+    """
+    Function that cuts stored Dark Ages temperature decrement signal data (_DA_nu and _DA_Tsig, calculated from fiducial cosmological model?) to frequencies below 50 MHz, and interpolates the temperature decrement in the range from 32.5 MHz to 50 MHz so that it smoothly converges to 0 at 50 MHz.
+
+    :returns: Frequency, nu, in [MHz], and sky temperature decrement, T, in [K]
+    :rtype: float, float
+    """ 
     w = np.where(_DA_nu<50)
     nu = _DA_nu[w]
     T = _DA_TSig[w]
@@ -918,6 +994,21 @@ def _interp_to_zero():
 _DA_nu_cut, _DA_TSig_cut = _interp_to_zero()
 
 def T_DarkAges_Scaled (nu, nu_min = 16.4, nu_rms = 14, A = 0.04):
+    """
+    Function that rescales the location, width, and depth of the Dark Ages temperature decrement signal (the Dark Ages "trough"), and interpolates the temperature decrement at the specified frequencies, nuu. Dark Ages model uses the _DA_nu_cut and _DA_TSig_cut data, which are cut to below 50 MHz, and interpolated to zero at 50 MHz.
+    
+    :param nu: List of frequencies at which to calculate the Dark Ages temperature signal
+    :type nu: list
+    :param nu_min: Frequency of the minimum of the Dark Ages trough
+    :type nu_min: float
+    :param nu_rms: Width of the Dark Ages trough
+    :type nu_rms: float
+    :param A: Monopole signal amplitude scaling factor
+    :type A: float
+    
+    :returns: Sky temperature, T, in [K]
+    :rtype: float
+    """ 
     out = np.zeros_like(nu)
     nu_resc = 16.4+(nu-nu_min)*(14/nu_rms)
     out=interp1d(_DA_nu_cut, _DA_TSig_cut, fill_value=0, bounds_error=False, kind='linear')(nu_resc)
@@ -925,6 +1016,14 @@ def T_DarkAges_Scaled (nu, nu_min = 16.4, nu_rms = 14, A = 0.04):
 
 
 class BalePlasmaEffects:
+    """
+    Class that loads data from simulations by Stuart Bale modeling plasma effects on observed radio signal, and interpolates the signal at a specified frequency in [MHz].
+
+    :param fname: Filename to load
+    :type fname: str
+    :param freq_MHz: Frequency in [MHz]
+    :type freq_MHz: float 
+    """ 
     def __init__(self, fname = 'R1_L300cm_n500t2k6v0nf300.sav'):
         d = readsav(os.path.join(os.environ['LUSEE_DRIVE_DIR'],'Simulations/SkyModels/PlasmaEffects',fname))
         self._interp = interp1d(d['f_sp']/1e6,d['v2'])

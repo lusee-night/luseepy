@@ -13,6 +13,19 @@ import os
 
 
 def getLegendre(lmax, theta):
+    """
+    Function that calculates Legendre polynomial functions up to specified degree
+    
+    :param lmax: Maximum degree of Legendre functions
+    :type lmax: int
+    :param theta: Argument of Legendre function
+    :type theta: float
+    
+    :returns: 2D array of Legendre functions, array indices are l and m
+    :rtype: numpy array
+    
+    """
+    
     L=legendre(lmax,np.cos(theta),normalization='ortho')
     L[:,1:]/=np.sqrt(2) # m>0 divide by sqrt(2)
     L[:,1::2]*=-1 # * (-1)**m
@@ -20,6 +33,22 @@ def getLegendre(lmax, theta):
 
 
 def grid2healpix_alm_reference(theta,phi, img, lmax):
+    """
+    Function that calculates a_lm spherical harmonic decomposition for input image
+
+    :param theta: Input spherical angle coordinates
+    :type theta: numpy array
+    :param phi: Input spherical angle coordinates
+    :type phi: numpy array
+    :param img: Input image (2D)
+    :type img: numpy array
+    :param lmax: Maximum l value
+    :type lmax: int
+
+    :returns: 2D a_lm spherical harmonic array
+    :rtype: numpy array
+    """
+    
     lmax = lmax + 1 ## different conventions
     dphi = phi[1]-phi[0]
     dtheta = theta[1]-theta[0]
@@ -39,6 +68,22 @@ def grid2healpix_alm_reference(theta,phi, img, lmax):
 
 
 def grid2healpix_alm_fast(theta,phi, img, lmax):
+    """
+    Function that calculates a_lm spherical harmonic decomposition for input image, using fast method
+
+    :param theta: Input spherical angle coordinates
+    :type theta: numpy array
+    :param phi: Input spherical angle coordinates
+    :type phi: numpy array
+    :param img: Input image (2D)
+    :type img: numpy array
+    :param lmax: Maximum l value
+    :type lmax: int
+
+    :returns: 2D a_lm spherical harmonic array
+    :rtype: numpy array
+    """
+    
     # lmax has different definitions
     dtheta = theta[1]-theta[0]
     dA_theta = np.sin(theta)*dtheta
@@ -60,15 +105,49 @@ def grid2healpix_alm_fast(theta,phi, img, lmax):
 
 
 def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
+    """
+    Function that converts from theta-phi orthogonal spherical coordinates to heapix coordinates
+
+    :param theta: Input spherical angle coordinates
+    :type theta: numpy array
+    :param phi: Input spherical angle coordinates
+    :type phi: numpy array
+    :param img: Input image (2D)
+    :type img: numpy array
+    :param lmax: Maximum l value
+    :type lmax: int
+    :param Nside: Size of output Healpix map
+    :type Nside: int
+    :param fast: Whether to use fast a_lm method
+    :type fast: bool
+
+    :returns: Healpix map of size Nside
+    :rtype: numpy array
+    """
+    
     if fast:
         alm = grid2healpix_alm_fast(theta,phi,img,lmax)
     else:
         alm = grid2healpix_alm_reference(theta,phi,img,lmax)
-    return hp.sphtfunc.alm2map (alm,Nside)
+    return hp.sphtfunc.alm2map(alm,Nside)
 
 
 
 def project_to_theta_phi(theta_rad,phi_rad, E):
+    """
+    Function that projects E_theta and E_phi components of instrument beam from E field in cartesian coordinates, E(x, y, z) 
+
+    :param theta: Input spherical angle coordinates
+    :type theta: numpy array
+    :param phi: Input spherical angle coordinates
+    :type phi: numpy array
+    :param E: Electric field
+    :type E: numpy array
+
+    :returns: [Etheta, Ephi], Theta and phi components of electric field at [theta, phi] coordinates
+    :rtype: numpy array
+    """
+    
     #create projection matrices
     theta = theta
     phi= phi
@@ -91,6 +170,63 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
 
 
 class Beam:
+    """
+    The main beam class, contains beam data and meta parameters. Only filename of beam to load and ID string are explicitly set in class initialization. All others are normally read in from the beam FITS file, but are included here in documentation for completeness.
+
+    :param fname: Filename of beam to load
+    :type fname: str
+    :param id: ID string for beam, optional
+    :type id: str
+    :param version: Beam version
+    :type version: int
+    :param Etheta: Theta component of electric field
+    :type Etheta: numpy array[complex]
+    :param Ephi: Phi component of electric field
+    :type Ephi: numpy array[complex]
+    :param ZRe: Real component of antenna impedance
+    :type ZRe: numpy array
+    :param ZIm: Imaginary component of antenna impedance
+    :type ZIm: numpy array
+    :param Z: Complex impedance
+    :type Z: numpy array[complex]
+    :param gain: Antenna gain
+    :type gain: numpy array
+    :param f_ground: Ground fraction
+    :type f_ground: numpy array
+    :param gain_conv: Gain convention
+    :type gain_conv: numpy array
+    :param freq: Frequency list
+    :type freq: numpy array
+    :param freq_min: Minimum frequency    
+    :type freq_min: float
+    :param freq_max: Maximum frequency
+    :type freq_max: float
+    :param Nfreq: Number of frequencies
+    :type Nfreq: int
+    :param theta_min: Minimum theta angle
+    :type theta_min: float
+    :param theta_max: Maximum theta angle
+    :type theta_max: float
+    :param Ntheta: Number of theta bins
+    :type Ntheta: int
+    :param phi_min: Minimum phi angle
+    :type phi_min: float
+    :param phi_max: Maximum phi angle
+    :type phi_max: float
+    :param Nphi: Number of phi bins
+    :type Nphi: int
+    :param header: File header
+    :type header: dict
+    :param theta_deg: Array of theta bins in degrees
+    :type theta_deg: numpy array
+    :param phi_deg: Array of theta bins in degrees
+    :type phi_deg: numpy array
+    :param theta: Array of theta bins in radians
+    :type theta: numpy array
+    :param phi: Array of phi bins in radians
+    :type phi: numpy array
+    """
+    
     def __init__ (self, fname = None, id = None):
         if fname is None:
             fname = base = os.environ['LUSEE_DRIVE_DIR']+"Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
@@ -131,9 +267,19 @@ class Beam:
         self.theta = self.theta_deg/180*np.pi
         self.phi = self.phi_deg/180*np.pi
         if (self.phi_max != 360) or (self.phi_min != 0):
-            print ("Code might implicitly assume phi wraparound ... use with care.")
+            print("Code might implicitly assume phi wraparound ... use with care.")
         
     def rotate(self,deg):
+        """
+        Function that rotates the beam around the zenith (turntable rotation)
+
+        :param deg: Rotational angle in degrees
+        :type deg: float
+        
+        :returns: Rotated beam as copy of beam object
+        :rtype: class
+        """
+        
         dphi = self.phi_deg[1]-self.phi_deg[0]
         assert (deg%dphi<1e-5)
         if self.phi_max != 360:
@@ -141,7 +287,7 @@ class Beam:
             raise NotImplemented
         
         if deg==0:
-            return self.copy()
+            return self.copy_beam()
         rad = deg/180*np.pi
         cosrad = np.cos(rad)
         sinrad = np.sin(rad)
@@ -158,29 +304,51 @@ class Beam:
             Etheta = np.concatenate ((self.Etheta[:,:,m:],self.Etheta[:,:,1:m+1]),axis=2)
             Ephi = np.concatenate ((self.Ephi[:,:,m:],self.Ephi[:,:,1:m+1]),axis=2)
 
-        # No need to rotae in in theta  - phi
+        # No need to rotate in theta  - phi
         #rotmat = np.array(([[cosrad, +sinrad, 0],[-sinrad,cosrad,0],[0,0,1]]))
         #E = np.einsum('fabj,ij->fabi',E,rotmat)
 
 
-        return self.copy (Etheta=Etheta, Ephi=Ephi)
+        return self.copy_beam(Etheta=Etheta, Ephi=Ephi)
      
     def flip_over_yz(self):
+        """
+        Function that flips beams across yz plane
+        
+        :returns: Flipped beam as copy of beam object
+        :rtype: class
+        """
+        
         assert (False)
         m = int(90 // self.phi_step)
         n = int(180 // self.phi_step)
         o = int(270 // self.phi_step)
         Ephi = np.concatenate ((self.Ephi[:,:,n:0:-1],self.Ephi[:,:,self.Nphi:n-1:-1]),axis=2)
         #E[:,:,:,0]*=-1 ## X flips over
-        return self.copy (E=E)
+        return self.copy_beam(E=E)
 
     def power(self):
-        """ return power in the beam """
+        """
+        Function that calculates the beam power of a single beam
+        
+        :returns: Beam power
+        :rtype: float
+        """
+        
         P = np.abs(self.Etheta**2)+np.abs(self.Ephi**2)
         return P
 
     def power_stokes(self, cross=None):
-        """ return power in the beam """
+        """
+        Function that calculates the beam power in Stokes components
+
+        :param cross: Optional second beam object. If present, function will compute cross-power between the two beams given by "self" and "cross". If absent, defaults to computing auto-power for "self" beam object.
+        :type cross: class
+        
+        :returns: [I, Q, U, V]
+        :rtype: list[float]
+        """
+        
         if cross is None:
             I = np.abs(self.Etheta*self.Etheta)+np.abs(self.Ephi*self.Ephi)
             Q = np.abs(self.Etheta**2)-np.abs(self.Ephi**2)
@@ -196,12 +364,31 @@ class Beam:
 
     
     def cross_power(self, other):
-        """ return power in the beam """
+        """
+        Function that calculates the cross-power between two beams
+
+        :param other: Second beam object for cross-power
+        :type other: class
+        
+        :returns: Cross power
+        :rtype: float
+        """
+        
         xP = self.Etheta*np.conj(other.Etheta) + self.Ephi*np.conj(other.Ephi)
         return xP
 
 
     def sky_fraction(self, cross = None):
+        """
+        Function that calculates the fraction of beam power that terminates on the sky (sky fraction), for a single beam or two crossed beams
+        
+        :param cross: Optional second beam object 
+        :type cross: class
+        
+        :returns: Sky fraction
+        :rtype: float
+        """
+        
         if self.version<2:
             print ("Cannot do this on v1 files.")
         xP=self.power() if cross is None else self.cross_power(cross)
@@ -212,13 +399,43 @@ class Beam:
         f_sky = np.array([(dA_theta[:,None]*gain[i,:,:-1]).sum()/(4*np.pi) for i in range(self.Nfreq)])
         return f_sky
     
-    def ground_fraction(self):
-        f_ground = 1.0 - self.sky_fraction()
+    def ground_fraction(self, cross = None):
+        """
+        Function that calculates the fraction of beam power that terminates on the ground (ground fraction), for a single beam or two crossed beams
+
+        :param cross: Optional second beam object 
+        :type cross: class
+        
+        :returns: Ground fraction
+        :rtype: float
+        """
+        
+        f_ground = 1.0 - self.sky_fraction(cross)
+            
         return f_ground
         
     
     def power_hp(self, ellmax, Nside, freq_ndx=None, theta_tapr=None, cross=None, stokes=False):
-        """ returns healpix rendering of the power """
+        """
+        Function that calculates the healpix rendering of the beam power
+
+        :param ellmax: Maximum l value
+        :type ellmax: int
+        :param Nside: Size of output Healpix map
+        :type Nside: int
+        :param freq_ndx: Optional list of frequency bin indices. Integer indices, not freq values
+        :type freq_ndx: list(int)
+        :param theta_tapr: Optional tapering profile to apply to beam in theta direction
+        :type theta_tapr: numpy array
+        :param cross: Optional second beam object for cross-power
+        :type cross: class
+        :param stokes: Whether to compute Stokes parameters
+        :type stokes: bool
+        
+        :returns: Healpix map containing beam power
+        :rtype: numpy array or list(numpy array) if type(freq_ndx) is not int
+        """
+        
         if not stokes:
             P = self.power() if cross is None else self.power_cross(cross)
             P = [P] # lets' make it a list
@@ -249,7 +466,19 @@ class Beam:
 
 
 
-    def copy(self,Etheta=None, Ephi=None):
+    def copy_beam(self,Etheta=None, Ephi=None):
+        """
+        Function that copies a beam object. Optional field array inputs to, eg. rotate copied beam.
+
+        :param Etheta: Optional new theta component of E-field
+        :type Etheta: numpy array[complex]
+        :param Ephi: Optional new phi component of E-field
+        :type Ephi: numpy array[complex]
+        
+        :returns: Beam copy
+        :rtype: class
+        """
+        
         ret = copy.deepcopy(self)
         if Etheta is not None:
             ret.Etheta = Etheta
@@ -259,6 +488,19 @@ class Beam:
 
     
     def plotE(self, freqndx, toplot = None, noabs=False):
+        """
+        Function that plots 1D cuts of the E-field as a function of theta and phi
+
+        :param freqndx: List of frequency bins to plot. Integer indices, not freq values
+        :type freqndx: list(int)
+        :param toplot: Optional list of coord arrays to plot, eg. [self.Etheta, self.Ephi]. Defaults to full theta and phi arrays.
+        :type toplot: list[np.array[complex]]
+        :param noabs: Whether to plot absolute value of E-field.
+        :type noabs: bool
+        
+        :returns: None
+        """
+        
         plt.figure(figsize=(15,10))
         for i in range(2):
             plt.subplot(1,2,i+1)
@@ -272,6 +514,20 @@ class Beam:
             plt.colorbar(im, cax=cax)
 
     def get_healpix(self,lmax, field, freq_ndx = None):
+        """
+        Function that produces a healpix map of specified field
+
+        :param lmax: Maximum l value
+        :type lmax: int
+        :param field: Field to map (eg. Etheta)
+        :type field: numpy array[complex]
+        :param freq_ndx: Optional list of frequency bin indices. Integer indices, not freq values
+        :type freq_ndx: list(int)
+        
+        :returns: Healpix field map
+        :rtype: numpy array
+        """
+        
         if freq_ndx is None:
             freq_ndx = range(self.Nfreq)
         return  np.array([grid2healpix_alm_fast(self.theta,self.phi[:-1], field[fi,:,:-1],
