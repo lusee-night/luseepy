@@ -4,6 +4,9 @@
 ## About
 A set of python utilities for performing various LuSEE-Night related calculations.
 
+## Documentation
+
+This software is documented on the ["Read the Docs" pages](https://luseepy.readthedocs.io/en/latest/)
 
 ## Cached Data
 
