@@ -1,3 +1,4 @@
+"""A package for simulation of LuSEE-Night."""
 # -- FIXME --
 
 # -mxp- commented out some imports since the hardcoded cache breaks
