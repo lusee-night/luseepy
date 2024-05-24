@@ -19,7 +19,6 @@ from    datetime        import timedelta
 
 from    .LunarCalendar  import LunarCalendar
 
-
 # ---
 
 class Observation:
@@ -71,6 +70,7 @@ class Observation:
         # Locattion on the Moon:
         self.loc = MoonLocation.from_selenodetic(lon=self.lun_long_deg, lat=self.lun_lat_deg, height=self.lun_height_m)
 
+
         if type(time_range) == int:
             lc = LunarCalendar()
             self.time_start, self.time_end = lc.get_lunar_start_end(time_range)
@@ -96,11 +96,20 @@ class Observation:
                 raise NotImplementedError
         elif(type(time_range)==tuple):
             self.set_time_range(time_range)
+        elif(isinstance(time_range, np.ndarray)):
+                pass # print("time range is a numpy array")
         else:
             raise NotImplementedError                    
 
-        self.deltaT = TimeDelta(deltaT_sec * u.s) # NB units
-        self.times  = np.arange(self.time_start, self.time_end + self.deltaT, self.deltaT).astype(Time)
+        if(isinstance(time_range, np.ndarray)):
+            N = time_range.shape[0]
+            t_temp = time_range
+            for n in range(N):
+                t_temp[n] = Time(time_range[n])
+            self.times  =  t_temp # time_range.astype(Time)
+        else:
+            self.deltaT = TimeDelta(deltaT_sec * u.s) # NB units
+            self.times  = np.arange(self.time_start, self.time_end + self.deltaT, self.deltaT).astype(Time)
 
 
     # ---

@@ -36,6 +36,7 @@ class Satellite:
         argument_of_pericenter_deg  = 72.625,
         aposelene_ref_time          = Time("2024-05-01T00:00:00"),
     ):
+        
         ## first period
         M_moon = 7.34767309e22 * u.kg
         self.semi_major = semi_major_km
@@ -112,9 +113,18 @@ class ObservedSatellite:
     
     """    
     def __init__(self, observation, satellite):
+
+        if(isinstance(satellite, Satellite)):
+            print('here')
+            self.posxyz = satellite.predict_position_mcmf(observation.times)
+        elif(isinstance(satellite, np.ndarray)):
+            print("a numpy array")
+            self.posxyz = satellite
+        else:
+            raise NotImplementedError    
+
         self.observation    = observation
         self.satellite      = satellite
-        self.posxyz         = satellite.predict_position_mcmf(observation.times)
         self.sky_coords     = SkyCoord(MCMF(*(self.posxyz.T*u.km)))
 
         # The magic happens here:
@@ -122,6 +132,7 @@ class ObservedSatellite:
 
         self.alt    = self.alt_rad()
         self.az     = self.az_rad()
+        print(observation.times)
         self.mjd    = [timepoint.mjd for timepoint in observation.times]
 
     ###
