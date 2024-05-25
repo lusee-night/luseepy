@@ -102,13 +102,13 @@ class Observation:
             raise NotImplementedError                    
 
         if(isinstance(time_range, np.ndarray)):
-            N = time_range.shape[0]
-            t_temp = time_range
-            for n in range(N):
-                # print(type(time_range[n]))
-                t_temp[n] = Time(str(time_range[n]), format='mjd')
+            # N = time_range.shape[0]
+            # t_temp = time_range
+            # for n in range(N):
+            #     # print(type(time_range[n]))
+            #     t_temp[n] = Time(str(time_range[n]), format='mjd')
 
-            self.times  =  t_temp # time_range.astype(Time)
+            self.times  =  time_range # time_range.astype(Time)
         else:
             self.deltaT = TimeDelta(deltaT_sec * u.s) # NB units
             self.times  = np.arange(self.time_start, self.time_end + self.deltaT, self.deltaT).astype(Time)
