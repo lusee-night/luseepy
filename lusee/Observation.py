@@ -105,7 +105,9 @@ class Observation:
             N = time_range.shape[0]
             t_temp = time_range
             for n in range(N):
-                t_temp[n] = Time(time_range[n])
+                # print(type(time_range[n]))
+                t_temp[n] = Time(str(time_range[n]), format='mjd')
+
             self.times  =  t_temp # time_range.astype(Time)
         else:
             self.deltaT = TimeDelta(deltaT_sec * u.s) # NB units
