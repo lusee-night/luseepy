@@ -20,19 +20,13 @@ software interfaces by means of the _cppyy_ package.
 ## Developing
 
 To develop on your laptop, the easiest thing is to use the latest docker environment.
-Please install docker and pull the image
 
-```
+```bash
+# Please install docker and pull the image
 docker pull lusee/lusee-night-unity-luseepy:1.0 # or other appropriate version.
-```
-Next, checkout the lusee repo
-```
+#Next, checkout the lusee repo
 git clone git@github.com:lusee-night/luseepy.git
-```
-
-Next, source the `setup_env.sh` script inside luseepy dir and even better, put it into your `.bashrc`.
-
-```
+# Next, source the `setup_env.sh` script inside luseepy dir and even better, put it into your `.bashrc`.
 source setup_env.sh
 ```
 
@@ -46,7 +40,7 @@ To better understand the settings, it's worth it to take a look at the contents 
 In the current version, the `HOME` directory is mounted in the container, so it's possible to
 develop against the full current version of the luseepy/refspec suite. For example, you can now try running
 
-```
+```bash
 # Simple calendar test
 lpython tests/LunarCalendarTest.py
 # to start jupyter
@@ -66,8 +60,6 @@ The following environment variables are set up by the `setup_env.sh` script:
 
  * `LUSEE_IMAGE` -- docker image that has everything to run lusee
 
-
-
 ## Singularity
 
 __NB. The example below corresponds to an early verion of software, and reference to the image below is deprected.__
@@ -78,7 +70,6 @@ of a simple test run with Singularity, on a SDCC/BNL node, from the `luseepy` fo
 ```bash
 singularity exec -B /direct/phenix+u/mxmp/projects/luseepy --env PYTHONPATH=/direct/phenix+u/mxmp/projects/luseepy docker://lusee/lusee-night-foundation:0.1 ./tests/LunarCalendarTest.py
 ```
-
 
 ## Cutting a new version
 
@@ -95,14 +86,13 @@ Large changes that break API should bump version into next integer.
 
 ## Starting with simulations
 
-Go to `simulation` sub-directory. Make sure the `$LUSEE_DRIVE_DIR` points to the stuff from the LUSEE Drive that the simulations needs (ULSA maps, beam). Run a short simulation as
+Go to `simulation` sub-directory. Make sure the `$LUSEE_DRIVE_DIR` points to the stuff from the LUSEE Drive that the simulations needs (ULSA maps, beam).
 
-```
+```bash
+# Run a short simulation as
 python driver/run_sim.py config/realistic_example.yaml
-```
 
-In the same directory, open a jupyter notebook and plot the results for the NE cross-correlation, imaginary part as:
-```
+#In the same directory, open a jupyter notebook and plot the results for the NE cross-correlation, imaginary part as:
 import lusee
 D=lusee.Data('output/sim_output.fits')
 plt.imshow(D[:,'01I',:],aspect='auto',extent=(D.freq[0], D.freq[-1],len(D.times),0))
@@ -110,3 +100,17 @@ plt.colorbar()
 plt.xlabel('frequency (MHz)')
 plt.ylabel('time number')
 ```
+
+## Satellite Trajectory Data
+
+One of the methods the vendor's data is delivered to us is in the CSV format.
+For efficiency reasons, we convert it to HDF5, using a script from the `opsim` software suite,
+with a commans like
+
+```bash
+# Please consult the opsim folder for details
+./scripts/parse-csv.py  -i ~/sat.csv -N20 -f18,19,20
+```
+
+The numbers of fields to be extracted (18,19,20) correspond to the X,Y,Z cooordinates
+relative to the Moon.
