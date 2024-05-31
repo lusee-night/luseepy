@@ -108,6 +108,7 @@ class Observation:
             #     # print(type(time_range[n]))
             #     t_temp[n] = Time(str(time_range[n]), format='mjd')
 
+            self.deltaT = TimeDelta(deltaT_sec * u.s) # NB units
             self.times  =  time_range # time_range.astype(Time)
         else:
             self.deltaT = TimeDelta(deltaT_sec * u.s) # NB units

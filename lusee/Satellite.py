@@ -115,10 +115,10 @@ class ObservedSatellite:
     def __init__(self, observation, satellite):
 
         if(isinstance(satellite, Satellite)):
-            print('here')
+            # print('here')
             self.posxyz = satellite.predict_position_mcmf(observation.times)
         elif(isinstance(satellite, np.ndarray)):
-            print("a numpy array")
+            # print("a numpy array")
             self.posxyz = satellite
         else:
             raise NotImplementedError    
