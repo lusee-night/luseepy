@@ -1,6 +1,5 @@
 name: luseepy-test
 on:
-  # TBD -- needs to be triggered on all branches, keep one for dev purposes for now
   push:
     branches: [ main, maxim-ci ]
   pull_request:
