@@ -22,15 +22,15 @@ This image also includes Jupyter Lab software. Jupyter is not started automatica
 
 .. code-block:: console
 
-    $ docker run -p 8888:8888 -e JUPYTER_ENABLE_LAB=yes -e JUPYTER_TOKEN=docker lusee/lusee-night-unity-luseepy:0.1
+    $ docker run -p 8888:8888 -e JUPYTER_ENABLE_LAB=yes -e JUPYTER_TOKEN=docker lusee/lusee-night-unity-luseepy:1.0
 
-Once the container is running, this command is invoked to bring up Jupyter:
+It may be neccessary to run docker in interactive mode, especially when using with Docker Desktop on Windows. In that case, add "-it" immediately after the docker run command. Once the container is running, this command is invoked to bring up Jupyter:
 
 .. code-block:: console
 
     $ jupyter lab --allow-root --ip 0.0.0.0 --port 8888
 
-The port 8888 can be mapped to any other convenient port on the host machine, and then access through localhost.
+The port 8888 can be mapped to any other convenient port on the host machine, and then access through localhost by entering "localhost:8888" into the address bar of your browser.
 
 The Observation
 --------------
