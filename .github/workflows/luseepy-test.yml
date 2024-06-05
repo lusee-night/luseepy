@@ -1,10 +1,9 @@
 name: luseepy-test
 on:
-  # TBD -- needs to be triggered on all branches, keep one for dev purposes for now
   push:
-    branches: [ maxim-ci ]
+    branches: [ main, maxim-ci ]
   pull_request:
-    branches: [ maxim-ci ]
+    branches: [ main, maxim-ci ]
 
   # Enable manual activation, too
   workflow_dispatch:
