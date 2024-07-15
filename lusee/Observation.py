@@ -92,12 +92,12 @@ class Observation:
                 start, end      = time_range.split(" to ")
                 self.time_start = Time(start)
                 self.time_end   = Time(end)
-            else:
+            else: 
                 raise NotImplementedError
         elif(type(time_range)==tuple):
             self.set_time_range(time_range)
         elif(isinstance(time_range, np.ndarray)):
-                pass # print("time range is a numpy array")
+                print("time range is a numpy array") #pass
         else:
             raise NotImplementedError                    
 
