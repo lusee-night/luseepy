@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
-import  lusee
-import  numpy  as np
-import  healpy as hp
-import  pickle
-import  os,sys
-import  yaml
-from    yaml.loader import SafeLoader
+if __name__ == "__main__":
+    import  lusee
+    import  numpy  as np
+    import  healpy as hp
+    import  pickle
+    import  os,sys
+    import  yaml
+    from    yaml.loader import SafeLoader
 
 #######################
 class SimDriver(dict):
