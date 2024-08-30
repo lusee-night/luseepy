@@ -34,7 +34,7 @@ class BeamCouplings:
             sign = sd['sign']
             combs = sd['combinations']
             b1, b2 = combs[0]
-            gain_conv = np.sqrt(self.beamd[b1].gain_conv * self.beamd[b1].gain_conv)
+            gain_conv = np.sqrt(self.beamd[b1].gain_conv * self.beamd[b2].gain_conv)
             dgain_conv = two_port_beam.gain_conv
             cross_power = -sign + sign*gain_conv/(2*dgain_conv)
             print (f"  cross_power: {cross_power[0]} ... {cross_power[-1]}")
