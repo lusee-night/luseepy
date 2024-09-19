@@ -6,6 +6,9 @@ Usage
 Installation
 ------------
 
+Docker
+------------
+
 To use luseepy, install the LuSEE-Night Docker image (For more information, see https://github.com/lusee-night/luseepy/tree/main/docker):
 
 **The "unity" Image**
@@ -31,6 +34,50 @@ It may be neccessary to run docker in interactive mode, especially when using wi
     $ jupyter lab --allow-root --ip 0.0.0.0 --port 8888
 
 The port 8888 can be mapped to any other convenient port on the host machine, and then access through localhost by entering "localhost:8888" into the address bar of your browser.
+
+Without Docker
+---------------
+Navigate to the directory where you wish to keep your luseepy code and check out the luseepy git repository.
+
+.. code-block:: console
+    
+    $ git clone https://github.com/lusee-night/luseepy.git
+
+In a separate directory, download the LuSEE Google Drive (or the necessary folders from the Drive) here: https://drive.google.com/drive/folders/0AM52i9DVjqkAUk9PVA
+
+Set up the following environment variables:
+
+- ``LUSEEPY_PATH`` -- path to the luseepy checkout
+- ``LUSEE_DRIVE_DIR`` -- path to the checkout of the LuSEE-Night Google Drive
+
+Create and activate a conda virtual environment
+
+.. code-block:: console
+
+    $ conda create -n lusee
+    $ conda activate lusee
+
+Then install the necessary packages
+
+.. code-block:: console
+
+    $ (lusee) conda install pip flit numpy scipy matplotlib fitsio
+    $ (lusee) pip install pyshtools
+
+If you run into installation errors, try the following commands instead:
+
+.. code-block:: console
+
+    $ (lusee) conda install conda-forge::fitsio
+    $ (lusee) conda install conda-forge::flit
+
+Go into the luseepy directory and install symlink
+
+.. code-block:: console
+
+    $ (lusee) cd lusee
+    $ (lusee) flit install --symlink
+
 
 The Observation
 --------------
