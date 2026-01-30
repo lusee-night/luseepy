@@ -1,5 +1,6 @@
 #!python3
 
+import warnings
 import numpy as np
 from typing import List, Dict
 import h5py
@@ -35,16 +36,12 @@ class HDF5Writer:
 
             # Write each metadata group to HDF5
             for group_idx, group in enumerate(metadata_groups):
-                group_name = f'group_{group_idx:03d}'
+                group_name = f'item_{group_idx:03d}'
                 h5_group = f.create_group(group_name)
 
-                # Store metadata as attributes
-                for key, value in group['metadata_dict'].items():
-                    try:
-                        h5_group.attrs[key] = value
-                    except Exception:
-                        ic(key, value)
-                        raise
+                # Store metadata under a dedicated subgroup
+                meta_group = h5_group.create_group('meta')
+                self._write_metadata(meta_group, group['metadata_dict'])
 
 
                 # Write different data types
@@ -56,7 +53,70 @@ class HDF5Writer:
                 self._write_calibrator_data(h5_group, group['calibrator_data'])
 
             # Add summary information
+            f.attrs['n_items'] = len(metadata_groups)
             f.attrs['n_groups'] = len(metadata_groups)
+
+    def _is_scalar(self, value) -> bool:
+        return isinstance(value, (int, float, bool, np.number, str, bytes))
+
+    def _write_dataset(self, h5_group, name: str, value):
+        if isinstance(value, np.ndarray):
+            h5_group.create_dataset(name, data=value, compression='gzip')
+            return
+
+        if isinstance(value, (list, tuple)) and value and all(isinstance(v, str) for v in value):
+            str_dtype = h5py.string_dtype(encoding='utf-8')
+            h5_group.create_dataset(name, data=np.array(value, dtype=str_dtype), compression='gzip')
+            return
+
+        h5_group.create_dataset(name, data=np.asarray(value), compression='gzip')
+
+    def _write_metadata_value(self, h5_group, key, value, path: str):
+        name = str(key)
+
+        if isinstance(value, dict):
+            sub_group = h5_group.create_group(name)
+            for sub_key, sub_value in value.items():
+                self._write_metadata_value(sub_group, sub_key, sub_value, f"{path}.{sub_key}")
+            return
+
+        if isinstance(value, (list, tuple)):
+            if len(value) == 0:
+                warnings.warn(f"Empty metadata list at {path}")
+            if all(isinstance(item, dict) for item in value):
+                sub_group = h5_group.create_group(name)
+                for idx, item in enumerate(value):
+                    item_group = sub_group.create_group(f'item_{idx:03d}')
+                    for sub_key, sub_value in item.items():
+                        self._write_metadata_value(item_group, sub_key, sub_value, f"{path}[{idx}].{sub_key}")
+                sub_group.attrs['count'] = len(value)
+                return
+
+            if all(self._is_scalar(item) for item in value):
+                self._write_dataset(h5_group, name, value)
+                return
+
+            sub_group = h5_group.create_group(name)
+            for idx, item in enumerate(value):
+                item_group = sub_group.create_group(f'item_{idx:03d}')
+                self._write_metadata_value(item_group, 'value', item, f"{path}[{idx}]")
+            sub_group.attrs['count'] = len(value)
+            return
+
+        if self._is_scalar(value):
+            h5_group.attrs[name] = value
+            return
+
+        if isinstance(value, np.ndarray):
+            self._write_dataset(h5_group, name, value)
+            return
+
+        warnings.warn(f"Unsupported metadata type at {path}: {type(value).__name__}, storing as string")
+        h5_group.attrs[name] = str(value)
+
+    def _write_metadata(self, h5_group, metadata_dict: Dict):
+        for key, value in metadata_dict.items():
+            self._write_metadata_value(h5_group, key, value, str(key))
 
     def _group_by_metadata(self) -> List[Dict]:
         """Group data by metadata configuration."""
