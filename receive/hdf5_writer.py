@@ -8,6 +8,8 @@ import uncrater as unc
 from uncrater.utils import NPRODUCTS, NCHANNELS
 from metadata_utils import metadata_to_dict
 
+from icecream import ic
+
 
 class HDF5Writer:
     """Class to handle HDF5 writing with separate methods for each data type."""
@@ -38,7 +40,12 @@ class HDF5Writer:
 
                 # Store metadata as attributes
                 for key, value in group['metadata_dict'].items():
-                    h5_group.attrs[key] = value
+                    try:
+                        h5_group.attrs[key] = value
+                    except Exception:
+                        ic(key, value)
+                        raise
+
 
                 # Write different data types
                 self._write_waveforms(h5_group, group['waveform'])
