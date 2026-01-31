@@ -1,21 +1,26 @@
 #!python3
 
+import numpy as np
 from uncrater.utils import NPRODUCTS
 
 
-def ADC_stat_to_dict(adc_stat):
-    return { 'min' : int(adc_stat.min),
-             'max': int(adc_stat.max),
-             'valid_count': int(adc_stat.valid_count),
-             'invalid_count_min': int(adc_stat.invalid_count_min),
-             'invalid_count_max': int(adc_stat.invalid_count_max),
-             'sumv': int(adc_stat.sumv),
-             'sumv2': int(adc_stat.sumv2),
-             }
+def ADC_stat_to_arrays(adc_stats):
+    return {
+        'min': np.array([int(x.min) for x in adc_stats], dtype=np.int16),
+        'max': np.array([int(x.max) for x in adc_stats], dtype=np.int16),
+        'valid_count': np.array([int(x.valid_count) for x in adc_stats], dtype=np.uint32),
+        'invalid_count_min': np.array([int(x.invalid_count_min) for x in adc_stats], dtype=np.uint32),
+        'invalid_count_max': np.array([int(x.invalid_count_max) for x in adc_stats], dtype=np.uint32),
+        'sumv': np.array([int(x.sumv) for x in adc_stats], dtype=np.uint64),
+        'sumv2': np.array([int(x.sumv2) for x in adc_stats], dtype=np.uint64),
+    }
 
-def route_to_dict(route):
-    return { 'plus' : int(route.plus),
-             'minux': int(route.minus) }
+
+def route_to_arrays(routes):
+    return {
+        'plus': np.array([int(x.plus) for x in routes], dtype=np.uint8),
+        'minus': np.array([int(x.minus) for x in routes], dtype=np.uint8),
+    }
 
 def metadata_to_dict(meta_pkt) -> dict:
     """Convert metadata packet to dictionary"""
@@ -63,8 +68,8 @@ def metadata_to_dict(meta_pkt) -> dict:
         'errors': int(base.errors),
         'calibrator_enable': int(base.calibrator_enable),
         'spectrometer_enable': int(base.spectrometer_enable),
-        'raw_ADC_stat': [ ADC_stat_to_dict(base.ADC_stat[i]) for i in range(4) ],
-        'route': [ route_to_dict(base.route[i]) for i in range(4)],
+        'raw_ADC_stat': ADC_stat_to_arrays(base.ADC_stat),
+        'route': route_to_arrays(base.route),
     }
 
     for attr_name, attr_value in vars(meta_pkt).items():

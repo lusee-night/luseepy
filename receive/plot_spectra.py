@@ -37,9 +37,11 @@ def load_spectra(hdf5_file: str, group_idx: int = 0) -> Tuple[np.ndarray, np.nda
 
         # Get metadata
         metadata = {}
-        for key in ['Navgf', 'Navg1_shift', 'Navg2_shift', 'corr_products_mask', 'format']:
-            if key in group.attrs:
-                metadata[key] = group.attrs[key]
+        if 'meta' in group:
+            meta_group = group['meta']
+            for key in ['Navgf', 'Navg1_shift', 'Navg2_shift', 'corr_products_mask', 'format']:
+                if key in meta_group.attrs:
+                    metadata[key] = meta_group.attrs[key]
 
         return spectra, unique_ids, metadata
 

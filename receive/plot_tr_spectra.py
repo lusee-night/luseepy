@@ -39,9 +39,11 @@ def load_tr_spectra(hdf5_file: str, group_idx: int = 0) -> Tuple[np.ndarray, np.
         metadata['tr_length'] = group.attrs.get('tr_spectra_tr_length', 0)
 
         # Get other relevant metadata
-        for key in ['tr_start', 'tr_stop', 'tr_avg_shift', 'Navg1_shift', 'Navg2_shift']:
-            if key in group.attrs:
-                metadata[key] = group.attrs[key]
+        if 'meta' in group:
+            meta_group = group['meta']
+            for key in ['tr_start', 'tr_stop', 'tr_avg_shift', 'Navg1_shift', 'Navg2_shift']:
+                if key in meta_group.attrs:
+                    metadata[key] = meta_group.attrs[key]
 
         return tr_spectra, unique_ids, metadata
 

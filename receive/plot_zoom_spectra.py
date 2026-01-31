@@ -9,7 +9,7 @@ def plot_zoom_spectra(hdf5_file):
 
     with h5py.File(hdf5_file, 'r') as f:
         print(f"Opened {hdf5_file}")
-        print(f"Number of groups: {f.attrs.get('n_groups', 0)}")
+        print(f"Number of items: {f.attrs.get('n_items', 0)}")
         print()
 
         # Find groups with zoom spectra

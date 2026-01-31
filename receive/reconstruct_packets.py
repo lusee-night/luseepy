@@ -1,13 +1,8 @@
-import numpy as np
-import h5py
-from typing import List, Dict, Any, Optional
 import uncrater as unc
 from uncrater.utils import *
 import ctypes
-import enum
 import os
 import hashlib
-import struct
 import sys
 import time
 from datetime import datetime
@@ -280,11 +275,15 @@ if __name__ == "__main__":
         try:
             timestamp = int(session_id)
             date_str = datetime.fromtimestamp(timestamp).strftime('%Y%m%d_%H%M%S')
-            output_file = f"session_{i:03d}_{date_str}.h5"
+            output_file = f"session_{i:03d}_{date_str}"
         except:
-            output_file = f"session_{i:03d}_{session_id}.h5"
+            output_file = f"session_{i:03d}_{session_id}"
 
-        print(f"Processing session {i}: {session_dir} -> {output_file}")
+        h5_output_file = output_file + ".h5"
+        fits_output_file = output_file + ".fits"
+
+        print(f"Processing session {i}: {session_dir} -> {h5_output_file}, {fits_output_file}")
         save_to_hdf5(session_dir, output_file)
-        save_to_fits(session_dir, output_file[:-3] + ".fits")
-        print(f"Saved to {output_file}")
+        print(f"Saved to {h5_output_file}")
+        # save_to_fits(session_dir, output_file[:-3] + ".fits")
+        print(f"Saved to {fits_output_file}")

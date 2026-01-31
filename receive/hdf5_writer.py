@@ -128,7 +128,7 @@ class HDF5Writer:
             meta_pkt = sp_dict['meta']
             meta_dict = metadata_to_dict(meta_pkt)
 
-            if current_metadata_dict != meta_dict:
+            if current_metadata_dict is None or not self._metadata_equal(current_metadata_dict, meta_dict):
                 # New metadata configuration
                 current_metadata_dict = meta_dict
                 metadata_groups.append({
@@ -153,7 +153,7 @@ class HDF5Writer:
 
             # Find matching metadata group
             for group in metadata_groups:
-                if group['metadata_dict'] == meta_dict:
+                if self._metadata_equal(group['metadata_dict'], meta_dict):
                     group['tr_spectra'].append(trs_dict)
                     break
             else:
@@ -171,6 +171,46 @@ class HDF5Writer:
                 last_group['calibrator_debug'].extend(self.coll.calib_debug)
 
         return metadata_groups
+
+    def _metadata_equal(self, a: Dict, b: Dict) -> bool:
+        if a.keys() != b.keys():
+            return False
+        for key in a.keys():
+            av = a[key]
+            bv = b[key]
+            if not self._values_equal(av, bv):
+                return False
+        return True
+
+    def _values_equal(self, av, bv) -> bool:
+        if isinstance(av, np.ndarray) or isinstance(bv, np.ndarray):
+            try:
+                return np.array_equal(np.asarray(av), np.asarray(bv))
+            except Exception:
+                return False
+
+        if isinstance(av, (list, tuple)) or isinstance(bv, (list, tuple)):
+            if not isinstance(av, (list, tuple)) or not isinstance(bv, (list, tuple)):
+                return False
+            if len(av) != len(bv):
+                return False
+            for a_item, b_item in zip(av, bv):
+                if not self._values_equal(a_item, b_item):
+                    return False
+            return True
+
+        try:
+            result = av == bv
+        except Exception:
+            try:
+                return np.array_equal(np.asarray(av), np.asarray(bv))
+            except Exception:
+                return False
+
+        if isinstance(result, np.ndarray):
+            return np.array_equal(np.asarray(av), np.asarray(bv))
+
+        return bool(result)
 
     def _write_waveforms(self, h5_group, waveform_packets):
         """Write waveform packets to HDF5."""
@@ -216,9 +256,12 @@ class HDF5Writer:
 
         spectra_array = np.full((n_time, NPRODUCTS, NCHANNELS), np.nan, dtype=np.float32)
         spectra_uids = []
+        spectra_times = []
 
         for t_idx, sp_dict in enumerate(spectra_dicts):
-            spectra_uids.append(sp_dict['meta'].unique_packet_id)
+            meta = sp_dict['meta']
+            spectra_uids.append(meta.unique_packet_id)
+            spectra_times.append(meta.time if hasattr(meta, 'time') else np.nan)
 
             for prod_idx in range(NPRODUCTS):
                 if prod_idx in sp_dict:
@@ -227,6 +270,7 @@ class HDF5Writer:
 
         h5_group.create_dataset('spectra/data', data=spectra_array, compression='gzip')
         h5_group.create_dataset('spectra/unique_ids', data=spectra_uids)
+        h5_group.create_dataset('spectra/timestamps', data=np.array(spectra_times, dtype=np.float64))
         h5_group.attrs['spectra_count'] = n_time
 
     def _write_tr_spectra(self, h5_group, tr_spectra_dicts):
@@ -248,9 +292,12 @@ class HDF5Writer:
 
         tr_array = np.full((n_time, NPRODUCTS, Navg2, tr_length), np.nan, dtype=np.float32)
         tr_uids = []
+        tr_times = []
 
         for t_idx, trs_dict in enumerate(tr_spectra_dicts):
-            tr_uids.append(trs_dict['meta'].unique_packet_id)
+            meta = trs_dict['meta']
+            tr_uids.append(meta.unique_packet_id)
+            tr_times.append(meta.time if hasattr(meta, 'time') else np.nan)
 
             for prod_idx in range(NPRODUCTS):
                 if prod_idx in trs_dict:
@@ -264,6 +311,7 @@ class HDF5Writer:
 
         h5_group.create_dataset('tr_spectra/data', data=tr_array, compression='gzip')
         h5_group.create_dataset('tr_spectra/unique_ids', data=tr_uids)
+        h5_group.create_dataset('tr_spectra/timestamps', data=np.array(tr_times, dtype=np.float64))
         h5_group.attrs['tr_spectra_count'] = n_time
         h5_group.attrs['tr_spectra_Navg2'] = Navg2
         h5_group.attrs['tr_spectra_tr_length'] = tr_length

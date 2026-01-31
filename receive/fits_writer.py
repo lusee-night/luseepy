@@ -1,6 +1,7 @@
 #!python3
 
 from astropy.io import fits
+import warnings
 import numpy as np
 from typing import List, Dict
 from datetime import datetime
@@ -15,12 +16,12 @@ class FITSWriter:
 
     Mapping from HDF5 to FITS:
     - HDF5 file → FITS HDUList
-    - HDF5 groups (group_000, group_001, ...) → Separate extensions with GROUP_ID in header
+    - HDF5 items (item_000, item_001, ...) → Separate extensions with ITEM_ID in header
     - HDF5 subgroups (waveform, spectra, etc.) → Binary table extensions with EXTNAME
     - HDF5 attributes → Header keywords (HIERARCH for hierarchy)
     - HDF5 datasets → Binary table columns or Image extensions
 
-    Each metadata group becomes a set of related extensions sharing the same GROUP_ID.
+    Each metadata item becomes a set of related extensions sharing the same ITEM_ID.
     """
 
     def __init__(self, output_file: str, cdi_dir: str):
@@ -58,7 +59,8 @@ class FITSWriter:
             self._write_calibrator_data(group_idx, group['calibrator_data'])
 
         # Add summary info to primary header
-        primary.header['N_GROUPS'] = (len(metadata_groups), 'Number of metadata groups')
+        primary.header['N_ITEMS'] = (len(metadata_groups), 'Number of metadata items')
+        primary.header['N_GROUPS'] = (len(metadata_groups), 'Number of metadata groups (legacy)')
 
         # Write the FITS file
         hdul = fits.HDUList(self.hdu_list)
@@ -125,32 +127,52 @@ class FITSWriter:
         cols = [fits.Column(name='PLACEHOLDER', format='J', array=[0])]
         hdu = fits.BinTableHDU.from_columns(cols, name=f'META_{group_idx:03d}')
 
-        hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index')
+        hdu.header['ITEM_ID'] = (group_idx, 'Metadata item index')
+        hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index (legacy)')
         hdu.header['EXTDESC'] = ('Metadata configuration', 'Extension description')
 
-        # Store all metadata as header keywords
+        # Store all metadata as header keywords with hierarchical paths
         for key, value in group['metadata_dict'].items():
-            # Sanitize key for FITS (max 8 chars for standard, use HIERARCH for longer)
-            fits_key = self._sanitize_key(key)
-            try:
-                if isinstance(value, (list, np.ndarray)):
-                    # Convert arrays to string representation for header
-                    hdu.header[f'HIERARCH META.{fits_key}'] = (str(list(value)), key)
-                elif isinstance(value, bool):
-                    hdu.header[f'HIERARCH META.{fits_key}'] = (value, key)
-                elif isinstance(value, (int, float, str)):
-                    hdu.header[f'HIERARCH META.{fits_key}'] = (value, key)
-                else:
-                    hdu.header[f'HIERARCH META.{fits_key}'] = (str(value), key)
-            except (ValueError, TypeError) as e:
-                print(f"Warning: Could not write metadata key {key}: {e}")
+            self._write_metadata_value(hdu.header, [key], value)
 
         self.hdu_list.append(hdu)
+
+    def _write_metadata_value(self, header, path_parts, value):
+        if isinstance(value, dict):
+            for sub_key, sub_value in value.items():
+                self._write_metadata_value(header, path_parts + [sub_key], sub_value)
+            return
+
+        if isinstance(value, np.ndarray) and value.ndim == 0:
+            self._write_metadata_value(header, path_parts, value.item())
+            return
+
+        if isinstance(value, (list, tuple, np.ndarray)):
+            if len(value) == 0:
+                warnings.warn(f"Empty metadata list at {'.'.join(map(str, path_parts))}")
+                return
+            for idx, item in enumerate(value):
+                idx_key = f"{idx:03d}"
+                self._write_metadata_value(header, path_parts + [idx_key], item)
+            return
+
+        fits_key = self._sanitize_path(path_parts)
+        try:
+            if isinstance(value, (bool, int, float, str, np.number)):
+                header[f'HIERARCH META.{fits_key}'] = value
+            else:
+                header[f'HIERARCH META.{fits_key}'] = str(value)
+        except (ValueError, TypeError) as e:
+            warnings.warn(f"Could not write metadata key {'.'.join(map(str, path_parts))}: {e}")
 
     def _sanitize_key(self, key: str) -> str:
         """Sanitize a key for use in FITS headers."""
         # Replace problematic characters
         return key.upper().replace(' ', '_').replace('-', '_')[:68]
+
+    def _sanitize_path(self, path_parts) -> str:
+        cleaned = [self._sanitize_key(str(part)) for part in path_parts]
+        return '.'.join(cleaned)[:68]
 
     def _write_waveforms(self, group_idx: int, waveform_packets):
         """Write waveform packets to FITS as binary table extensions."""
@@ -183,7 +205,8 @@ class FITSWriter:
             ]
             hdu = fits.BinTableHDU.from_columns(cols, name=f'WF_{group_idx:03d}_CH{ch}')
 
-            hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index')
+            hdu.header['ITEM_ID'] = (group_idx, 'Metadata item index')
+            hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index (legacy)')
             hdu.header['CHANNEL'] = (ch, 'Waveform channel')
             hdu.header['COUNT'] = (n_waveforms, 'Number of waveforms')
             hdu.header['EXTDESC'] = ('Waveform data', 'Extension description')
@@ -196,7 +219,8 @@ class FITSWriter:
             fits.Column(name='COUNT', format='J', array=[len(wf_list) for wf_list in waveforms_by_channel.values()]),
         ]
         summary_hdu = fits.BinTableHDU.from_columns(summary_cols, name=f'WF_{group_idx:03d}_SUM')
-        summary_hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index')
+        summary_hdu.header['ITEM_ID'] = (group_idx, 'Metadata item index')
+        summary_hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index (legacy)')
         summary_hdu.header['TOTCOUNT'] = (len(waveform_packets), 'Total waveform count')
         summary_hdu.header['EXTDESC'] = ('Waveform summary', 'Extension description')
 
@@ -222,7 +246,8 @@ class FITSWriter:
 
         # Store spectra as an ImageHDU (3D array: time x products x channels)
         img_hdu = fits.ImageHDU(data=spectra_array, name=f'SPEC_{group_idx:03d}')
-        img_hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index')
+        img_hdu.header['ITEM_ID'] = (group_idx, 'Metadata item index')
+        img_hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index (legacy)')
         img_hdu.header['EXTDESC'] = ('Spectra data cube', 'Extension description')
         img_hdu.header['NTIME'] = (n_time, 'Number of time samples')
         img_hdu.header['NPRODS'] = (NPRODUCTS, 'Number of correlation products')
@@ -236,7 +261,8 @@ class FITSWriter:
         # Store unique IDs as a separate binary table
         id_cols = [fits.Column(name='UNIQUE_ID', format='K', array=spectra_uids)]
         id_hdu = fits.BinTableHDU.from_columns(id_cols, name=f'SPEC_{group_idx:03d}_ID')
-        id_hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index')
+        id_hdu.header['ITEM_ID'] = (group_idx, 'Metadata item index')
+        id_hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index (legacy)')
         id_hdu.header['EXTDESC'] = ('Spectra unique IDs', 'Extension description')
         id_hdu.header['COUNT'] = (n_time, 'Number of spectra')
 
@@ -277,7 +303,8 @@ class FITSWriter:
 
         # Store TR spectra as an ImageHDU (4D array)
         img_hdu = fits.ImageHDU(data=tr_array, name=f'TRSPEC_{group_idx:03d}')
-        img_hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index')
+        img_hdu.header['ITEM_ID'] = (group_idx, 'Metadata item index')
+        img_hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index (legacy)')
         img_hdu.header['EXTDESC'] = ('Time-resolved spectra', 'Extension description')
         img_hdu.header['NTIME'] = (n_time, 'Number of time samples')
         img_hdu.header['NPRODS'] = (NPRODUCTS, 'Number of correlation products')
@@ -293,7 +320,8 @@ class FITSWriter:
         # Store unique IDs
         id_cols = [fits.Column(name='UNIQUE_ID', format='K', array=tr_uids)]
         id_hdu = fits.BinTableHDU.from_columns(id_cols, name=f'TRSPEC_{group_idx:03d}_ID')
-        id_hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index')
+        id_hdu.header['ITEM_ID'] = (group_idx, 'Metadata item index')
+        id_hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index (legacy)')
         id_hdu.header['EXTDESC'] = ('TR spectra unique IDs', 'Extension description')
         id_hdu.header['COUNT'] = (n_time, 'Number of TR spectra')
 
@@ -318,7 +346,8 @@ class FITSWriter:
             cols = self._build_housekeeping_columns(hk_type, packets)
             if cols:
                 hdu = fits.BinTableHDU.from_columns(cols, name=f'HK_{group_idx:03d}_T{hk_type}')
-                hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index')
+                hdu.header['ITEM_ID'] = (group_idx, 'Metadata item index')
+                hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index (legacy)')
                 hdu.header['HK_TYPE'] = (hk_type, 'Housekeeping packet type')
                 hdu.header['COUNT'] = (len(packets), 'Number of packets')
                 hdu.header['EXTDESC'] = (f'Housekeeping type {hk_type}', 'Extension description')
@@ -331,7 +360,8 @@ class FITSWriter:
             fits.Column(name='COUNT', format='J', array=[len(p) for p in packets_by_type.values()]),
         ]
         summary_hdu = fits.BinTableHDU.from_columns(summary_cols, name=f'HK_{group_idx:03d}_SUM')
-        summary_hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index')
+        summary_hdu.header['ITEM_ID'] = (group_idx, 'Metadata item index')
+        summary_hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index (legacy)')
         summary_hdu.header['TOTCOUNT'] = (len(housekeeping_packets), 'Total HK packet count')
         summary_hdu.header['EXTDESC'] = ('Housekeeping summary', 'Extension description')
 
@@ -456,7 +486,8 @@ class FITSWriter:
         ]
 
         hdu = fits.BinTableHDU.from_columns(cols, name=f'ZOOM_{group_idx:03d}')
-        hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index')
+        hdu.header['ITEM_ID'] = (group_idx, 'Metadata item index')
+        hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index (legacy)')
         hdu.header['EXTDESC'] = ('Calibrator zoom spectra', 'Extension description')
         hdu.header['COUNT'] = (n_packets, 'Number of zoom spectra')
         hdu.header['FFT_SIZE'] = (fft_size, 'FFT size')
@@ -506,7 +537,8 @@ class FITSWriter:
         ]
 
         hdu = fits.BinTableHDU.from_columns(cols, name=f'CALDAT_{group_idx:03d}')
-        hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index')
+        hdu.header['ITEM_ID'] = (group_idx, 'Metadata item index')
+        hdu.header['GROUP_ID'] = (group_idx, 'Metadata group index (legacy)')
         hdu.header['EXTDESC'] = ('Calibrator data', 'Extension description')
         hdu.header['COUNT'] = (len(calibrator_data), 'Number of calibrator packets')
         hdu.header['NROWS'] = (len(rows), 'Number of data rows')
@@ -555,4 +587,3 @@ class FITSWriter:
 def save_to_fits(cdi_dir: str, output_file: str):
     writer = FITSWriter(output_file=output_file, cdi_dir=cdi_dir)
     writer.write()
-
