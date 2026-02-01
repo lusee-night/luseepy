@@ -123,6 +123,19 @@ class Data:
     def _load_meta(self, meta_group: h5py.Group) -> Dict[str, np.ndarray]:
         return self._read_group_recursive(meta_group)
 
+    def _load_times_from_meta(self, meta_group: Optional[h5py.Group], n_rows: int) -> Optional[np.ndarray]:
+        if meta_group is None:
+            return None
+        if "time" not in meta_group.attrs:
+            return None
+        time_value = meta_group.attrs["time"]
+        time_arr = np.asarray(time_value)
+        if time_arr.ndim == 0:
+            return np.full((n_rows,), time_arr, dtype=np.float64)
+        if time_arr.shape[0] == n_rows:
+            return time_arr.astype(np.float64)
+        return None
+
     def _read_group_recursive(self, group: h5py.Group, prefix: str = "") -> Dict[str, np.ndarray]:
         out: Dict[str, np.ndarray] = {}
 
@@ -187,13 +200,11 @@ class Spectra(Data):
             return None, None, None
 
         data = item_group["spectra/data"][()]
-        times = item_group.get("spectra/timestamps")
+        meta_group = item_group.get("meta")
+        times = self._load_times_from_meta(meta_group, data.shape[0])
         if times is None:
             times = np.full((data.shape[0],), np.nan, dtype=np.float64)
-        else:
-            times = times[()]
 
-        meta_group = item_group.get("meta")
         meta = self._load_meta(meta_group) if meta_group else {}
         return data, times, meta
 
@@ -206,13 +217,11 @@ class TRSpectra(Data):
             return None, None, None
 
         data = item_group["tr_spectra/data"][()]
-        times = item_group.get("tr_spectra/timestamps")
+        meta_group = item_group.get("meta")
+        times = self._load_times_from_meta(meta_group, data.shape[0])
         if times is None:
             times = np.full((data.shape[0],), np.nan, dtype=np.float64)
-        else:
-            times = times[()]
 
-        meta_group = item_group.get("meta")
         meta = self._load_meta(meta_group) if meta_group else {}
         return data, times, meta
 
@@ -359,4 +368,3 @@ if __name__ == "__main__":
     print(dir(data))
     ic(data.data.shape)
     ic(np.sum(np.sum(data.data, axis=2), axis=1))
-
