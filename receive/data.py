@@ -7,6 +7,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import h5py
 import numpy as np
 
+from icecream import ic
 
 class Data:
     """Base class for HDF5-backed data products."""
@@ -67,6 +68,7 @@ class Data:
             with h5py.File(path, "r") as f:
                 if "session_invariants" in f:
                     invariants = f["session_invariants"].attrs
+                    ic(invariants)
                     if "software_version" in invariants:
                         self.software_version = int(invariants["software_version"])
                     if "firmware_version" in invariants:
@@ -337,8 +339,20 @@ class CalibratorData(Data):
 
 if __name__ == "__main__":
     from icecream import ic
+    #
+    # data = Spectra(source="session_001_20251105_120504.h5")
+    # print(dir(data))
+    # ic(data.data.shape)
+    # ic(data.FPGA_temperature.shape)
+    # # ic(data.FPGA_temperature)
+    #
+    # ic(data.time.shape)
+    # # ic(np.sum(np.sum(data.data, axis=2), axis=1))
+    # # ic(data.time[1:] - data.time[:-1])
+    # ic(data.software_version)
 
-    data = Spectra(source="session_001_20251105_120504.h5")
+    data = Spectra(source=["session_001_20251105_120504.h5", "session_002_20251106_120504.h5"])
+    # data = Spectra(source=["session_001_20251105_120504.h5"])
     print(dir(data))
     ic(data.data.shape)
     ic(data.FPGA_temperature.shape)

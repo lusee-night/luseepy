@@ -64,6 +64,7 @@ class HDF5Writer:
             return
 
         invariants.attrs['software_version'] = int(hello.SW_version)
+        ic(invariants.attrs['software_version'], int(hello.SW_version))
         invariants.attrs['firmware_version'] = int(hello.FW_Version)
         invariants.attrs['firmware_id'] = int(hello.FW_ID)
         invariants.attrs['firmware_date'] = int(hello.FW_Date)
