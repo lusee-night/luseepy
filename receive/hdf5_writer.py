@@ -122,6 +122,7 @@ class HDF5Writer:
         """Group data by metadata configuration."""
         metadata_groups = []
         current_metadata_dict = None
+        groups_by_meta_uid = {}
 
         # Group data by metadata configuration
         for sp_dict in self.coll.spectra:
@@ -131,8 +132,9 @@ class HDF5Writer:
             if current_metadata_dict is None or not self._metadata_equal(current_metadata_dict, meta_dict):
                 # New metadata configuration
                 current_metadata_dict = meta_dict
-                metadata_groups.append({
+                group_entry = {
                     'metadata': meta_pkt,
+                    'meta_unique_id': getattr(meta_pkt, 'unique_packet_id', None),
                     'metadata_dict': meta_dict,
                     'spectra': [],
                     'tr_spectra': [],
@@ -141,7 +143,10 @@ class HDF5Writer:
                     'zoom_spectra': [],
                     'calibrator_data': [],
                     'calibrator_debug': []
-                })
+                }
+                metadata_groups.append(group_entry)
+                if group_entry['meta_unique_id'] is not None:
+                    groups_by_meta_uid[group_entry['meta_unique_id']] = group_entry
 
             # Add this spectrum set to current group
             metadata_groups[-1]['spectra'].append(sp_dict)
@@ -152,10 +157,17 @@ class HDF5Writer:
             meta_dict = metadata_to_dict(meta_pkt)
 
             # Find matching metadata group
-            for group in metadata_groups:
-                if self._metadata_equal(group['metadata_dict'], meta_dict):
-                    group['tr_spectra'].append(trs_dict)
-                    break
+            meta_uid = getattr(meta_pkt, 'unique_packet_id', None)
+            group = groups_by_meta_uid.get(meta_uid) if meta_uid is not None else None
+
+            if group is None:
+                for candidate in metadata_groups:
+                    if self._metadata_equal(candidate['metadata_dict'], meta_dict):
+                        group = candidate
+                        break
+
+            if group is not None:
+                group['tr_spectra'].append(trs_dict)
             else:
                 print(f"Warning: TR spectrum with unmatched metadata")
 

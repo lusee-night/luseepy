@@ -6,6 +6,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import h5py
 import numpy as np
+from icecream import ic
 
 
 class Data:
@@ -18,11 +19,9 @@ class Data:
         data_root_env: str = "LUSEE_SESSIONS_DIR",
         id_pattern: str = "*{id}*.h5",
         simulated: bool = False,
-        sort_times: bool = True,
     ):
         self.sources = self._resolve_sources(source, data_root_env, id_pattern)
         self.simulated = simulated
-        self.sort_times = sort_times
 
         self.times = np.array([], dtype=np.float64)
         self.meta: Dict[str, np.ndarray] = {}
@@ -67,9 +66,7 @@ class Data:
             ]
         )
         if not matches:
-            raise FileNotFoundError(
-                f\"No HDF5 files matching '{pattern}' under {data_root_env}={data_root}\"
-            )
+            raise FileNotFoundError( f"No HDF5 files matching '{pattern}' under {data_root_env}={data_root}")
         return matches
 
     def _match_pattern(self, name: str, pattern: str) -> bool:
@@ -117,9 +114,6 @@ class Data:
             self.meta[key] = np.concatenate(arrays, axis=0)
             setattr(self, key, self.meta[key])
 
-        if self.sort_times and len(self.times) > 1:
-            self._sort_by_time()
-
     def _iter_items(self, h5file: h5py.File) -> List[str]:
         return sorted([key for key in h5file.keys() if key.startswith("item_")])
 
@@ -166,25 +160,10 @@ class Data:
 
         return expanded
 
-    def _sort_by_time(self):
-        if not np.all(np.isfinite(self.times)):
-            warnings.warn("Times contain non-finite values; skipping sort")
-            return
-        order = np.argsort(self.times)
-        if np.all(order == np.arange(len(self.times))):
-            return
-        self.times = self.times[order]
-        self.data = self.data[order]
-        for key, value in self.meta.items():
-            if value.shape[0] == len(order):
-                self.meta[key] = value[order]
-                setattr(self, key, self.meta[key])
-
     def __add__(self, other: "Data") -> "Data":
         if type(self) is not type(other):
             raise TypeError("Can only add Data objects of the same type")
         combined = self.__class__(source=[])
-        combined.sort_times = self.sort_times
         combined.data = np.concatenate([self.data, other.data], axis=0)
         combined.times = np.concatenate([self.times, other.times], axis=0)
         combined.meta = {}
@@ -196,9 +175,6 @@ class Data:
             else:
                 combined.meta[key] = other.meta[key]
             setattr(combined, key, combined.meta[key])
-
-        if combined.sort_times and len(combined.times) > 1:
-            combined._sort_by_time()
 
         return combined
 
@@ -296,34 +272,10 @@ class ZoomSpectra(Data):
             self.meta[key] = np.concatenate(arrays, axis=0)
             setattr(self, key, self.meta[key])
 
-        if self.sort_times and len(self.times) > 1:
-            self._sort_by_time()
-
-    def _sort_by_time(self):
-        if not np.all(np.isfinite(self.times)):
-            warnings.warn("Times contain non-finite values; skipping sort")
-            return
-        order = np.argsort(self.times)
-        if np.all(order == np.arange(len(self.times))):
-            return
-        self.times = self.times[order]
-        self.ch1_autocorr = self.ch1_autocorr[order]
-        self.ch2_autocorr = self.ch2_autocorr[order]
-        self.ch1_2_corr_real = self.ch1_2_corr_real[order]
-        self.ch1_2_corr_imag = self.ch1_2_corr_imag[order]
-        self.unique_ids = self.unique_ids[order]
-        self.pfb_indices = self.pfb_indices[order]
-        for key, value in self.meta.items():
-            if value.shape[0] == len(order):
-                self.meta[key] = value[order]
-                setattr(self, key, self.meta[key])
-        self.data = self.ch1_autocorr
-
     def __add__(self, other: "ZoomSpectra") -> "ZoomSpectra":
         if type(self) is not type(other):
             raise TypeError("Can only add Data objects of the same type")
         combined = ZoomSpectra(source=[])
-        combined.sort_times = self.sort_times
         combined.times = np.concatenate([self.times, other.times], axis=0)
         combined.ch1_autocorr = np.concatenate([self.ch1_autocorr, other.ch1_autocorr], axis=0)
         combined.ch2_autocorr = np.concatenate([self.ch2_autocorr, other.ch2_autocorr], axis=0)
@@ -342,9 +294,6 @@ class ZoomSpectra(Data):
             else:
                 combined.meta[key] = other.meta[key]
             setattr(combined, key, combined.meta[key])
-
-        if combined.sort_times and len(combined.times) > 1:
-            combined._sort_by_time()
 
         return combined
 
@@ -384,28 +333,10 @@ class CalibratorData(Data):
             self.meta[key] = np.concatenate(arrays, axis=0)
             setattr(self, key, self.meta[key])
 
-        if self.sort_times and len(self.times) > 1:
-            self._sort_by_time()
-
-    def _sort_by_time(self):
-        if not np.all(np.isfinite(self.times)):
-            warnings.warn("Times contain non-finite values; skipping sort")
-            return
-        order = np.argsort(self.times)
-        if np.all(order == np.arange(len(self.times))):
-            return
-        self.times = self.times[order]
-        self.packets = [self.packets[i] for i in order]
-        for key, value in self.meta.items():
-            if value.shape[0] == len(order):
-                self.meta[key] = value[order]
-                setattr(self, key, self.meta[key])
-
     def __add__(self, other: "CalibratorData") -> "CalibratorData":
         if type(self) is not type(other):
             raise TypeError("Can only add Data objects of the same type")
         combined = CalibratorData(source=[])
-        combined.sort_times = self.sort_times
         combined.packets = self.packets + other.packets
         combined.times = np.concatenate([self.times, other.times], axis=0)
         combined.data = np.array([], dtype=np.float32)
@@ -420,7 +351,12 @@ class CalibratorData(Data):
                 combined.meta[key] = other.meta[key]
             setattr(combined, key, combined.meta[key])
 
-        if combined.sort_times and len(combined.times) > 1:
-            combined._sort_by_time()
-
         return combined
+
+
+if __name__ == "__main__":
+    data = Spectra(source = "session_001_20251105_120504.h5")
+    print(dir(data))
+    ic(data.data.shape)
+    ic(np.sum(np.sum(data.data, axis=2), axis=1))
+
