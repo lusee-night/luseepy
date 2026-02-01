@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 
 import os
-import warnings
+import glob
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import h5py
 import numpy as np
-from icecream import ic
 
 
 class Data:
@@ -23,7 +22,7 @@ class Data:
         self.sources = self._resolve_sources(source, data_root_env, id_pattern)
         self.simulated = simulated
 
-        self.times = np.array([], dtype=np.float64)
+        self.time = np.array([], dtype=np.float64)
         self.meta: Dict[str, np.ndarray] = {}
 
         self._load_all()
@@ -34,13 +33,10 @@ class Data:
         data_root_env: str,
         id_pattern: str,
     ) -> List[str]:
-        if source is None:
-            return []
-
         if isinstance(source, (list, tuple)):
             return [str(s) for s in source]
 
-        source_str = str(source)
+        source_str = "" if source is None else str(source)
         if os.path.isdir(source_str):
             files = [
                 os.path.join(source_str, f)
@@ -57,46 +53,45 @@ class Data:
             raise FileNotFoundError(
                 f"Source '{source_str}' not found and {data_root_env} is not set"
             )
-        pattern = id_pattern.format(id=source_str)
-        matches = sorted(
-            [
-                os.path.join(data_root, name)
-                for name in os.listdir(data_root)
-                if name.endswith(".h5") and self._match_pattern(name, pattern)
-            ]
-        )
+        pattern = os.path.join(data_root, id_pattern.format(id=source_str))
+        matches = sorted(glob.glob(pattern))
         if not matches:
             raise FileNotFoundError( f"No HDF5 files matching '{pattern}' under {data_root_env}={data_root}")
         return matches
 
-    def _match_pattern(self, name: str, pattern: str) -> bool:
-        if pattern == "*":
-            return True
-        if pattern.startswith("*") and pattern.endswith("*"):
-            return pattern.strip("*") in name
-        if pattern.startswith("*"):
-            return name.endswith(pattern.strip("*"))
-        if pattern.endswith("*"):
-            return name.startswith(pattern.strip("*"))
-        return name == pattern
-
     def _load_all(self):
         data_chunks = []
-        time_chunks = []
         meta_chunks: Dict[str, List[np.ndarray]] = {}
 
         for path in self.sources:
             with h5py.File(path, "r") as f:
+                if "session_invariants" in f:
+                    invariants = f["session_invariants"].attrs
+                    if "software_version" in invariants:
+                        self.software_version = int(invariants["software_version"])
+                    if "firmware_version" in invariants:
+                        self.firmware_version = int(invariants["firmware_version"])
+                    if "firmware_id" in invariants:
+                        self.firmware_id = int(invariants["firmware_id"])
+                    if "firmware_date" in invariants:
+                        self.firmware_date = int(invariants["firmware_date"])
+                    if "firmware_time" in invariants:
+                        self.firmware_time = int(invariants["firmware_time"])
+                    if "start_unique_packet_id" in invariants:
+                        self.start_unique_packet_id = int(invariants["start_unique_packet_id"])
+                    if "start_time_32" in invariants:
+                        self.start_time_32 = int(invariants["start_time_32"])
+                    if "start_time_16" in invariants:
+                        self.start_time_16 = int(invariants["start_time_16"])
                 for item_name in self._iter_items(f):
                     item_group = f[item_name]
-                    data, times, meta = self._load_item(item_group)
+                    data, meta = self._load_item(item_group)
                     if data is None:
                         continue
 
                     data_chunks.append(data)
-                    time_chunks.append(times)
 
-                    meta_arrays = self._expand_meta(meta, len(times))
+                    meta_arrays = self._expand_meta(meta, len(data))
                     for key, arr in meta_arrays.items():
                         meta_chunks.setdefault(key, []).append(arr)
 
@@ -105,36 +100,21 @@ class Data:
         else:
             self.data = np.array([])
 
-        if time_chunks:
-            self.times = np.concatenate(time_chunks, axis=0)
-        else:
-            self.times = np.array([], dtype=np.float64)
-
         for key, arrays in meta_chunks.items():
             self.meta[key] = np.concatenate(arrays, axis=0)
             setattr(self, key, self.meta[key])
 
+        if "time" in self.meta:
+            self.time = self.meta["time"]
+
     def _iter_items(self, h5file: h5py.File) -> List[str]:
         return sorted([key for key in h5file.keys() if key.startswith("item_")])
 
-    def _load_item(self, item_group: h5py.Group) -> Tuple[np.ndarray, np.ndarray, Dict[str, np.ndarray]]:
+    def _load_item(self, item_group: h5py.Group) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
         raise NotImplementedError
 
     def _load_meta(self, meta_group: h5py.Group) -> Dict[str, np.ndarray]:
         return self._read_group_recursive(meta_group)
-
-    def _load_times_from_meta(self, meta_group: Optional[h5py.Group], n_rows: int) -> Optional[np.ndarray]:
-        if meta_group is None:
-            return None
-        if "time" not in meta_group.attrs:
-            return None
-        time_value = meta_group.attrs["time"]
-        time_arr = np.asarray(time_value)
-        if time_arr.ndim == 0:
-            return np.full((n_rows,), time_arr, dtype=np.float64)
-        if time_arr.shape[0] == n_rows:
-            return time_arr.astype(np.float64)
-        return None
 
     def _read_group_recursive(self, group: h5py.Group, prefix: str = "") -> Dict[str, np.ndarray]:
         out: Dict[str, np.ndarray] = {}
@@ -178,7 +158,7 @@ class Data:
             raise TypeError("Can only add Data objects of the same type")
         combined = self.__class__(source=[])
         combined.data = np.concatenate([self.data, other.data], axis=0)
-        combined.times = np.concatenate([self.times, other.times], axis=0)
+        combined.time = np.concatenate([self.time, other.time], axis=0)
         combined.meta = {}
         for key in set(self.meta.keys()).union(other.meta.keys()):
             if key in self.meta and key in other.meta:
@@ -197,16 +177,12 @@ class Spectra(Data):
 
     def _load_item(self, item_group: h5py.Group):
         if "spectra/data" not in item_group:
-            return None, None, None
+            return None, None
 
         data = item_group["spectra/data"][()]
         meta_group = item_group.get("meta")
-        times = self._load_times_from_meta(meta_group, data.shape[0])
-        if times is None:
-            times = np.full((data.shape[0],), np.nan, dtype=np.float64)
-
         meta = self._load_meta(meta_group) if meta_group else {}
-        return data, times, meta
+        return data, meta
 
 
 class TRSpectra(Data):
@@ -214,16 +190,12 @@ class TRSpectra(Data):
 
     def _load_item(self, item_group: h5py.Group):
         if "tr_spectra/data" not in item_group:
-            return None, None, None
+            return None, None
 
         data = item_group["tr_spectra/data"][()]
         meta_group = item_group.get("meta")
-        times = self._load_times_from_meta(meta_group, data.shape[0])
-        if times is None:
-            times = np.full((data.shape[0],), np.nan, dtype=np.float64)
-
         meta = self._load_meta(meta_group) if meta_group else {}
-        return data, times, meta
+        return data, meta
 
 
 class ZoomSpectra(Data):
@@ -267,7 +239,7 @@ class ZoomSpectra(Data):
                     for key, arr in meta_arrays.items():
                         meta_chunks.setdefault(key, []).append(arr)
 
-        self.times = np.concatenate(time_chunks, axis=0) if time_chunks else np.array([], dtype=np.float64)
+        self.time = np.concatenate(time_chunks, axis=0) if time_chunks else np.array([], dtype=np.float64)
         self.ch1_autocorr = np.concatenate(ch1_autocorr_chunks, axis=0) if ch1_autocorr_chunks else np.array([])
         self.ch2_autocorr = np.concatenate(ch2_autocorr_chunks, axis=0) if ch2_autocorr_chunks else np.array([])
         self.ch1_2_corr_real = np.concatenate(ch1_2_corr_real_chunks, axis=0) if ch1_2_corr_real_chunks else np.array([])
@@ -285,7 +257,7 @@ class ZoomSpectra(Data):
         if type(self) is not type(other):
             raise TypeError("Can only add Data objects of the same type")
         combined = ZoomSpectra(source=[])
-        combined.times = np.concatenate([self.times, other.times], axis=0)
+        combined.time = np.concatenate([self.time, other.time], axis=0)
         combined.ch1_autocorr = np.concatenate([self.ch1_autocorr, other.ch1_autocorr], axis=0)
         combined.ch2_autocorr = np.concatenate([self.ch2_autocorr, other.ch2_autocorr], axis=0)
         combined.ch1_2_corr_real = np.concatenate([self.ch1_2_corr_real, other.ch1_2_corr_real], axis=0)
@@ -334,7 +306,7 @@ class CalibratorData(Data):
                         meta_chunks.setdefault(key, []).append(arr)
 
         self.packets = packet_chunks
-        self.times = np.concatenate(time_chunks, axis=0) if time_chunks else np.array([], dtype=np.float64)
+        self.time = np.concatenate(time_chunks, axis=0) if time_chunks else np.array([], dtype=np.float64)
         self.data = np.array([], dtype=np.float32)
 
         self.meta = {}
@@ -347,7 +319,7 @@ class CalibratorData(Data):
             raise TypeError("Can only add Data objects of the same type")
         combined = CalibratorData(source=[])
         combined.packets = self.packets + other.packets
-        combined.times = np.concatenate([self.times, other.times], axis=0)
+        combined.time = np.concatenate([self.time, other.time], axis=0)
         combined.data = np.array([], dtype=np.float32)
 
         combined.meta = {}
@@ -364,7 +336,15 @@ class CalibratorData(Data):
 
 
 if __name__ == "__main__":
-    data = Spectra(source = "session_001_20251105_120504.h5")
+    from icecream import ic
+
+    data = Spectra(source="session_001_20251105_120504.h5")
     print(dir(data))
     ic(data.data.shape)
-    ic(np.sum(np.sum(data.data, axis=2), axis=1))
+    ic(data.FPGA_temperature.shape)
+    # ic(data.FPGA_temperature)
+
+    ic(data.time.shape)
+    # ic(np.sum(np.sum(data.data, axis=2), axis=1))
+    # ic(data.time[1:] - data.time[:-1])
+    ic(data.software_version)

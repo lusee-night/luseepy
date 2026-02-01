@@ -286,4 +286,4 @@ if __name__ == "__main__":
         save_to_hdf5(session_dir, output_file)
         print(f"Saved to {h5_output_file}")
         # save_to_fits(session_dir, output_file[:-3] + ".fits")
-        print(f"Saved to {fits_output_file}")
+        # print(f"Saved to {fits_output_file}")

@@ -30,6 +30,7 @@ class HDF5Writer:
         with h5py.File(self.output_file, 'w') as f:
             # Store session-level info
             f.attrs['cdi_directory'] = self.cdi_dir
+            self._write_session_invariants(f)
 
             # Track metadata changes
             metadata_groups = self._group_by_metadata()
@@ -54,7 +55,29 @@ class HDF5Writer:
 
             # Add summary information
             f.attrs['n_items'] = len(metadata_groups)
-            f.attrs['n_groups'] = len(metadata_groups)
+
+    def _write_session_invariants(self, h5_file):
+        invariants = h5_file.create_group('session_invariants')
+        hello = self._extract_hello_packet()
+        if hello is None:
+            print("Warning: no hello packet found; session_invariants is empty")
+            return
+
+        invariants.attrs['software_version'] = int(hello.SW_version)
+        invariants.attrs['firmware_version'] = int(hello.FW_Version)
+        invariants.attrs['firmware_id'] = int(hello.FW_ID)
+        invariants.attrs['firmware_date'] = int(hello.FW_Date)
+        invariants.attrs['firmware_time'] = int(hello.FW_Time)
+        invariants.attrs['start_unique_packet_id'] = int(hello.unique_packet_id)
+        invariants.attrs['start_time_32'] = int(hello.time_32)
+        invariants.attrs['start_time_16'] = int(hello.time_16)
+
+    def _extract_hello_packet(self):
+        for pkt in self.coll.cont:
+            if isinstance(pkt, unc.Packet_Hello):
+                pkt._read()
+                return pkt
+        return None
 
     def _is_scalar(self, value) -> bool:
         return isinstance(value, (int, float, bool, np.number, str, bytes))

@@ -7,7 +7,6 @@ Each HDF5 file corresponds to a single observation session. The file is produced
 - Attributes
   - `cdi_directory` : path to the CDI directory used to build the file
   - `n_items` : number of metadata items in this file
-  - `n_groups` : legacy alias of `n_items`
 
 - Groups
   - `item_000`, `item_001`, … : one item per distinct metadata configuration encountered in order of the spectra stream
