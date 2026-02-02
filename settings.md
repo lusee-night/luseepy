@@ -156,3 +156,223 @@ This factor is used by `Data` to convert simulated spectra into voltage units. T
 - The code outputs perfect, noiseless sky + ground integrals unless you add noise externally (e.g., in analysis notebooks).
 
 If you want to introduce hardware‑style averaging, you would add it *after* `Simulator.simulate` (for example, by averaging consecutive time samples and/or adding thermal noise consistent with `Throughput`).
+
+---
+
+## End‑to‑end math trace (from output spectra back to inputs)
+
+This section walks *backwards* from the final output arrays to the inputs, with explicit formulas for every symbol that appears in the code path. I keep SkyModels abstract (as requested), and I do **not** expand their internal physics.
+
+### A. Final outputs from `Simulator`
+
+The simulator produces a 3‑D array:
+
+```
+result[time_index, product_index, freq_index]
+```
+
+Call this output \( D_{t,p,\nu} \). It is written to FITS by `Simulator.write` in `lusee/Simulation.py` as the `data` extension.
+
+For each time \( t \), each product \( p \) (auto or cross), and each frequency index \( \nu \), the code computes:
+
+**Auto‑correlations (i == j):**
+
+\[
+D_{t,p,\nu} = \langle B_{ij}(\nu), S_t(\nu) \rangle + T_\mathrm{ground}\,G^\mathrm{(R)}_{ij}(\nu)
+\]
+
+**Cross‑correlations (i != j):**
+
+Two products are stored: real and imaginary parts. The simulator appends them in order:
+
+\[
+D^\mathrm{(R)}_{t,p,\nu} = \langle B^\mathrm{(R)}_{ij}(\nu), S_t(\nu) \rangle + T_\mathrm{ground}\,G^\mathrm{(R)}_{ij}(\nu)
+\]
+
+\[
+D^\mathrm{(I)}_{t,p,\nu} = \langle B^\mathrm{(I)}_{ij}(\nu), S_t(\nu) \rangle + T_\mathrm{ground}\,G^\mathrm{(I)}_{ij}(\nu)
+\]
+
+Here:
+- \( S_t(\nu) \) is the sky model spherical‑harmonic coefficients at time \( t \) and frequency \( \nu \) (produced by `SkyModels`, which I keep abstract).
+- \( B_{ij} \) are beam cross‑power coefficients for antenna pair \( (i,j) \) (derived from beam E‑fields).
+- \( G^\mathrm{(R/I)}_{ij} \) are ground‑coupling coefficients derived from the beam monopole and optional coupling terms.
+
+The inner product \( \langle \cdot,\cdot \rangle \) is performed by `mean_alm` in `Simulation.py`:
+
+Let \( a_{\ell m} \) be the beam coefficients and \( s_{\ell m} \) the sky coefficients. `mean_alm` implements:
+
+\[
+\langle a, s \rangle
+= \frac{1}{4\pi}\left(
+\sum_{\ell=0}^{\ell_\text{max}} \Re[a_{\ell 0} s_{\ell 0}^*] \;+\;
+2 \sum_{\ell=0}^{\ell_\text{max}}\sum_{m=1}^{\ell} \Re[a_{\ell m} s_{\ell m}^*]
+\right)
+\]
+
+which is the standard spherical‑harmonic inner product assuming real sky maps.
+
+So **the simulator output is in temperature units** (Kelvin‑like), because sky models are constructed as brightness temperature maps.
+
+---
+
+### B. Where \( S_t(\nu) \) comes from (sky, kept abstract)
+
+The sky is provided by a `SkyModels` class, which returns harmonic coefficients:
+
+```
+sky = sky_model.get_alm(freq_indices, freq_values)
+```
+
+Denote this as \( S(\nu) = \{ s_{\ell m}(\nu) \} \). If the sky model is in the **galactic frame**, it is rotated into the local lunar frame at time \( t \):
+
+1. `Observation.get_l_b_from_alt_az` gives the galactic coordinates of the local zenith (alt=\(\pi/2\)) and a horizon direction (alt=\(0\), az=\(0\)).
+2. These define a rotation matrix \( R_t \) from sky coordinates to the local frame.
+3. `healpy.Rotator` applies this rotation to the sky alms:
+
+\[
+S_t(\nu) = \mathcal{R}(R_t)\,S(\nu)
+\]
+
+If the sky model frame is `MCMF`, the code **does not rotate** and uses \( S_t(\nu) = S(\nu) \).
+
+I do not expand `SkyModels` formulas here by request.
+
+---
+
+### C. Where the beam coefficients \( B_{ij} \) come from
+
+Each antenna beam \( i \) is described by complex E‑field components on a \((\theta,\phi)\) grid:
+
+```
+Eθ_i(ν,θ,φ), Eφ_i(ν,θ,φ)
+```
+
+These are loaded from FITS by `Beam` or created by `BeamGauss`.
+
+For a pair of antennas \( (i,j) \), the **cross‑power** map is:
+
+\[
+X_{ij}(\nu,\theta,\phi)
+= E_{\theta,i}(\nu,\theta,\phi)\,E_{\theta,j}^*(\nu,\theta,\phi)
++ E_{\phi,i}(\nu,\theta,\phi)\,E_{\phi,j}^*(\nu,\theta,\phi)
+\]
+
+Then `Simulator.prepare_beams` applies:
+
+1. **Taper** in \(\theta\):
+   \[
+   X'_{ij} = X_{ij} \cdot \text{tapr}(\theta)
+   \]
+
+2. **Gain convention scaling**:
+   \[
+   X''_{ij} = X'_{ij} \cdot \sqrt{g_i(\nu)\,g_j(\nu)}
+   \]
+   where \( g_i(\nu) \) is `gain_conv` from the beam file.
+
+3. Optional **Gaussian smoothing** over \((\theta,\phi)\).
+
+Then the code converts the real and imaginary parts into spherical harmonics:
+
+```
+beamreal = get_healpix(lmax, real(X''_ij))
+beamimag = get_healpix(lmax, imag(X''_ij))   # only if i != j
+```
+
+Thus:
+
+\[
+B^\mathrm{(R)}_{ij}(\nu) = \{ a_{\ell m}^\mathrm{(R)}(\nu) \}
+\quad,\quad
+B^\mathrm{(I)}_{ij}(\nu) = \{ a_{\ell m}^\mathrm{(I)}(\nu) \}
+\]
+
+These are exactly the \( a_{\ell m} \) used in `mean_alm`.
+
+---
+
+### D. Where ground‑coupling terms \( G_{ij} \) come from
+
+The code models ground pickup using the beam monopole term. For each frequency:
+
+Let \( a_{00} \) be the \(\ell=0, m=0\) coefficient in `beamreal` (or `beamimag`).
+
+Auto‑correlation case:
+
+\[
+G^\mathrm{(R)}_{ii}(\nu) = 1 - \frac{\Re[a_{00}(\nu)]}{\sqrt{4\pi}}
+\]
+
+Cross‑correlation case:
+
+\[
+G^\mathrm{(R)}_{ij}(\nu) = C_{ij}(\nu) - \frac{\Re[a_{00}(\nu)]}{\sqrt{4\pi}}
+\]
+
+where \( C_{ij}(\nu) \) is an optional coupling correction from `BeamCouplings`.
+
+For the imaginary part of a cross‑product:
+
+\[
+G^\mathrm{(I)}_{ij}(\nu) = 0 - \frac{\Re[a_{00}^{(I)}(\nu)]}{\sqrt{4\pi}}
+\]
+
+Finally, these are multiplied by the scalar `Tground` to give the additive ground term in the output spectra.
+
+---
+
+### E. Mapping to “voltage units” in `Data` (optional post‑processing)
+
+The simulator itself produces **temperature‑like spectra** \( D_{t,p,\nu} \) as above. If you later use `lusee.Data` to request outputs with the suffix `V`, it applies a conversion to voltage‑squared units using `Throughput`.
+
+In `Data.__getitem__`, the conversion factor is:
+
+```
+T2V = sqrt(T2Vsq_i * T2Vsq_j)
+```
+
+so the returned quantity is:
+
+\[
+D^\mathrm{(V)}_{t,p,\nu} = D_{t,p,\nu}\,\sqrt{T2V_i(\nu)\,T2V_j(\nu)}
+\]
+
+This is **not** a simulator output; it is a derived quantity.
+
+Where does `T2Vsq` come from? In `Throughput`:
+
+1. Receiver impedance:
+   \[
+   Z_\mathrm{rec}(\nu) = \frac{1}{i\omega C_\mathrm{front} + 1/R_4}
+   \]
+
+2. Antenna impedance \( Z_\mathrm{ant}(\nu) \) is interpolated from beam FITS data.
+
+3. Coupling factor:
+   \[
+   \Gamma(\nu) = \frac{|Z_\mathrm{rec}|}{|Z_\mathrm{ant} + Z_\mathrm{rec}|}
+   \]
+
+4. Temperature → voltage‑squared factor:
+   \[
+   T2V(\nu) = 4 k_B \Re[Z_\mathrm{ant}(\nu)]\,\Gamma(\nu)^2
+   \]
+
+So:
+
+- **\(\Gamma\) is *not* the simulator output.**
+- **\(T2V\)** is a conversion factor used only when you ask for voltage units.
+- The **native simulator output is in temperature units** as computed in sections A–D.
+
+---
+
+### F. Summary graph of dependencies (textual)
+
+1. **Inputs (instrument):** beam files or Gaussian params; beam rotation; optional beam smoothing; taper; coupling model; `Tground`.
+2. **Beams → cross‑power maps** \( X_{ij} \) → harmonic coefficients \( B_{ij} \).
+3. **Sky model** → harmonic coefficients \( S(\nu) \) → rotated to time \( S_t(\nu) \).
+4. **Spectrum per product:** \( D_{t,p,\nu} = \langle B_{ij}, S_t \rangle + T_\mathrm{ground}\,G_{ij} \).
+5. **Optional voltage units:** \( D^\mathrm{(V)} = D \times \sqrt{T2V_i T2V_j} \).
+
+Every symbol above is either defined by a formula in this section or is stated as coming from a class with internal physics (SkyModels). No variables “float” without a source.

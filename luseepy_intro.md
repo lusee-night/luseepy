@@ -176,10 +176,10 @@ The notebooks show how to use and diagnose the simulation outputs and beam model
 
 Key points from the paper that map to this repository and its assumptions:
 
-- Instrument context: LuSEE-Night is described as four ~3 m monopole antennas arranged as two horizontal crossed pseudo-dipoles on a rotational stage, sensitive to ~1–50 MHz, and producing 16 correlation products (4 auto + 6 complex cross). citeturn2view0
-- The correlator channelizes into 2048 spectral bins covering 0–51.2 MHz with 25 kHz spacing. citeturn2view0
-- The analysis emphasizes that LuSEE-Night is not a traditional interferometer: due to close spacing and non-identical beams, each correlation product has its own beam response, so each product is treated as an independent beam-weighted integral of the sky. citeturn2view0
-- Map-making in the paper is a linear inversion (Wiener filter) that deconvolves the set of beam-weighted measurements into a low-resolution sky map and marginalizes systematics via the noise covariance. citeturn2view0
+- Instrument context: LuSEE-Night is described as four ~3 m monopole antennas arranged as two horizontal crossed pseudo-dipoles on a rotational stage, sensitive to ~1–50 MHz, and producing 16 correlation products (4 auto + 6 complex cross). 
+- The correlator channelizes into 2048 spectral bins covering 0–51.2 MHz with 25 kHz spacing.
+- The analysis emphasizes that LuSEE-Night is not a traditional interferometer: due to close spacing and non-identical beams, each correlation product has its own beam response, so each product is treated as an independent beam-weighted integral of the sky.
+- Map-making in the paper is a linear inversion (Wiener filter) that deconvolves the set of beam-weighted measurements into a low-resolution sky map and marginalizes systematics via the noise covariance.
 
 How this connects to the code:
 
