@@ -89,10 +89,22 @@ class Data:
                         self.start_time_16 = int(invariants["start_time_16"])
                 if "constants" in f:
                     consts = f["constants"].attrs
-                    self.lun_lat_deg = float(consts["lun_lat_deg"])
-                    self.lun_long_deg = float(consts["lun_long_deg"])
-                    self.lun_height_m = float(consts["lun_height_m"])
-                    constants_seen = True
+                    if not constants_seen:
+                        self.lun_lat_deg = float(consts["lun_lat_deg"])
+                        self.lun_long_deg = float(consts["lun_long_deg"])
+                        self.lun_height_m = float(consts["lun_height_m"])
+                        constants_seen = True
+                    else:
+                        lat = float(consts["lun_lat_deg"])
+                        lon = float(consts["lun_long_deg"])
+                        hgt = float(consts["lun_height_m"])
+                        if (self.lun_lat_deg != lat
+                                or self.lun_long_deg != lon
+                                or self.lun_height_m != hgt):
+                            warnings.warn(
+                                "Landing coordinates differ across files; "
+                                "keeping the first set of coordinates"
+                            )
                 for item_name in self._iter_items(f):
                     item_group = f[item_name]
                     data, meta = self._load_item(item_group)
