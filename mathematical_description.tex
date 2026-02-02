@@ -1,0 +1,322 @@
+\documentclass[11pt]{article}
+
+% ---------- Page layout ----------
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{setspace}
+\setstretch{1.15}
+
+% ---------- Core math ----------
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsfonts}
+\usepackage{bm}          % bold math symbols
+\usepackage{mathtools}   % fixes and extensions to amsmath
+
+% ---------- Text and symbols ----------
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}     % clean vector fonts
+\usepackage{textcomp}
+
+% ---------- Units and operators ----------
+\usepackage{siunitx}
+\sisetup{
+  detect-all,
+  separate-uncertainty=true,
+  per-mode=symbol
+}
+
+% ---------- Code / inline monospace ----------
+\usepackage{listings}
+\usepackage{xcolor}
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  columns=fullflexible
+}
+
+% ---------- Hyperlinks (safe for internal notes) ----------
+\usepackage[
+  colorlinks=true,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue
+]{hyperref}
+
+% ---------- Convenience macros ----------
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\ii}{\mathrm{i}}
+\newcommand{\ee}{\mathrm{e}}
+
+\newcommand{\RePart}{\operatorname{Re}}
+\newcommand{\ImPart}{\operatorname{Im}}
+
+\newcommand{\mean}[1]{\left\langle #1 \right\rangle}
+
+\newcommand{\Tground}{T_{\mathrm{ground}}}
+\newcommand{\gainconv}{g_{\mathrm{conv}}}
+
+% ---------- Healpy / spherical harmonics ----------
+\newcommand{\alm}{a_{\ell m}}
+\newcommand{\slm}{s_{\ell m}}
+
+% ---------- Debugging / notes ----------
+\usepackage{enumitem}
+\setlist{nosep}
+
+% ---------- No paragraph indentation ----------
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+% ---------- Title metadata (optional) ----------
+\title{LuSEE Simulator: End-to-End Mathematical Trace}
+\author{Private reference}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section*{End-to-End Mathematical Trace of the \texttt{lusee} Simulator}
+
+This document traces the computation performed by the \texttt{lusee} simulation pipeline \emph{backwards}, from the final output spectra to the physical and numerical inputs. All quantities appearing in the code path are explicitly defined. The internal physics of sky models is kept abstract and not expanded.
+
+\subsection*{A. Final Simulator Output}
+
+The simulator produces a three-dimensional array written to a FITS file by \texttt{Simulator.write}:
+
+\[
+\mathrm{result}[t, p, \nu]
+\]
+
+where:
+\begin{itemize}
+\item $t$ indexes observation time,
+\item $p$ indexes beam products (auto- or cross-correlations),
+\item $\nu$ indexes frequency.
+\end{itemize}
+
+We denote the simulator output by
+\[
+D_{t,p,\nu}.
+\]
+
+\subsubsection*{A.1 Auto-correlations ($i=j$)}
+
+For an auto-correlation product $(i,i)$, the simulator computes
+\[
+D_{t,p,\nu}
+=
+\left\langle B_{ii}(\nu), S_t(\nu) \right\rangle
++
+T_{\mathrm{ground}}\,G^{(\mathrm{R})}_{ii}(\nu),
+\]
+where:
+\begin{itemize}
+\item $S_t(\nu)$ are the sky spherical-harmonic coefficients at time $t$ and frequency $\nu$,
+\item $B_{ii}(\nu)$ are the beam power harmonic coefficients,
+\item $T_{\mathrm{ground}}$ is the scalar ground temperature,
+\item $G^{(\mathrm{R})}_{ii}(\nu)$ is the ground-coupling coefficient.
+\end{itemize}
+
+\subsubsection*{A.2 Cross-correlations ($i\neq j$)}
+
+For a cross-correlation $(i,j)$, the simulator produces two products, appended in order:
+
+\paragraph{Real part}
+\[
+D^{(\mathrm{R})}_{t,p,\nu}
+=
+\left\langle B^{(\mathrm{R})}_{ij}(\nu), S_t(\nu) \right\rangle
++
+T_{\mathrm{ground}}\,G^{(\mathrm{R})}_{ij}(\nu).
+\]
+
+\paragraph{Imaginary part}
+\[
+D^{(\mathrm{I})}_{t,p,\nu}
+=
+\left\langle B^{(\mathrm{I})}_{ij}(\nu), S_t(\nu) \right\rangle
++
+T_{\mathrm{ground}}\,G^{(\mathrm{I})}_{ij}(\nu).
+\]
+
+\subsubsection*{A.3 Harmonic Inner Product}
+
+The angular brackets $\langle \cdot,\cdot \rangle$ denote the contraction implemented by \texttt{mean\_alm} in \texttt{Simulation.py}. Let $a_{\ell m}$ and $s_{\ell m}$ denote beam and sky spherical-harmonic coefficients stored in \texttt{healpy} packed ordering. The code computes
+
+\[
+\left\langle a, s \right\rangle
+=
+\frac{1}{4\pi}
+\left(
+\sum_{\text{all } m=0} \Re\!\left[a_{\ell m}s_{\ell m}^*\right]
++
+2\sum_{\text{all } m>0} \Re\!\left[a_{\ell m}s_{\ell m}^*\right]
+\right).
+\]
+
+The sums are taken over the flattened \texttt{healpy} ordering rather than explicit $(\ell,m)$ loops. The factor of $2$ accounts for $m<0$ modes under the assumption that the contracted scalar field corresponds to a real-valued sky map.
+
+The simulator output $D_{t,p,\nu}$ therefore has units of temperature (Kelvin-like), consistent with the sky model normalization.
+
+\subsection*{B. Sky Harmonics $S_t(\nu)$}
+
+The sky model provides spherical-harmonic coefficients via
+\[
+S(\nu) = \{ s_{\ell m}(\nu) \},
+\]
+returned by
+\[
+\texttt{sky\_model.get\_alm}.
+\]
+
+If the sky model frame is \texttt{galactic}, the sky is rotated into the local lunar frame at each time $t$:
+
+\begin{enumerate}
+\item The galactic coordinates of the local zenith ($\mathrm{alt}=\pi/2$) and a horizon direction ($\mathrm{alt}=0$, $\mathrm{az}=0$) are computed.
+\item These define an orthonormal triad and a rotation matrix $R_t$.
+\item The rotation is applied to the harmonic coefficients using \texttt{healpy.Rotator}:
+\[
+S_t(\nu) = \mathcal{R}(R_t)\,S(\nu).
+\]
+\end{enumerate}
+
+If the sky model frame is \texttt{MCMF}, no rotation is applied and $S_t(\nu)=S(\nu)$.
+
+\subsection*{C. Beam Harmonics $B_{ij}(\nu)$}
+
+Each antenna beam $i$ is specified by complex electric-field components on a $(\theta,\phi)$ grid:
+\[
+E_{\theta,i}(\nu,\theta,\phi),
+\qquad
+E_{\phi,i}(\nu,\theta,\phi).
+\]
+
+\subsubsection*{C.1 Cross-power Map}
+
+For antenna pair $(i,j)$, the cross-power map is
+\[
+X_{ij}(\nu,\theta,\phi)
+=
+E_{\theta,i}E_{\theta,j}^*
++
+E_{\phi,i}E_{\phi,j}^*.
+\]
+
+\subsubsection*{C.2 Modifications}
+
+The simulator applies:
+\begin{enumerate}
+\item A zenith-angle taper $\mathrm{tapr}(\theta)$:
+\[
+X'_{ij} = X_{ij}\,\mathrm{tapr}(\theta).
+\]
+\item Gain-convention scaling:
+\[
+X''_{ij} = X'_{ij}\,\sqrt{g_i(\nu)g_j(\nu)},
+\]
+where $g_i(\nu)=\mathrm{gain\_conv}$.
+\item Optional Gaussian smoothing in $(\theta,\phi)$.
+\end{enumerate}
+
+\subsubsection*{C.3 Harmonic Conversion}
+
+The real and imaginary parts of $X''_{ij}$ are converted \emph{directly} into spherical-harmonic coefficients (no intermediate pixel map):
+\[
+B^{(\mathrm{R})}_{ij}(\nu) = \{ a^{(\mathrm{R})}_{\ell m}(\nu) \},
+\qquad
+B^{(\mathrm{I})}_{ij}(\nu) = \{ a^{(\mathrm{I})}_{\ell m}(\nu) \}.
+\]
+
+\subsection*{D. Ground Coupling Terms}
+
+Let $a_{00}$ denote the monopole coefficient of the beam harmonic expansion.
+
+\subsubsection*{D.1 Auto-correlations}
+
+\[
+G^{(\mathrm{R})}_{ii}(\nu)
+=
+1
+-
+\frac{\Re\!\left[a^{(\mathrm{R})}_{00}(\nu)\right]}{\sqrt{4\pi}}.
+\]
+
+\subsubsection*{D.2 Cross-correlations (Real)}
+
+\[
+G^{(\mathrm{R})}_{ij}(\nu)
+=
+C_{ij}(\nu)
+-
+\frac{\Re\!\left[a^{(\mathrm{R})}_{00}(\nu)\right]}{\sqrt{4\pi}},
+\]
+where $C_{ij}(\nu)$ is an optional coupling correction from \texttt{BeamCouplings}.
+
+\subsubsection*{D.3 Cross-correlations (Imaginary)}
+
+The imaginary ground term is defined using the monopole of the \emph{imaginary-part map}:
+\[
+G^{(\mathrm{I})}_{ij}(\nu)
+=
+-
+\frac{1}{\sqrt{4\pi}}
+\Re\!\left[a^{(\mathrm{I})}_{00}(\nu)\right].
+\]
+
+\subsubsection*{D.4 Ground Contribution}
+
+The additive ground signal in the spectra is
+\[
+T_{\mathrm{ground}}\,G^{(\mathrm{R/I})}_{ij}(\nu).
+\]
+
+\subsection*{E. Optional Conversion to Voltage Units}
+
+The simulator output is natively in temperature units. Voltage-squared units are produced only during post-processing using \texttt{lusee.Data}.
+
+For a product $(i,j)$:
+\[
+D^{(\mathrm{V})}_{t,p,\nu}
+=
+D_{t,p,\nu}
+\sqrt{T2V_i(\nu)\,T2V_j(\nu)}.
+\]
+
+\subsubsection*{E.1 Conversion Factor}
+
+The factor $T2V(\nu)$ is computed in \texttt{Throughput} as:
+\[
+T2V(\nu)
+=
+4k_{\mathrm{B}}\Re\!\left[Z_{\mathrm{ant}}(\nu)\right]\Gamma(\nu)^2,
+\]
+where
+\[
+\Gamma(\nu)
+=
+\frac{\lvert Z_{\mathrm{rec}}(\nu)\rvert}
+{\lvert Z_{\mathrm{ant}}(\nu)+Z_{\mathrm{rec}}(\nu)\rvert},
+\qquad
+Z_{\mathrm{rec}}(\nu)
+=
+\frac{1}{i\omega C_{\mathrm{front}} + 1/R_4}.
+\]
+
+\subsection*{F. Dependency Summary}
+
+\begin{enumerate}
+\item Instrument beams $\rightarrow$ cross-power maps $\rightarrow$ beam harmonics $B_{ij}$.
+\item Sky model $\rightarrow$ harmonics $S(\nu)$ $\rightarrow$ rotated sky $S_t(\nu)$.
+\item Spectra:
+\[
+D_{t,p,\nu}
+=
+\left\langle B_{ij}, S_t \right\rangle
++
+T_{\mathrm{ground}}\,G_{ij}.
+\]
+\item Optional voltage conversion via throughput factors.
+\end{enumerate}
+\end{document}
