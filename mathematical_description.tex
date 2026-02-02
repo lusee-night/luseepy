@@ -254,6 +254,22 @@ C_{ij}(\nu)
 \]
 where $C_{ij}(\nu)$ is an optional coupling correction from \texttt{BeamCouplings}.
 
+If a coupling entry is provided in the YAML configuration, the code constructs
+\[
+C_{ij}(\nu) = -\sigma + \sigma\,\frac{\sqrt{g_i(\nu)\,g_j(\nu)}}{2\,g_{ij}^{(2\text{-port})}(\nu)},
+\]
+where:
+\begin{itemize}
+\item $\sigma$ is the sign factor from the YAML coupling block,
+\item $g_i(\nu)$ and $g_j(\nu)$ are the single-port $\mathrm{gain\_conv}$ values of the two beams,
+\item $g_{ij}^{(2\text{-port})}(\nu)$ is the $\mathrm{gain\_conv}$ from the two-port beam file.
+\end{itemize}
+
+If no coupling configuration exists for the pair, the code sets
+\[
+C_{ij}(\nu)=0.
+\]
+
 \subsubsection*{D.3 Cross-correlations (Imaginary)}
 
 The imaginary ground term is defined using the monopole of the \emph{imaginary-part map}:
