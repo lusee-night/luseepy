@@ -16,11 +16,18 @@ from icecream import ic
 class HDF5Writer:
     """Class to handle HDF5 writing with separate methods for each data type."""
 
-    def __init__(self, output_file: str, cdi_dir: str, consts: Optional[Constants]=None):
+    def __init__(
+        self,
+        output_file: str,
+        cdi_dir: str,
+        consts: Optional[Constants] = None,
+        dcb_telemetry: Optional[Dict[str, np.ndarray]] = None,
+    ):
         self.output_file = output_file
         self.cdi_dir = cdi_dir
         self.coll = None
         self.consts = consts
+        self.dcb_telemetry = dcb_telemetry
 
     def write(self):
         """Main method to write HDF5 file."""
@@ -34,6 +41,7 @@ class HDF5Writer:
             f.attrs['cdi_directory'] = self.cdi_dir
             self._write_session_invariants(f)
             self._write_constants(f)
+            self._write_dcb_telemetry(f)
 
             # Track metadata changes
             metadata_groups = self._group_by_metadata()
@@ -66,6 +74,13 @@ class HDF5Writer:
         const_group.attrs["lun_lat_deg"] = self.consts.lun_lat_deg
         const_group.attrs["lun_long_deg"] = self.consts.lun_long_deg
         const_group.attrs["lun_height_m"] = self.consts.lun_height_m
+
+    def _write_dcb_telemetry(self, h5_file):
+        if not self.dcb_telemetry:
+            return
+        telem_group = h5_file.create_group("DCB_telemetry")
+        for name, values in self.dcb_telemetry.items():
+            telem_group.create_dataset(name, data=np.asarray(values), compression="gzip")
 
     def _write_session_invariants(self, h5_file):
         invariants = h5_file.create_group('session_invariants')
@@ -509,7 +524,12 @@ class HDF5Writer:
             zoom_pkt.zoom_timestamp = meta_time if meta_time is not None else 0.0
 
 
-def save_to_hdf5(cdi_dir: str, output_file: str, consts: Optional[Constants]=None):
+def save_to_hdf5(
+    cdi_dir: str,
+    output_file: str,
+    consts: Optional[Constants] = None,
+    dcb_telemetry: Optional[Dict[str, np.ndarray]] = None,
+):
     """
     Save a session of packets to HDF5 file.
 
@@ -517,5 +537,5 @@ def save_to_hdf5(cdi_dir: str, output_file: str, consts: Optional[Constants]=Non
         cdi_dir: Directory containing CDI output files
         output_file: Path to output HDF5 file
     """
-    writer = HDF5Writer(output_file, cdi_dir, consts)
+    writer = HDF5Writer(output_file, cdi_dir, consts, dcb_telemetry)
     writer.write()

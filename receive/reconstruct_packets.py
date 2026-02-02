@@ -252,11 +252,15 @@ if __name__ == "__main__":
     #     ic(i, decode_telemetry_packet(pkt))
     # sys.exit(0)
 
-    pkts = decode_directory('new_data/20251105_112220/fs/FLASH_TLMFS')
+    flash_path = 'new_data/20251105_112220/fs/FLASH_TLMFS'
+
+    pkts = decode_directory(flash_path)
     print(len(pkts), 'collated packets found')
 
     if True:
         print_packet_categories(pkts)
+
+    dcb_tel_dict = decode_telemetry_directory(flash_path)
 
     # Split into sessions
     sessions = split_into_sessions(pkts)
@@ -284,7 +288,7 @@ if __name__ == "__main__":
         fits_output_file = output_file + ".fits"
 
         print(f"Processing session {i}: {session_dir} -> {h5_output_file}, {fits_output_file}")
-        save_to_hdf5(session_dir, h5_output_file, Constants())
+        save_to_hdf5(session_dir, h5_output_file, Constants(), dcb_tel_dict)
         print(f"Saved to {h5_output_file}")
         # save_to_fits(session_dir, fits_output_file)
         # print(f"Saved to {fits_output_file}")
