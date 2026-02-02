@@ -290,6 +290,6 @@ if __name__ == "__main__":
         print(f"Processing session {i}: {session_dir} -> {h5_output_file}, {fits_output_file}")
         save_to_hdf5(session_dir, h5_output_file, Constants(), dcb_tel_dict)
         print(f"Saved to {h5_output_file}")
-        # save_to_fits(session_dir, fits_output_file)
-        # print(f"Saved to {fits_output_file}")
+        save_to_fits(session_dir, fits_output_file, Constants(), dcb_tel_dict)
+        print(f"Saved to {fits_output_file}")
 
