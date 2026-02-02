@@ -25,6 +25,7 @@ from low_level import *
 from fits_writer import save_to_fits
 from hdf5_writer import save_to_hdf5
 from telemetry_utils import decode_telemetry_directory, decode_telemetry_packet
+from const_storage import Constants
 
 
 def assign_uids(pkts: List[CollatedPacket]):
@@ -283,7 +284,7 @@ if __name__ == "__main__":
         fits_output_file = output_file + ".fits"
 
         print(f"Processing session {i}: {session_dir} -> {h5_output_file}, {fits_output_file}")
-        save_to_hdf5(session_dir, h5_output_file)
+        save_to_hdf5(session_dir, h5_output_file, Constants())
         print(f"Saved to {h5_output_file}")
         # save_to_fits(session_dir, fits_output_file)
         # print(f"Saved to {fits_output_file}")

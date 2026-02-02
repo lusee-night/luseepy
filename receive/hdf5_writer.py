@@ -2,12 +2,13 @@
 
 import warnings
 import numpy as np
-from typing import List, Dict
+from typing import List, Dict, Optional
 import h5py
 
 import uncrater as unc
 from uncrater.utils import NPRODUCTS, NCHANNELS
 from metadata_utils import metadata_to_dict
+from const_storage import Constants
 
 from icecream import ic
 
@@ -15,10 +16,11 @@ from icecream import ic
 class HDF5Writer:
     """Class to handle HDF5 writing with separate methods for each data type."""
 
-    def __init__(self, output_file: str, cdi_dir: str):
+    def __init__(self, output_file: str, cdi_dir: str, consts: Optional[Constants]=None):
         self.output_file = output_file
         self.cdi_dir = cdi_dir
         self.coll = None
+        self.consts = consts
 
     def write(self):
         """Main method to write HDF5 file."""
@@ -31,6 +33,7 @@ class HDF5Writer:
             # Store session-level info
             f.attrs['cdi_directory'] = self.cdi_dir
             self._write_session_invariants(f)
+            self._write_constants(f)
 
             # Track metadata changes
             metadata_groups = self._group_by_metadata()
@@ -55,6 +58,14 @@ class HDF5Writer:
 
             # Add summary information
             f.attrs['n_items'] = len(metadata_groups)
+
+    def _write_constants(self, h5_file):
+        if not self.consts:
+            return
+        const_group = h5_file.create_group("constants")
+        const_group.attrs["lun_lat_deg"] = self.consts.lun_lat_deg
+        const_group.attrs["lun_long_deg"] = self.consts.lun_long_deg
+        const_group.attrs["lun_height_m"] = self.consts.lun_height_m
 
     def _write_session_invariants(self, h5_file):
         invariants = h5_file.create_group('session_invariants')
@@ -498,7 +509,7 @@ class HDF5Writer:
             zoom_pkt.zoom_timestamp = meta_time if meta_time is not None else 0.0
 
 
-def save_to_hdf5(cdi_dir: str, output_file: str):
+def save_to_hdf5(cdi_dir: str, output_file: str, consts: Optional[Constants]=None):
     """
     Save a session of packets to HDF5 file.
 
@@ -506,5 +517,5 @@ def save_to_hdf5(cdi_dir: str, output_file: str):
         cdi_dir: Directory containing CDI output files
         output_file: Path to output HDF5 file
     """
-    writer = HDF5Writer(output_file, cdi_dir)
+    writer = HDF5Writer(output_file, cdi_dir, consts)
     writer.write()

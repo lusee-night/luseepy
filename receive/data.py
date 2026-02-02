@@ -2,12 +2,11 @@
 
 import os
 import glob
+import warnings
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import h5py
 import numpy as np
-
-from icecream import ic
 
 class Data:
     """Base class for HDF5-backed data products."""
@@ -25,6 +24,9 @@ class Data:
 
         self.time = np.array([], dtype=np.float64)
         self.meta: Dict[str, np.ndarray] = {}
+        self.lun_lat_deg = None
+        self.lun_long_deg = None
+        self.lun_height_m = None
 
         self._load_all()
 
@@ -64,11 +66,11 @@ class Data:
         data_chunks = []
         meta_chunks: Dict[str, List[np.ndarray]] = {}
 
+        constants_seen = False
         for path in self.sources:
             with h5py.File(path, "r") as f:
                 if "session_invariants" in f:
                     invariants = f["session_invariants"].attrs
-                    ic(invariants)
                     if "software_version" in invariants:
                         self.software_version = int(invariants["software_version"])
                     if "firmware_version" in invariants:
@@ -85,6 +87,12 @@ class Data:
                         self.start_time_32 = int(invariants["start_time_32"])
                     if "start_time_16" in invariants:
                         self.start_time_16 = int(invariants["start_time_16"])
+                if "constants" in f:
+                    consts = f["constants"].attrs
+                    self.lun_lat_deg = float(consts["lun_lat_deg"])
+                    self.lun_long_deg = float(consts["lun_long_deg"])
+                    self.lun_height_m = float(consts["lun_height_m"])
+                    constants_seen = True
                 for item_name in self._iter_items(f):
                     item_group = f[item_name]
                     data, meta = self._load_item(item_group)
@@ -108,6 +116,8 @@ class Data:
 
         if "time" in self.meta:
             self.time = self.meta["time"]
+        if not constants_seen:
+            warnings.warn("Missing constants group in HDF5 file; landing coordinates set to None")
 
     def _iter_items(self, h5file: h5py.File) -> List[str]:
         return sorted([key for key in h5file.keys() if key.startswith("item_")])
