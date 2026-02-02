@@ -16,6 +16,10 @@ def test_spectra_shapes():
     assert data.time.shape[0] == n_time, "time length does not match spectra"
     assert data.FPGA_temperature.shape[0] == n_time, "FPGA_temperature length does not match spectra"
 
+    assert data.lun_height_m >= 0
+    assert data.lun_long_deg is not None
+    assert data.lun_lat_deg is not None
+
 def test_plots():
     data = Spectra(source="session_001_20251105_120504.h5")
     plt.plot(data.time, data.FPGA_temperature)
@@ -24,6 +28,6 @@ def test_plots():
 
 
 if __name__ == "__main__":
-    # test_spectra_shapes()
-    test_plots()
+    test_spectra_shapes()
+    # test_plots()
     print("OK")

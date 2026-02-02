@@ -97,6 +97,7 @@ def decode_telemetry_directory(path) -> Dict[str, np.ndarray]:
     print(f"Decoding telemetry file {f}")
     data = open(f, "rb").read()
     pkts = L0_to_ccsds(data)
+    pkts = extract_telemetry_packets(pkts)
 
     values: Dict[str, list] = {name: [] for name in FIELD_NAMES}
     values["encoder_position"] = []
