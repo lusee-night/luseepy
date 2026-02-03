@@ -13,7 +13,56 @@ from low_level import *
 # Packet / field definitions
 # ---------------------------
 
-FIELD_NAMES = [
+TELEMETRY_FIELDS = [
+    ("mission_seconds", "uint:32"),
+    ("lusee_subsecs", "uint:16"),
+    ("THERM_FPGA", "uint:12"), ("THERM_DCB", "uint:12"), ("VMON_6V", "uint:12"), ("VMON_3V7", "uint:12"), ("VMON_1V8", "uint:12"), ("VMON_3V3D", "uint:12"),
+    ("VMON_2V5D", "uint:12"), ("VMON_1V2D", "uint:12"), ("VMON_VCC_FLASH0", "uint:12"), ("VMON_VCC_FLASH1", "uint:12"),
+    ("VMON_VCC_FLASH2", "uint:12"), ("VMON_VCC_FLASH3", "uint:12"), ("VMON_3V3_HK", "uint:12"), ("VMON_GND", "uint:12"),
+    ("GND_RES", "uint:12"), ("GND_RES2", "uint:12"), ("SPE_P5_V", "uint:12"), ("SPE_P5_C", "uint:12"), ("SPE_N5_V", "uint:12"), ("SPE_N5_C", "uint:12"),
+    ("SPE_1VA8_V", "uint:12"), ("SPE_1VA8_C", "uint:12"), ("SPE_1VAD8_V", "uint:12"), ("SPE_1VAD8_C", "uint:12"),
+    ("SPE_3VD3_V", "uint:12"), ("SPE_3VD3_C", "uint:12"), ("SPE_2VD5_V", "uint:12"), ("SPE_2VD5_C", "uint:12"),
+    ("SPE_1VD8_V", "uint:12"), ("SPE_1VD8_C", "uint:12"), ("SPE_1VD5_V", "uint:12"), ("SPE_1VD5_C", "uint:12"),
+    ("SPE_1VD0_V", "uint:12"), ("SPE_1VD0_C", "uint:12"), ("SPE_FPGA_T", "uint:12"), ("SPE_ADC0_T", "uint:12"), ("SPE_ADC1_T", "uint:12"),
+    ("PFPS_DCB_1V8", "uint:12"), ("PFPS_DCB_3V7", "uint:12"), ("PFPS_DCB_5V", "uint:12"), ("PFPS_SPE_1V5", "uint:12"),
+    ("PFPS_SPE_2V3", "uint:12"), ("PFPS_SPE_3V6", "uint:12"), ("PFPS_SPE_P5V5", "uint:12"), ("PFPS_SPE_N5V5", "uint:12"),
+    ("PFPS_MOT_A", "uint:12"), ("PFPS_PA3_T", "uint:12"), ("PFPS_PA2_T", "uint:12"), ("PFPS_PA1_T", "uint:12"), ("PFPS_PA0_T", "uint:12"),
+    ("PFPS_CAR_T", "uint:12"), ("PFPS_PFPS_T", "uint:12"), ("PFPS_BAT_T", "uint:12"), ("VMON_PDU_COMMS", "uint:12"),
+    ("VMON_PDU_PFPS", "uint:12"), ("VMON_PDU_CAROUSEL", "uint:12"), ("ADC_PWR", "uint:12")
+]
+
+ENCODER_FIELDS = [
+    ("mission_seconds", "uint:32"),
+    ("lusee_subsecs", "uint:16"),
+    ("mbstats_cmd_cnt", "uint:32"),
+    ("mbstats_cmd_proc_errors", "uint:32"),
+    ("mbstats_hsk_req_cnt", "uint:32"),
+    ("mbstats_hsk_req_proc_errors", "uint:32"),
+    ("mbstats_misc_cnt", "uint:32"),
+    ("mbstats_misc_proc_errors", "uint:32"),
+    ("mbstats_dropped_msgs", "uint:32"),
+    ("mbstats_received_msgs", "uint:32"),
+    ("mbstats_peak_msgs", "uint:32"),
+    ("iostats_secs_since_last_rx", "uint:32"),
+    ("iostats_secs_since_last_tx", "uint:32"),
+    ("iostats_total_read_bytes", "uint:32"),
+    ("iostats_total_dropped_rx_bytes", "uint:32"),
+    ("iostats_total_read_errors", "uint:32"),
+    ("iostats_written_bytes", "uint:32"),
+    ("iostats_write_errors", "uint:32"),
+    ("pcdu_tlm_pkt_proc_errors", "uint:32"),
+    ("pcdu_crc_errors", "uint:32"),
+    ("pcdu_oos_cnt", "uint:32"),
+    ("pcdu_cmt_cnt", "uint:32"),
+    ("pcdu_bcr_hk_cnt", "uint:32"),
+    ("pcdu_apr_hk_cnt", "uint:32"),
+    ("enc_pos", "uint:32"),
+    ("enc_status", "uint:32"),
+]
+
+ENCODER_KEEP_FIELDS = [ "mission_seconds", "lusee_subsecs", "enc_pos", "enc_status" ]
+
+TELEMETRY_FIELD_NAMES = [
     "THERM_FPGA", "THERM_DCB", "VMON_6V", "VMON_3V7", "VMON_1V8", "VMON_3V3D",
     "VMON_2V5D", "VMON_1V2D", "VMON_VCC_FLASH0", "VMON_VCC_FLASH1",
     "VMON_VCC_FLASH2", "VMON_VCC_FLASH3", "VMON_3V3_HK", "VMON_GND",
@@ -77,6 +126,8 @@ def spec_adc(x, V=2.07):
         R = (25.37 * x - 474.5) / (V + 0.04745 - 0.002537 * x)
         return round(3694 / (12.39 - math.log(10000 / R)) - 273.15, 3)
     except Exception:
+        # ic(x, V, R)
+        # raise
         return 0.0
 
 
@@ -99,27 +150,26 @@ def decode_telemetry_directory(path) -> Dict[str, np.ndarray]:
     pkts = L0_to_ccsds(data)
     pkts = extract_telemetry_packets(pkts)
 
-    values: Dict[str, list] = {name: [] for name in FIELD_NAMES}
-    values["encoder_position"] = []
-    values["encoder_status"] = []
+    telemetry_values: Dict[str, list] = {name: [] for name in TELEMETRY_FIELD_NAMES}
+
+    enc_values = { name : [] for name in ENCODER_KEEP_FIELDS }
 
     for pkt in pkts:
         if pkt.app_id == 0x314:
             row = decode_telemetry_packet(pkt)
             if row is None:
                 continue
-            for key in FIELD_NAMES:
-                values[key].append(row[key])
+            for key in TELEMETRY_FIELD_NAMES:
+                telemetry_values[key].append(row[key])
         elif pkt.app_id == 0x325:
-            pos, status = extract_encoder_info(pkt)
-            values["encoder_position"].append(pos)
-            values["encoder_status"].append(status)
+            row = extract_encoder_info(pkt)
+            for key in ENCODER_KEEP_FIELDS:
+                enc_values[key].append(row[key])
 
-    return {key: np.asarray(vals) for key, vals in values.items()}
+    return {key: np.asarray(vals) for key, vals in enc_values.items()}
 
 
-
-def decode_telemetry_packet(packet: int):
+def decode_telemetry_packet(packet):
     """
       1) Extract payload bits (after header).
       2) Parse 12-bit unsigned fields into a dict.
@@ -130,13 +180,15 @@ def decode_telemetry_packet(packet: int):
     payload = packet.blob
     stream = BitStream(payload)
 
-    _ = stream.read("uint:32")
-    _ = stream.read("uint:16")
+    row = {}
+    for field, field_type in TELEMETRY_FIELDS:
+        row[field] = stream.read(field_type)
 
-    row = {field: stream.read("uint:12") for field in FIELD_NAMES}
-
+    old = row["SPE_1VA8_V"]
     # Apply engineering-unit conversions
     SPE_1VA8_V = 0.0025373 * row["SPE_1VA8_V"] - 0.0474504
+
+    ic(hex(packet.app_id), old, row["mission_seconds"], SPE_1VA8_V)
 
     row["THERM_FPGA"] = dcb_thermistor(row["THERM_FPGA"])
     row["THERM_DCB"] = dcb_thermistor(row["THERM_DCB"])
@@ -173,6 +225,18 @@ def decode_telemetry_packet(packet: int):
     return row
 
 
-def extract_encoder_info(packet) -> Tuple[int, int]:
-    _ = packet
-    return 0, 0
+def extract_encoder_info(packet) -> dict:
+    if packet.app_id != 0x325:
+        return None
+
+    result = {}
+
+    payload = packet.blob
+    stream = BitStream(payload)
+
+    for field_name, field_type in ENCODER_FIELDS:
+        field_value = stream.read(field_type)
+        if field_name in ENCODER_KEEP_FIELDS:
+            result[field_name] = field_value
+
+    return result

@@ -14,7 +14,10 @@ def decode_ccsds_header(pkt) -> dict:
     header['groupflags'] = (formatted_data[1] >> 14)
     header['sequence_cnt'] = (formatted_data[1] & 0x3FFF)
     header['packetlen'] = (formatted_data[2])
-    # print(header)
+    # for debug only
+    # if header['secheaderflag']:
+    #     header['appid_hex'] = hex(header['appid'])
+    #     print(header)
     return header
 
 
@@ -160,9 +163,11 @@ def extract_telemetry_packets(pkts) -> List[CollatedPacket]:
         header = decode_ccsds_header(head)
         cur_apid = header['appid']
         if cur_apid in telemetry_appids:
-            print (f"Seq={seq} APID={hex(cur_apid)} GF={header['groupflags']} Len={len(body)} TotalLen={len(pkt)}")
-            print(header)
-            print(body.hex().upper())
+            pass
+            # print (f"Seq={seq} APID={hex(cur_apid)} TotalLen={len(pkt)}")
+            # print (f"Seq={seq} APID={hex(cur_apid)} GF={header['groupflags']} Len={len(body)} TotalLen={len(pkt)}")
+            # print(header)
+            # print(body.hex().upper())
             # print(reorder(body).hex().upper())
         if last_apid is not None and last_apid != cur_apid:
             print(f"Warning: APID changed from {hex(last_apid)} to {hex(cur_apid)} in sequence {seq}")

@@ -90,7 +90,6 @@ class HDF5Writer:
             return
 
         invariants.attrs['software_version'] = int(hello.SW_version)
-        ic(invariants.attrs['software_version'], int(hello.SW_version))
         invariants.attrs['firmware_version'] = int(hello.FW_Version)
         invariants.attrs['firmware_id'] = int(hello.FW_ID)
         invariants.attrs['firmware_date'] = int(hello.FW_Date)
@@ -177,7 +176,7 @@ class HDF5Writer:
         # Group data by metadata configuration
         for sp_dict in self.coll.spectra:
             meta_pkt = sp_dict['meta']
-            meta_dict = metadata_to_dict(meta_pkt)
+            meta_dict = metadata_to_dict(meta_pkt, True)
 
             if current_metadata_dict is None or not self._metadata_equal(current_metadata_dict, meta_dict):
                 # New metadata configuration

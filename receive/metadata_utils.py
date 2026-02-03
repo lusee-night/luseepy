@@ -2,6 +2,7 @@
 
 import numpy as np
 from uncrater.utils import NPRODUCTS
+from icecream import ic
 
 
 def ADC_stat_to_arrays(adc_stats):
@@ -22,11 +23,14 @@ def route_to_arrays(routes):
         'minus': np.array([int(x.minus) for x in routes], dtype=np.uint8),
     }
 
-def metadata_to_dict(meta_pkt) -> dict:
+def metadata_to_dict(meta_pkt, print_debug=False) -> dict:
     """Convert metadata packet to dictionary"""
     if hasattr(meta_pkt, '_read'):
         meta_pkt._read()
     base = getattr(meta_pkt, 'base', meta_pkt)
+
+    # if print_debug:
+    #     ic(int(base.uC_time), int(base.time_32), int(base.time_16), int(base.Navgf), int(base.Navg1_shift), int(base.Navg2_shift))
 
     result = {
         '_uC_time': int(base.uC_time),
@@ -75,5 +79,7 @@ def metadata_to_dict(meta_pkt) -> dict:
     for attr_name, attr_value in vars(meta_pkt).items():
         if attr_name.startswith("adc_") or attr_name.startswith("telemetry_") or attr_name == "time":
             result[attr_name] = attr_value
+        # if print_debug and attr_name == "time":
+        #     ic(attr_value)
 
     return result

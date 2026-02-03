@@ -24,7 +24,7 @@ from pycoreloop import core_loop as cl
 from low_level import *
 from fits_writer import save_to_fits
 from hdf5_writer import save_to_hdf5
-from telemetry_utils import decode_telemetry_directory, decode_telemetry_packet
+from telemetry_utils import decode_telemetry_directory
 from const_storage import Constants
 
 
