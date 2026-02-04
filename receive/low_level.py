@@ -85,6 +85,7 @@ def L0_to_ccsds(data) -> list:
 
                     if pktcrc != compcrc:
                         print(f"CRC mismatch in packet (pktcrc=0x{pktcrc:04X} compcrc=0x{compcrc:04X})")
+                        assert False
 
                     pkts.append((sequence_cnt, pkt_head, pkt_body[:-2]))
                     state = PState.FINDING_SYNC

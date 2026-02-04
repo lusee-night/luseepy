@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import math
 import os.path
+import pickle
 from typing import Dict, Tuple
 
 import numpy as np
@@ -185,6 +186,17 @@ def decode_telemetry_packet(packet):
         row[field] = stream.read(field_type)
 
     old = row["SPE_1VA8_V"]
+    if old <= 15:
+        with open("bad_0x314.bin", "wb") as f:
+            pickle.dump(
+                {
+                    "app_id": packet.app_id,
+                    "start_seq": getattr(packet, "start_seq", None),
+                    "seq": getattr(packet, "seq", None),
+                    "blob": bytes(packet.blob),
+                },
+                f,
+            )
     # Apply engineering-unit conversions
     SPE_1VA8_V = 0.0025373 * row["SPE_1VA8_V"] - 0.0474504
 

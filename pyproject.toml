@@ -17,5 +17,6 @@ dependencies = [
     "fitsio",
     "pyshtools",
     "healpy",
-    "lunarsky"
+    "lunarsky",
+    "pytest>=9.0.2",
 ]
