@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
+import bisect
 import math
 import os.path
 import pickle
-from typing import Dict, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from bitstring import BitStream
@@ -61,7 +62,7 @@ ENCODER_FIELDS = [
     ("enc_status", "uint:32"),
 ]
 
-ENCODER_KEEP_FIELDS = [ "mission_seconds", "lusee_subsecs", "enc_pos", "enc_status" ]
+ENCODER_KEEP_FIELDS = ["mission_seconds", "lusee_subsecs", "enc_pos", "enc_status"]
 
 TELEMETRY_FIELD_NAMES = [
     "THERM_FPGA", "THERM_DCB", "VMON_6V", "VMON_3V7", "VMON_1V8", "VMON_3V3D",
@@ -140,34 +141,96 @@ def SPE_ADC1_T(x, V=2.07): return spec_adc(x, V)
 # Packet decoding
 # ---------------------------
 
-def decode_telemetry_directory(path) -> Dict[str, np.ndarray]:
+def _session_index(
+    mission_seconds: int,
+    session_start_seconds: List[int],
+    skip_out_of_session: bool,
+) -> Optional[int]:
+    if not session_start_seconds:
+        return None
+
+    if mission_seconds < session_start_seconds[0]:
+        return None if skip_out_of_session else 0
+
+    return bisect.bisect_right(session_start_seconds, mission_seconds) - 1
+
+
+def _init_fpga_values() -> Dict[str, list]:
+    values: Dict[str, list] = {name: [] for name in TELEMETRY_FIELD_NAMES}
+    values["fpga_mission_seconds"] = []
+    values["fpga_lusee_subsecs"] = []
+    return values
+
+
+def _init_encoder_values() -> Dict[str, list]:
+    return {
+        "encoder_mission_seconds": [],
+        "encoder_lusee_subsecs": [],
+        "enc_pos": [],
+        "enc_status": [],
+    }
+
+
+def decode_telemetry_directory(
+    path: str,
+    session_start_seconds: List[int],
+    skip_out_of_session: bool = False,
+) -> List[Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]]:
     f = os.path.join(path, "b01", "FFFFFFFE")
     if not os.path.exists(f):
         print(f"WARNING: file {f} not found, skipping")
-        return {}
+        return []
 
     print(f"Decoding telemetry file {f}")
     data = open(f, "rb").read()
     pkts = L0_to_ccsds(data)
     pkts = extract_telemetry_packets(pkts)
 
-    telemetry_values: Dict[str, list] = {name: [] for name in TELEMETRY_FIELD_NAMES}
-
-    enc_values = { name : [] for name in ENCODER_KEEP_FIELDS }
+    n_sessions = len(session_start_seconds)
+    telemetry_values_by_session = [_init_fpga_values() for _ in range(n_sessions)]
+    encoder_values_by_session = [_init_encoder_values() for _ in range(n_sessions)]
 
     for pkt in pkts:
         if pkt.app_id == 0x314:
             row = decode_telemetry_packet(pkt)
             if row is None:
                 continue
+            sess_idx = _session_index(
+                int(row["mission_seconds"]),
+                session_start_seconds,
+                skip_out_of_session,
+            )
+            if sess_idx is None:
+                continue
+            telemetry_values = telemetry_values_by_session[sess_idx]
+            telemetry_values["fpga_mission_seconds"].append(row["mission_seconds"])
+            telemetry_values["fpga_lusee_subsecs"].append(row["lusee_subsecs"])
             for key in TELEMETRY_FIELD_NAMES:
                 telemetry_values[key].append(row[key])
         elif pkt.app_id == 0x325:
             row = extract_encoder_info(pkt)
-            for key in ENCODER_KEEP_FIELDS:
-                enc_values[key].append(row[key])
+            if row is None:
+                continue
+            sess_idx = _session_index(
+                int(row["mission_seconds"]),
+                session_start_seconds,
+                skip_out_of_session,
+            )
+            if sess_idx is None:
+                continue
+            enc_values = encoder_values_by_session[sess_idx]
+            enc_values["encoder_mission_seconds"].append(row["mission_seconds"])
+            enc_values["encoder_lusee_subsecs"].append(row["lusee_subsecs"])
+            enc_values["enc_pos"].append(row["enc_pos"])
+            enc_values["enc_status"].append(row["enc_status"])
 
-    return {key: np.asarray(vals) for key, vals in enc_values.items()}
+    results: List[Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]] = []
+    for tel_vals, enc_vals in zip(telemetry_values_by_session, encoder_values_by_session):
+        tel_arr = {key: np.asarray(vals) for key, vals in tel_vals.items()}
+        enc_arr = {key: np.asarray(vals) for key, vals in enc_vals.items()}
+        results.append((tel_arr, enc_arr))
+
+    return results
 
 
 def decode_telemetry_packet(packet):

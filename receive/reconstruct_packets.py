@@ -133,20 +133,10 @@ def write_sessions(base_path: str, sessions: List[List[CollatedPacket]], check_e
     session_dirs = []
 
     for session_idx, session_packets in enumerate(sessions):
-        # Get session ID from first uC_Start packet
-        session_id = None
-        for pkt in session_packets:
-            if pkt.app_id == appId.AppID_uC_Start:
-                header = cl.startup_hello.from_buffer(pkt.blob[:ctypes.sizeof(cl.startup_hello)])
-                # Use Time2Time to convert to proper timestamp
-                session_id = unc.utils.Time2Time(header.time_32, header.time_16)
-                break
-
-        if session_id is None:
-            session_id = 0
+        session_id = get_session_start_seconds(session_packets)
 
         # Create directory name with session ID (as integer seconds)
-        dir_name = f"cdi_output_{int(session_id)}"
+        dir_name = f"cdi_output_{session_id}"
         session_dir = os.path.join(base_path, dir_name)
         os.makedirs(session_dir, exist_ok=True)
         session_dirs.append(session_dir)
@@ -174,6 +164,22 @@ def write_sessions(base_path: str, sessions: List[List[CollatedPacket]], check_e
                 f.write(p.blob)
 
     return session_dirs
+
+
+def get_session_start_seconds(session_packets: List[CollatedPacket]) -> int:
+    # Get session ID from first uC_Start packet
+    session_id = None
+    for pkt in session_packets:
+        if pkt.app_id == appId.AppID_uC_Start:
+            header = cl.startup_hello.from_buffer(pkt.blob[:ctypes.sizeof(cl.startup_hello)])
+            # Use Time2Time to convert to proper timestamp
+            session_id = unc.utils.Time2Time(header.time_32, header.time_16)
+            break
+
+    if session_id is None:
+        session_id = 0
+
+    return int(session_id)
 
 
 def split_into_sessions(pkts: List[CollatedPacket]) -> List[List[CollatedPacket]]:
@@ -260,18 +266,28 @@ if __name__ == "__main__":
     if True:
         print_packet_categories(pkts)
 
-    dcb_tel_dict = decode_telemetry_directory(flash_path)
-
     # Split into sessions
     sessions = split_into_sessions(pkts)
     print(f"Found {len(sessions)} sessions")
+
+    session_start_seconds = [get_session_start_seconds(s) for s in sessions]
+    dcb_tel_by_session = decode_telemetry_directory(
+        flash_path,
+        session_start_seconds,
+        skip_out_of_session=False,
+    )
 
     # Write sessions to directories
     base_output = "new_data/20251105_112220/sessions"
     session_dirs = write_sessions(base_output, sessions)
 
     # Save each session to HDF5
-    for i, session_dir in enumerate(session_dirs):
+    if len(session_dirs) != len(dcb_tel_by_session):
+        print(
+            f"Warning: {len(session_dirs)} sessions but {len(dcb_tel_by_session)} telemetry blocks; truncating to shortest."
+        )
+    for i, (session_dir, dcb_tel_pair) in enumerate(zip(session_dirs, dcb_tel_by_session)):
+        fpga_tel, encoder_tel = dcb_tel_pair
         # Get session ID from directory name
         session_id = session_dir.split('_')[-1]
 
@@ -288,8 +304,7 @@ if __name__ == "__main__":
         fits_output_file = output_file + ".fits"
 
         print(f"Processing session {i}: {session_dir} -> {h5_output_file}, {fits_output_file}")
-        save_to_hdf5(session_dir, h5_output_file, Constants(), dcb_tel_dict)
+        save_to_hdf5(session_dir, h5_output_file, Constants(), fpga_tel, encoder_tel)
         print(f"Saved to {h5_output_file}")
-        save_to_fits(session_dir, fits_output_file, Constants(), dcb_tel_dict)
+        save_to_fits(session_dir, fits_output_file, Constants(), fpga_tel, encoder_tel)
         print(f"Saved to {fits_output_file}")
-

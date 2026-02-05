@@ -30,14 +30,16 @@ class FITSWriter:
         output_file: str,
         cdi_dir: str,
         consts: Optional[Constants] = None,
-        dcb_telemetry: Optional[Dict[str, np.ndarray]] = None,
+        dcb_fpga_telemetry: Optional[Dict[str, np.ndarray]] = None,
+        dcb_encoder_telemetry: Optional[Dict[str, np.ndarray]] = None,
     ):
         self.output_file = output_file
         self.cdi_dir = cdi_dir
         self.coll = None
         self.hdu_list = None
         self.consts = consts
-        self.dcb_telemetry = dcb_telemetry
+        self.dcb_fpga_telemetry = dcb_fpga_telemetry
+        self.dcb_encoder_telemetry = dcb_encoder_telemetry
 
     def write(self):
         """Main method to write FITS file."""
@@ -225,15 +227,18 @@ class FITSWriter:
         self.hdu_list.append(hdu)
 
     def _write_dcb_telemetry(self):
-        if not self.dcb_telemetry:
+        if not self.dcb_fpga_telemetry and not self.dcb_encoder_telemetry:
             return
-        for name, values in self.dcb_telemetry.items():
-            data = np.asarray(values)
-            hdu = fits.ImageHDU(data=data, name=f'DCB_{self._sanitize_key(name)[:16]}')
-            hdu.header['EXTDESC'] = ('DCB telemetry field', 'Extension description')
-            hdu.header['FIELD'] = (name, 'Field name')
-            hdu.header['NROWS'] = (len(data), 'Number of samples')
-            self.hdu_list.append(hdu)
+        for dcb_dict in [self.dcb_fpga_telemetry, self.dcb_encoder_telemetry]:
+            if not dcb_dict:
+                continue
+            for name, values in dcb_dict.items():
+                data = np.asarray(values)
+                hdu = fits.ImageHDU(data=data, name=f'DCB_{self._sanitize_key(name)[:16]}')
+                hdu.header['EXTDESC'] = ('DCB telemetry field', 'Extension description')
+                hdu.header['FIELD'] = (name, 'Field name')
+                hdu.header['NROWS'] = (len(data), 'Number of samples')
+                self.hdu_list.append(hdu)
 
     def _write_metadata_global(self):
         """Write concatenated metadata as a single binary table."""
@@ -822,7 +827,14 @@ def save_to_fits(
     cdi_dir: str,
     output_file: str,
     consts: Optional[Constants] = None,
-    dcb_telemetry: Optional[Dict[str, np.ndarray]] = None,
+    dcb_fpga_telemetry: Optional[Dict[str, np.ndarray]] = None,
+    dcb_encoder_telemetry: Optional[Dict[str, np.ndarray]] = None,
 ):
-    writer = FITSWriter(output_file=output_file, cdi_dir=cdi_dir, consts=consts, dcb_telemetry=dcb_telemetry)
+    writer = FITSWriter(
+        output_file=output_file,
+        cdi_dir=cdi_dir,
+        consts=consts,
+        dcb_fpga_telemetry=dcb_fpga_telemetry,
+        dcb_encoder_telemetry=dcb_encoder_telemetry,
+    )
     writer.write()

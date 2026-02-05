@@ -21,13 +21,15 @@ class HDF5Writer:
         output_file: str,
         cdi_dir: str,
         consts: Optional[Constants] = None,
-        dcb_telemetry: Optional[Dict[str, np.ndarray]] = None,
+        dcb_fpga_telemetry: Optional[Dict[str, np.ndarray]] = None,
+        dcb_encoder_telemetry: Optional[Dict[str, np.ndarray]] = None,
     ):
         self.output_file = output_file
         self.cdi_dir = cdi_dir
         self.coll = None
         self.consts = consts
-        self.dcb_telemetry = dcb_telemetry
+        self.dcb_fpga_telemetry = dcb_fpga_telemetry
+        self.dcb_encoder_telemetry = dcb_encoder_telemetry
 
     def write(self):
         """Main method to write HDF5 file."""
@@ -76,11 +78,14 @@ class HDF5Writer:
         const_group.attrs["lun_height_m"] = self.consts.lun_height_m
 
     def _write_dcb_telemetry(self, h5_file):
-        if not self.dcb_telemetry:
+        if not self.dcb_fpga_telemetry and not self.dcb_encoder_telemetry:
             return
         telem_group = h5_file.create_group("DCB_telemetry")
-        for name, values in self.dcb_telemetry.items():
-            telem_group.create_dataset(name, data=np.asarray(values), compression="gzip")
+        for dcb_dict in [self.dcb_fpga_telemetry, self.dcb_encoder_telemetry]:
+            if not dcb_dict:
+                continue
+            for name, values in dcb_dict.items():
+                telem_group.create_dataset(name, data=np.asarray(values), compression="gzip")
 
     def _write_session_invariants(self, h5_file):
         invariants = h5_file.create_group('session_invariants')
@@ -527,7 +532,8 @@ def save_to_hdf5(
     cdi_dir: str,
     output_file: str,
     consts: Optional[Constants] = None,
-    dcb_telemetry: Optional[Dict[str, np.ndarray]] = None,
+    dcb_fpga_telemetry: Optional[Dict[str, np.ndarray]] = None,
+    dcb_encoder_telemetry: Optional[Dict[str, np.ndarray]] = None,
 ):
     """
     Save a session of packets to HDF5 file.
@@ -536,5 +542,5 @@ def save_to_hdf5(
         cdi_dir: Directory containing CDI output files
         output_file: Path to output HDF5 file
     """
-    writer = HDF5Writer(output_file, cdi_dir, consts, dcb_telemetry)
+    writer = HDF5Writer(output_file, cdi_dir, consts, dcb_fpga_telemetry, dcb_encoder_telemetry)
     writer.write()
