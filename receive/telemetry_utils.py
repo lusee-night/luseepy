@@ -250,7 +250,7 @@ def decode_telemetry_packet(packet):
 
     old = row["SPE_1VA8_V"]
     if old <= 15:
-        with open("bad_0x314.bin", "wb") as f:
+        with open("bad_0x314.pkl", "wb") as f:
             pickle.dump(
                 {
                     "app_id": packet.app_id,
@@ -260,6 +260,8 @@ def decode_telemetry_packet(packet):
                 },
                 f,
             )
+        with open("bad_0x314.bin", "wb") as f:
+            f.write(bytes(packet.blob))
     # Apply engineering-unit conversions
     SPE_1VA8_V = 0.0025373 * row["SPE_1VA8_V"] - 0.0474504
 
