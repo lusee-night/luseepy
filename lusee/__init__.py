@@ -13,7 +13,7 @@ from .Satellite     import Satellite, ObservedSatellite
 from .Beam          import Beam, grid2healpix, grid2healpix_alm_fast
 from .BeamGauss     import BeamGauss
 from .BeamCouplings import BeamCouplings
-from .Simulation    import Simulator
+from .DefaultSimulator import DefaultSimulator
 
 from .SkyModels     import FitsSky
 from .SkyModels     import GalCenter

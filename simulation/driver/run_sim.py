@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+from unittest import case
+
+
 if __name__ == "__main__":
     import  lusee
     import  numpy  as np
@@ -127,10 +130,15 @@ class SimDriver(dict):
 
         
         print ("  setting up Simulation object...")
-        S = lusee.Simulator (O,self.beams, self.sky, freq = self.freq, lmax = self.lmax,
-                             combinations=combs, Tground = od['Tground'],
-                             cross_power = self.couplings, beam_smooth = self.beam_smooth,
-                             extra_opts = self['simulation'] )
+        match self['simulation'].get('engine','default'):
+            case 'default':
+                S = lusee.DefaultSimulator (O,self.beams, self.sky, Tground = od['Tground'], combinations = combs,
+                                    freq = self.freq, lmax = self.lmax,
+                                    cross_power = self.couplings, beam_smooth = self.beam_smooth,
+                                    extra_opts = self['simulation'] )
+            case _:
+                print ("Simulation engine not recognized:",self['simulation'].get('engine'))
+                raise Exception('NotImplementedError')
         print (f"  We will simulate {len(O.times)} timesteps x {len(combs)} data products (some complex) x {len(self.freq)} frequency bins.")
         print ("  Simulating...")
         S.simulate(times=O.times)
@@ -138,7 +146,7 @@ class SimDriver(dict):
         fname = os.path.join(self.outdir, self['simulation']['output'])
 
         print ("Writing to",fname)
-        S.write(fname)
+        S.write_fits(fname)
 
 
 

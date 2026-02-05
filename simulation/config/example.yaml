@@ -34,7 +34,7 @@ observation:
   lat: -10
   beams: [ N, S, E, W ]
   lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
-  dt: 24*3600 
+  dt: 3600
   Tground: 0
   lmax: 32
   combinations: all
@@ -44,5 +44,6 @@ observation:
     step: 4
 
 simulation:
+  engine: default
   output: sim_example.fits
   cache_transform: lunar_day.pickle  

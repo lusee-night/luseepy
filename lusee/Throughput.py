@@ -120,7 +120,7 @@ class Throughput:
         """
         Function that calculates 4*k_B*R*Gamma^2 for antenna match
 
-        :param freq: Frequency
+        :param freq: Frequency  [AS: clarify units - MHz or Hz?]
         :type freq: float
 
         :returns: T2Vsq

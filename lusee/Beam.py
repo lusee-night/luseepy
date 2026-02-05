@@ -513,9 +513,9 @@ class Beam:
             cax = divider.append_axes("right", size="5%", pad=0.05)
             plt.colorbar(im, cax=cax)
 
-    def get_healpix(self,lmax, field, freq_ndx = None):
+    def get_healpix_alm(self,lmax, field, freq_ndx = None):
         """
-        Function that produces a healpix map of specified field
+        Function that produces a healpix map of specified field in harmonic space
 
         :param lmax: Maximum l value
         :type lmax: int

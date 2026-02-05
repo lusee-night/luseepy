@@ -3,7 +3,7 @@ from scipy.ndimage import gaussian_filter
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
-
+from .Simulation import SimulatorBase
 import numpy as np
 import healpy as hp
 import fitsio
@@ -68,9 +68,9 @@ def eul2rot(theta) :
 
 
 
-class Simulator:
+class DefaultSimulator(SimulatorBase):
     """
-    Simulator class
+    Default Simulator in luseepy 
     
     :param obs: Observation parameters, from lusee.observation class
     :type obs: class
@@ -86,58 +86,29 @@ class Simulator:
     :type taper: float
     :param Tground: Temperature of lunar ground
     :type Tground: float
-    :param freq: Frequencies at which instrument observes sky. If empty, taken from lusee.beam class.
+    :param freq: Frequencies at which instrument observes sky in MHz. If empty, taken from lusee.beam class.
     :type freq: list[float]
-    :param cross_power: Cross power for beam combinations. If empty, taken from lusee.beamcouplings.
-    :type cross_power: list[float]
-    :param beam_smooth: Standard deviation of Gaussian filter for beam smoothing
+    :param cross_power: Beam coupling model for cross-power terms. If empty, uses :class:`lusee.BeamCouplings`.
+    :type cross_power: BeamCouplings
+    :param beam_smooth: Standard deviation of Gaussian filter for beam smoothing (in pixel units)
     :type beam_smooth: float
-    :param extra_opt: Any extra options to pass to simulation. Currently includes "dump_beams" (saves instrument beams to file) and "cache_transform" (loads beam transformations from file).
-    :type extra_opt: list[str]
+    :param extra_opts: Extra options for simulation. Supports "dump_beams" (saves instrument beams to file)
+        and "cache_transform" (loads/saves beam transformations from file).
+    :type extra_opts: dict
     
     """
 
-    def __init__ (self, obs, beams, sky_model, 
-                  combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], lmax = 128,
-                  taper = 0.03, Tground = 200.0, freq = None,
-                  cross_power = None, beam_smooth = None,
+    def __init__ (self, obs, beams, sky_model, Tground = 200.0,
+                  combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None,
+                  lmax = 128, taper = 0.03, cross_power = None, beam_smooth = None,
                   extra_opts = {}):
-        self.obs = obs
-        self.sky_model = sky_model
+        super().__init__(obs, beams, sky_model, Tground, combinations, freq)
         self.lmax = lmax
         self.taper = taper
-        self.Tground = Tground
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
         self.beam_smooth = beam_smooth
-        if freq is None:
-            self.freq = beams[0].freq
-        else:
-            self.freq = freq
-            
-        freq_ndx_beam = []
-        freq_ndx_sky = []
-        for f in self.freq:
-            try:
-                ndx = list(beams[0].freq).index(f)
-            except ValueError:
-                print ("Error:")
-                print (f"Frequency {f} does not exist in beams.")
-                sys.exit(1)
-            freq_ndx_beam.append(ndx)
-            try:
-                ndx = list(sky_model.freq).index(f)
-            except ValueError:
-                print ("Error:")
-                print (f"Frequency {f} does not exist in sky model.")
-                sys.exit(1)
-            freq_ndx_sky.append(ndx)
-            
-        self.freq_ndx_beam = freq_ndx_beam
-        self.freq_ndx_sky = freq_ndx_sky
-        self.Nfreq = len(self.freq)
         self.prepare_beams (beams, combinations)
-        self.result = None
 
 
     def prepare_beams(self,beams, combinations):
@@ -173,14 +144,14 @@ class Simulator:
 
             # now need to transfrom this to healpy
             # (Note: we cut on freq_ndx above, so yes, range is fine in the line below)
-            beamreal =  bi.get_healpix(self.lmax, np.real(beam2), range(self.Nfreq))
+            beamreal =  bi.get_healpix_alm(self.lmax, np.real(beam2), range(self.Nfreq))
 
             if i==j:
                 groundPowerReal = np.array([1-np.real(br[0])/np.sqrt(4*np.pi) for br in beamreal])
                 beamimag = None
                 groundPowerImag = 0.
             else:
-                beamimag = bi.get_healpix(self.lmax, np.imag(beam2), range(self.Nfreq))
+                beamimag = bi.get_healpix_alm(self.lmax, np.imag(beam2), range(self.Nfreq))
                 cross_power = self.cross_power.Ex_coupling(bi,bj,self.freq_ndx_beam)
                 print (f"    cross power is {cross_power[0]} ... {cross_power[-1]} ")
                 groundPowerReal = np.array([cp-np.real(br[0])/np.sqrt(4*np.pi) for br,cp in
@@ -261,29 +232,3 @@ class Simulator:
         self.result = np.array(wfall)
         return self.result
             
-    def write(self, out_file):
-        """
-        Function that writes out instrument beam patterns from self.beams to fits file
-        
-        :param out_file: Name of the output file
-        :type out_file: str
-
-        """        
-        if self.result is None:
-            print ("Nothing to write")
-            raise RunTimeError
-        fits = fitsio.FITS(out_file,'rw',clobber=True)
-        header = {
-            "version":      0.1,
-            "lunar_day":    self.obs.time_range,
-            "lun_lat_deg":  self.obs.lun_lat_deg,
-            "lun_long_deg": self.obs.lun_long_deg,
-            "lun_height_m": self.obs.lun_height_m,
-            "deltaT_sec":   self.obs.deltaT_sec
-        }
-        fits.write(self.result, header=header, extname='data')
-        fits.write(self.freq, extname='freq')
-        fits.write(np.array(self.combinations), extname='combinations')
-        for i,b in enumerate(self.beams):
-            fits.write(b.ZRe[self.freq_ndx_beam],extname=f'ZRe_{i}')
-            fits.write(b.ZIm[self.freq_ndx_beam],extname=f'ZIm_{i}')
