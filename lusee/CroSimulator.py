@@ -8,71 +8,26 @@ import fitsio
 import sys
 import pickle
 import os
+import croissant as cro
+import croissant.jax as crojax
+from .DefaultSimulator import rot2eul, eul2rot, mean_alm
 
-def mean_alm(alm1, alm2, lmax):
-    """
-    Function that calculates the mean of the product of two a_lm arrrays
-    
-    :param alm1: First a_lm array
-    :type alm1: array
-    :param alm2: Second a_lm array
-    :type alm1: array
-    :param lmax: Maximum l value of beams
-    :type lmax: int
-    
-    :returns: Average alm
-    :rtype: float
-    
-    """
-    
-    prod = alm1*np.conj(alm2)
-    sm = (np.real(prod[:lmax+1]).sum()+2*np.real(prod[lmax+1:]).sum())/(4*np.pi)
-    return sm
-
-def rot2eul(R):
-    """
-    Function that converts from rotation matrix to Euler angles
-    
-    :param R: Rotation matrix
-    :type R: array
-    
-    :returns: Euler angles
-    :rtype: numpy array
-    
-    """
-    
-    beta = -np.arcsin(R[2,0])
-    alpha = np.arctan2(R[2,1]/np.cos(beta),R[2,2]/np.cos(beta))
-    gamma = np.arctan2(R[1,0]/np.cos(beta),R[0,0]/np.cos(beta))
-    return np.array((alpha, beta, gamma))
-
-def eul2rot(theta) :
-    """
-    Function that converts from Euler angles to rotation matrix
-    
-    :param theta: Euler angles
-    :type theta: array
-    
-    :returns: Rotation matrix
-    :rtype: numpy array
-    
-    """
-    
-    R = np.array([[np.cos(theta[1])*np.cos(theta[2]),       np.sin(theta[0])*np.sin(theta[1])*np.cos(theta[2]) - np.sin(theta[2])*np.cos(theta[0]),      np.sin(theta[1])*np.cos(theta[0])*np.cos(theta[2]) + np.sin(theta[0])*np.sin(theta[2])],
-                  [np.sin(theta[2])*np.cos(theta[1]),       np.sin(theta[0])*np.sin(theta[1])*np.sin(theta[2]) + np.cos(theta[0])*np.cos(theta[2]),      np.sin(theta[1])*np.sin(theta[2])*np.cos(theta[0]) - np.sin(theta[0])*np.cos(theta[2])],
-                  [-np.sin(theta[1]),                        np.sin(theta[0])*np.cos(theta[1]),                                                           np.cos(theta[0])*np.cos(theta[1])]])
-
-    return R
+'''
+Simulator object that uses Croissant engine. 
+Works simular to DefaultSimulator, but uses Croissant engine instead.
+'''
 
 
 
-class DefaultSimulator(SimulatorBase):
+
+class CroSimulator(SimulatorBase):
     """
-    Default Simulator in luseepy 
+    Croissant Simulator in luseepy as an alternative to DefaultSimulator.
     
+
     :param obs: Observation parameters, from lusee.observation class
     :type obs: class
-    :param beams: Instrument beams, from lusee.beam class
+    :param beams: Instrument beams, from lusee.beam class -- for Croissant, this needs to be in alm format
     :type beams: class
     :param sky_model: Simulated model of the sky, from lusee.skymodels
     :type sky_model: class
