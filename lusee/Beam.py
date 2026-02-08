@@ -7,7 +7,7 @@ import copy
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import healpy as hp
-from scipy.special import sph_harm
+from scipy.special import sph_harm_y
 from pyshtools.legendre import legendre
 import os
 
@@ -60,7 +60,7 @@ def grid2healpix_alm_reference(theta,phi, img, lmax):
     alm = []
     for m in range(lmax):
         for l in range(m,lmax):        
-            harm = sph_harm (m,l, phi_list, theta_list) #yes idiotic convention
+            harm = sph_harm_y (m,l, phi_list, theta_list) #yes idiotic convention
             assert(not np.any(np.isnan(harm)))
             alm.append((img*harm.T*dA_theta[:,None]).sum())
     alm = np.array(alm)
