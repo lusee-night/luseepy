@@ -4,6 +4,7 @@ fitsio==1.1.7
 ares==0.7.1
 astropy # ==5.0.1
 astropy-healpix==0.6
+scipy==1.15.0
 lunarsky
 h5py
 pygdsm==1.3.0
