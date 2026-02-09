@@ -17,6 +17,8 @@ jobs:
     container: lusee/lusee-night-unity-luseepy:1.2
     steps:
       - uses: actions/checkout@v4
+      - run: pip install "scipy>=1.15"
+        # needed for sph_harm_y in Beam.py (added in scipy 1.15)
       - run: pwd
       - run: wget "https://drive.google.com/uc?export=download&id=1PbU432IYAFSzOjWRrKMoGFR6F1M3dmaV" -O drive.tgz
       - run: tar zxvf drive.tgz
