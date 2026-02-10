@@ -60,7 +60,7 @@ def grid2healpix_alm_reference(theta,phi, img, lmax):
     alm = []
     for m in range(lmax):
         for l in range(m,lmax):        
-            harm = sph_harm_y (l, m, phi_list, theta_list) #yes idiotic convention
+            harm = sph_harm_y (l, m, theta_list, phi_list)
             assert(not np.any(np.isnan(harm)))
             alm.append((img*harm.T*dA_theta[:,None]).sum())
     alm = np.array(alm)
@@ -513,9 +513,9 @@ class Beam:
             cax = divider.append_axes("right", size="5%", pad=0.05)
             plt.colorbar(im, cax=cax)
 
-    def get_healpix(self,lmax, field, freq_ndx = None):
+    def get_healpix_alm(self,lmax, field, freq_ndx = None):
         """
-        Function that produces a healpix map of specified field
+        Function that produces a healpix map of specified field in harmonic space
 
         :param lmax: Maximum l value
         :type lmax: int

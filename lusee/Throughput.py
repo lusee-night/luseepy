@@ -104,7 +104,7 @@ class Throughput:
         """
         Function that calculates gamma at a specified frequency for antenna impedance matching
 
-        :param freq: Frequency in Hz
+        :param freq: Frequency in MHz
         :type freq: float
 
         :returns: Gamma_VD
@@ -120,7 +120,7 @@ class Throughput:
         """
         Function that calculates 4*k_B*R*Gamma^2 for antenna match
 
-        :param freq: Frequency
+        :param freq: Frequency in MHz
         :type freq: float
 
         :returns: T2Vsq
