@@ -1,9 +1,9 @@
 name: luseepy-test
 on:
   push:
-    branches: [ main, maxim-ci ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, maxim-ci ]
+    branches: [ main ]
 
   # Enable manual activation, too
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
     container: continuumio/miniconda3
     steps:
       - uses: actions/checkout@v4
-      - run: pip install -r requirements.txt
+      - run: pip install .
       - run: pwd
       - run: wget "https://drive.google.com/uc?export=download&id=1PbU432IYAFSzOjWRrKMoGFR6F1M3dmaV" -O drive.tgz
       - run: tar zxvf drive.tgz
