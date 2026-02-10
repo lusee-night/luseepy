@@ -175,13 +175,15 @@ def decode_telemetry_directory(
     path: str,
     session_start_seconds: List[int],
     skip_out_of_session: bool = False,
+    verbose: bool = False,
 ) -> List[Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]]:
     f = os.path.join(path, "b01", "FFFFFFFE")
     if not os.path.exists(f):
         print(f"WARNING: file {f} not found, skipping")
         return []
 
-    print(f"Decoding telemetry file {f}")
+    if verbose:
+        print(f"Decoding telemetry file {f}")
     data = open(f, "rb").read()
     pkts = L0_to_ccsds(data)
     pkts = extract_telemetry_packets(pkts)

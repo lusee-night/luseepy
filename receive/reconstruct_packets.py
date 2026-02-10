@@ -1,11 +1,14 @@
-import uncrater as unc
-from uncrater.utils import *
+import argparse
 import ctypes
-import os
 import hashlib
+import os
 import sys
 import time
 from datetime import datetime
+from typing import List, Optional
+
+import uncrater as unc
+from uncrater.utils import *
 from icecream import ic
 
 if os.environ.get("CORELOOP_DIR") is not None:
@@ -41,7 +44,12 @@ def assign_uids(pkts: List[CollatedPacket]):
             pkt.unique_packet_id = pkts[pred].unique_packet_id
 
 
-def decode_directory(path):
+def _log(verbose: bool, message: str) -> None:
+    if verbose:
+        print(message)
+
+
+def decode_directory(path: str, verbose: bool = False) -> List[CollatedPacket]:
     begin = time.time()
     files = [path + f'/b0{i}/FFFFFFFE' for i in [5, 6, 7, 8, 9]]
     allpkts = []
@@ -49,7 +57,7 @@ def decode_directory(path):
         if not os.path.exists(f):
             print(f"WARNING: file {f} not found, skipping")
             continue
-        print(f"Decoding file {f}")
+        _log(verbose, f"Decoding file {f}")
         data = open(f, 'rb').read()
         pkts = L0_to_ccsds(data)
         collated = collate_packets(pkts)
@@ -64,7 +72,7 @@ def decode_directory(path):
 
     all_with_uid.sort(key=lambda x: (x.unique_packet_id, x.seq))
     elapsed = time.time() - begin
-    # ic(elapsed)
+    _log(verbose, f"Decoded packets in {elapsed:.2f}s")
 
     return all_with_uid
 
@@ -127,7 +135,12 @@ def md5_file(filepath):
     return hash_md5.hexdigest()
 
 
-def write_sessions(base_path: str, sessions: List[List[CollatedPacket]], check_existing: bool = False) -> List[str]:
+def write_sessions(
+    base_path: str,
+    sessions: List[List[CollatedPacket]],
+    check_existing: bool = False,
+    verbose: bool = False,
+) -> List[str]:
     """Write each session to its own directory."""
     os.makedirs(base_path, exist_ok=True)
     session_dirs = []
@@ -160,6 +173,7 @@ def write_sessions(base_path: str, sessions: List[List[CollatedPacket]], check_e
                     raise ValueError(f"File {fname} exists but content is different.")
                 else:
                     continue
+            _log(verbose, f"Writing {fname}")
             with open(fname, 'wb') as f:
                 f.write(p.blob)
 
@@ -242,31 +256,50 @@ def print_packet_categories(pkts):
         curr_app_id = app_id_category(p.app_id)
         if prev_app_id is None or curr_app_id != prev_app_id:
             if prev_app_id is not None:
-                print(f"{prev_app_id.ljust(25, " ")}: {cat_count} packets")
+                print(f"{prev_app_id.ljust(25, ' ')}: {cat_count} packets")
             cat_count = 1  # Start with 1 for the current packet
             prev_app_id = curr_app_id
         else:
             cat_count += 1
     # the last group
     if prev_app_id is not None:
-        print(f"{prev_app_id.ljust(25, " ")}:\t {cat_count} packets")
+        print(f"{prev_app_id.ljust(25, ' ')}:\t {cat_count} packets")
 
 
-if __name__ == "__main__":
-    # tel_packets = decode_telemetry_directory('new_data/20251105_112220/fs/FLASH_TLMFS')
-    # for i, pkt in enumerate(tel_packets):
-    #     ic(i, decode_telemetry_packet(pkt))
-    # sys.exit(0)
+def _session_id_from_dir(session_dir: str) -> Optional[str]:
+    base = os.path.basename(session_dir)
+    prefix = "cdi_output_"
+    if base.startswith(prefix) and len(base) > len(prefix):
+        return base[len(prefix):]
+    return None
 
-    flash_path = 'new_data/20251105_112220/fs/FLASH_TLMFS'
 
-    pkts = decode_directory(flash_path)
-    print(len(pkts), 'collated packets found')
+def _build_output_basename(index: int, session_id: Optional[str]) -> str:
+    if session_id:
+        try:
+            timestamp = int(session_id)
+            date_str = datetime.fromtimestamp(timestamp).strftime('%Y%m%d_%H%M%S')
+            return f"session_{index:03d}_{date_str}"
+        except Exception:
+            return f"session_{index:03d}_{session_id}"
+    return f"session_{index:03d}"
 
-    if True:
+
+def _default_output_dir_for_flash(flash_path: str) -> str:
+    return os.path.join(os.path.dirname(os.path.dirname(flash_path)), "sessions")
+
+
+def _process_flash_path(
+    flash_path: str,
+    output_dir: str,
+    verbose: bool,
+) -> None:
+    pkts = decode_directory(flash_path, verbose=verbose)
+    _log(verbose, f"{len(pkts)} collated packets found")
+
+    if verbose:
         print_packet_categories(pkts)
 
-    # Split into sessions
     sessions = split_into_sessions(pkts)
     print(f"Found {len(sessions)} sessions")
 
@@ -275,36 +308,88 @@ if __name__ == "__main__":
         flash_path,
         session_start_seconds,
         skip_out_of_session=False,
+        verbose=verbose,
     )
 
-    # Write sessions to directories
-    base_output = "new_data/20251105_112220/sessions"
-    session_dirs = write_sessions(base_output, sessions)
+    session_dirs = write_sessions(output_dir, sessions, verbose=verbose)
 
-    # Save each session to HDF5
     if len(session_dirs) != len(dcb_tel_by_session):
         print(
             f"Warning: {len(session_dirs)} sessions but {len(dcb_tel_by_session)} telemetry blocks; truncating to shortest."
         )
+
     for i, (session_dir, dcb_tel_pair) in enumerate(zip(session_dirs, dcb_tel_by_session)):
         fpga_tel, encoder_tel = dcb_tel_pair
-        # Get session ID from directory name
-        session_id = session_dir.split('_')[-1]
-
-        # Create output filename with session number and ID
-        # Convert Unix timestamp to readable date if possible
-        try:
-            timestamp = int(session_id)
-            date_str = datetime.fromtimestamp(timestamp).strftime('%Y%m%d_%H%M%S')
-            output_file = f"session_{i:03d}_{date_str}"
-        except:
-            output_file = f"session_{i:03d}_{session_id}"
-
-        h5_output_file = output_file + ".h5"
-        fits_output_file = output_file + ".fits"
+        session_id = str(session_start_seconds[i]) if i < len(session_start_seconds) else None
+        output_base = _build_output_basename(i, session_id)
+        h5_output_file = os.path.join(output_dir, output_base + ".h5")
+        fits_output_file = os.path.join(output_dir, output_base + ".fits")
 
         print(f"Processing session {i}: {session_dir} -> {h5_output_file}, {fits_output_file}")
         save_to_hdf5(session_dir, h5_output_file, Constants(), fpga_tel, encoder_tel)
         print(f"Saved to {h5_output_file}")
         save_to_fits(session_dir, fits_output_file, Constants(), fpga_tel, encoder_tel)
         print(f"Saved to {fits_output_file}")
+
+
+def _process_session_dirs(
+    session_dirs: List[str],
+    output_dir: str,
+    verbose: bool,
+) -> None:
+    for i, session_dir in enumerate(session_dirs):
+        session_id = _session_id_from_dir(session_dir)
+        output_base = _build_output_basename(i, session_id)
+        h5_output_file = os.path.join(output_dir, output_base + ".h5")
+        fits_output_file = os.path.join(output_dir, output_base + ".fits")
+
+        _log(verbose, f"Processing session {i}: {session_dir}")
+        save_to_hdf5(session_dir, h5_output_file, Constants(), None, None)
+        _log(verbose, f"Saved to {h5_output_file}")
+        save_to_fits(session_dir, fits_output_file, Constants(), None, None)
+        _log(verbose, f"Saved to {fits_output_file}")
+
+
+def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Reconstruct CDI sessions and write HDF5/FITS outputs.")
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument(
+        "--flash-path",
+        help="Path to FLASH_TLMFS directory (contains b0*/FFFFFFFE).",
+    )
+    inputs.add_argument(
+        "--session-dirs",
+        nargs="+",
+        help="One or more CDI session directories to process.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        help="Directory for CDI sessions (flash input) and output files.",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = _parse_args(argv)
+
+    if args.flash_path:
+        output_dir = args.output_dir or _default_output_dir_for_flash(args.flash_path)
+        os.makedirs(output_dir, exist_ok=True)
+        _process_flash_path(args.flash_path, output_dir, args.verbose)
+        return 0
+
+    output_dir = args.output_dir or os.getcwd()
+    os.makedirs(output_dir, exist_ok=True)
+    _process_session_dirs(args.session_dirs, output_dir, args.verbose)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

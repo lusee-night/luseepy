@@ -18,5 +18,6 @@ dependencies = [
     "pyshtools",
     "healpy",
     "lunarsky",
+    "bitstring",
     "pytest>=9.0.2",
 ]
