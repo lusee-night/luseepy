@@ -60,7 +60,7 @@ def grid2healpix_alm_reference(theta,phi, img, lmax):
     alm = []
     for m in range(lmax):
         for l in range(m,lmax):        
-            harm = sph_harm_y (m,l, phi_list, theta_list) #yes idiotic convention
+            harm = sph_harm_y (l, m, theta_list, phi_list)
             assert(not np.any(np.isnan(harm)))
             alm.append((img*harm.T*dA_theta[:,None]).sum())
     alm = np.array(alm)

@@ -3,7 +3,7 @@ numpy
 astropy
 astropy-healpix
 lunarsky
-scipy
+scipy>=1.15
 fitsio
 matplotlib
 healpy
