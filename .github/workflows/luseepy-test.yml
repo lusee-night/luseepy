@@ -10,6 +10,9 @@ on:
 jobs:
   luseepy-test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     env:
        PYTHONPATH: .:..
        LUSEE_DRIVE_DIR: Drive
@@ -17,8 +20,9 @@ jobs:
     container: continuumio/miniconda3
     steps:
       - uses: actions/checkout@v4
+      - run: ls -l
+      - run: apt-get update && apt-get install -y gfortran build-essential pkg-config cmake libopenblas-dev libfftw3-dev
       - run: pip install .
-      - run: pwd
       - run: wget "https://drive.google.com/uc?export=download&id=1PbU432IYAFSzOjWRrKMoGFR6F1M3dmaV" -O drive.tgz
       - run: tar zxvf drive.tgz
       - run: ls -l
