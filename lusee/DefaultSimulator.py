@@ -75,8 +75,7 @@ class DefaultSimulator(SimulatorBase):
                 print (f"Loading cached transform from {cache_fn}...")
                 lzl,bzl,lyl,byl = pickle.load(open(cache_fn,'br'))
                 if (len(lzl)!=len(times)):
-                    print ("Cache file mix-up. Array wrong length!")
-                    stop()
+                    raise RuntimeError("Cache file mix-up. Array wrong length!")
                 have_transform = True
             else:
                 have_transform = False
