@@ -17,5 +17,6 @@ dependencies = [
     "fitsio",
     "pyshtools",
     "healpy",
-    "lunarsky"
+    "lunarsky",
+    "jax",
 ]
