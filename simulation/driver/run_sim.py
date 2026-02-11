@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Avoid OpenMP duplicate-library crash on macOS when numpy/scipy/pyshtools link different runtimes
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 from unittest import case
 

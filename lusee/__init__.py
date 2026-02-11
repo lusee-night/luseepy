@@ -7,6 +7,7 @@ from .Beam          import Beam, grid2healpix, grid2healpix_alm_fast
 from .BeamGauss     import BeamGauss
 from .BeamCouplings import BeamCouplings
 from .DefaultSimulator import DefaultSimulator
+from .CroSimulator import CroSimulator
 
 from .SkyModels     import FitsSky
 from .SkyModels     import GalCenter
