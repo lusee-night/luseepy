@@ -3,7 +3,7 @@ from functools import partial
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
-from .SimulatorBase import SimulatorBase, mean_alm, rot2eul
+from .SimulatorBase import SimulatorBase
 import numpy as np
 import healpy as hp
 import fitsio
@@ -92,17 +92,17 @@ class CroSimulator(SimulatorBase):
                                 
     def simulate(self, times=None):
         """
-        Simulate using Croissant: freq, time grid, and antenna location from
+        Simulate using Croissant.
+        freq, time grid, and antenna location from
         observation; beam and sky transformed to MCMF; rot_alm_z phases;
-        crojax.simulator.convolve. Output shape matches DefaultSimulator.
-
+        crojax.simulator.convolve for sky and beam convolution.
         :param times: List of times; if None, use self.obs.times (from config).
         :returns: Waterfall (N_times, N_combos_with_imag, N_freq), same as DefaultSimulator.
         """
         if times is None:
             times = self.obs.times
         ntimes = len(times)
-        delta_t = float(self.obs.deltaT_sec)  
+        delta_t = float(self.obs.deltaT_sec)
 
         if self.sky_model.frame != "galactic":
             raise NotImplementedError(
@@ -118,9 +118,9 @@ class CroSimulator(SimulatorBase):
         # Location and topo from observation class
         topo = LunarTopo(obstime=times[0], location=self.obs.loc)
         sim_L = self.lmax + 1
-        # Phases for moon sidereal rotation for all times at once
+        # Phases for moon sidereal rotation for all times at once (use N_times, delta_t so JAX gets numeric types)
         phases = crojax.simulator.rot_alm_z(
-            self.lmax, ntimes, delta_t, world="moon"
+            self.lmax, N_times=ntimes, delta_t=delta_t, world="moon"
         )
 
         # Galactic -> MCMF and Topo -> MCMF transforms
@@ -151,8 +151,10 @@ class CroSimulator(SimulatorBase):
         sky_alm_jax = jnp.array(sky_2d)
         sky_alm_mcmf = jax.vmap(gal2mcmf)(sky_alm_jax)
 
-        # Per combination: beam to MCMF, convolve(beam_mcmf, sky_mcmf, phases), normalize, ground
-        # Collect (ntimes, N_freq) per combo then build (N_times, N_outputs, N_freq) like DefaultSimulator
+        # Per combination: beam to MCMF, convolve(beam_mcmf, sky_mcmf, phases), normalize by 4pi, ground
+        # Normalization 4*pi matches DefaultSimulator (mean_alm divides by 4*pi).
+        # Collect (ntimes, N_freq) per combo then build (N_times, N_outputs, N_freq)
+        norm_factor = 4.0 * np.pi
         combo_results = []
         for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
             beam_2d = np.stack([
@@ -160,11 +162,10 @@ class CroSimulator(SimulatorBase):
             ])
             beam_alm_jax = jnp.array(beam_2d)
             beam_alm_mcmf = jax.vmap(topo2mcmf)(beam_alm_jax)
-            norm = crojax.alm.total_power(beam_alm_mcmf, self.lmax)
             vis = crojax.simulator.convolve(
                 beam_alm_mcmf, sky_alm_mcmf, phases
             )
-            T = np.asarray(vis.real / norm) + self.Tground * groundPowerReal  # (ntimes, N_freq)
+            T = np.asarray(vis.real / norm_factor) + self.Tground * groundPowerReal
             combo_results.append((T, None))
             if ci != cj:
                 beamimag_2d = np.stack([
@@ -174,7 +175,7 @@ class CroSimulator(SimulatorBase):
                 vis_imag = crojax.simulator.convolve(
                     beamimag_mcmf, sky_alm_mcmf, phases
                 )
-                Timag = np.asarray(vis_imag.real / norm) + self.Tground * groundPowerImag
+                Timag = np.asarray(vis_imag.real / norm_factor) + self.Tground * groundPowerImag
                 combo_results[-1] = (T, Timag)
         wfall = []
         for ti in range(ntimes):
@@ -185,4 +186,3 @@ class CroSimulator(SimulatorBase):
                     res.append(Timag[ti])
             wfall.append(res)
         return np.array(wfall)
-
