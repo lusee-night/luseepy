@@ -102,8 +102,15 @@ def setup_simulation(cfg, lusee):
 
 def run_comparison(config_path=None):
     # Import here to avoid multiprocessing issues with lunarsky (SPICE kernel downloads)
-    from functools import partial
     import lusee
+    if lusee.CroSimulator is None:
+        try:
+            import pytest
+            pytest.skip("CroSimulator requires croissant and s2fft; install with: pip install croissant s2fft")
+        except ImportError:
+            sys.exit("CroSimulator not available (missing croissant/s2fft). Install with: pip install croissant s2fft")
+
+    from functools import partial
     import healpy as hp
     import jax
     import jax.numpy as jnp
@@ -111,7 +118,7 @@ def run_comparison(config_path=None):
     from lusee.SimulatorBase import mean_alm, rot2eul
     from lusee.CroSimulator import healpy_packed_alm_to_croissant_2d
     import croissant.jax as crojax
-    
+
     if config_path is None:
         config_path = os.path.join(
             os.path.dirname(__file__), "../config/sim_choice_realistic.yaml"

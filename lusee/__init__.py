@@ -7,7 +7,13 @@ from .Beam          import Beam, grid2healpix, grid2healpix_alm_fast
 from .BeamGauss     import BeamGauss
 from .BeamCouplings import BeamCouplings
 from .DefaultSimulator import DefaultSimulator
-from .CroSimulator import CroSimulator
+try:
+    from .CroSimulator import CroSimulator
+except (ModuleNotFoundError, ImportError) as e:
+    if "croissant" in str(e).lower() or "s2fft" in str(e).lower():
+        CroSimulator = None  # optional: install croissant (and s2fft) to use CroSimulator
+    else:
+        raise
 
 from .SkyModels     import FitsSky
 from .SkyModels     import GalCenter

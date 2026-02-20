@@ -134,6 +134,11 @@ class SimDriver(dict):
         engine = self["simulation"].get("engine")
         engine = str(engine).strip().lower()
         if engine == "croissant":
+            if lusee.CroSimulator is None:
+                raise RuntimeError(
+                    "CroSimulator requires optional dependency 'croissant' (and s2fft). "
+                    "Install with: pip install croissant s2fft"
+                )
             print("  setting up Croissant Simulation object...")
             S = lusee.CroSimulator(
                 O,
