@@ -21,4 +21,7 @@ dependencies = [
     "jax",
 ]
 [project.optional-dependencies]
-croissant = ["croissant", "s2fft"]
+croissant = [
+    "croissant-sim >= 4.0.0, <5.0.0",
+    "s2fft",
+]
