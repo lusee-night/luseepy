@@ -11,11 +11,17 @@ classifiers = ["License :: OSI Approved :: MIT License"]
 dynamic = ["version", "description"]
 dependencies = [
     "numpy",
-    "scipy",
+    "scipy>=1.15",
     "matplotlib",
     "astropy",
     "fitsio",
     "pyshtools",
     "healpy",
-    "lunarsky"
+    "lunarsky",
+    "jax",
+]
+[project.optional-dependencies]
+croissant = [
+    "croissant-sim >= 4.0.0, <5.0.0",
+    "s2fft",
 ]
