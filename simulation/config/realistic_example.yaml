@@ -9,12 +9,12 @@ sky:
 
 beam_config:
   type: fits
-  default_file: hfss_lbl_3m_75deg.fits
+  default_file: hfss_lbl_2m_45deg.fits
   common_beam_angle: 0
   couplings:
     opposite:
       combinations: [[N,S], [E,W]]
-      two_port: hfss_lbl_3m_75deg.2port.fits 
+      two_port: hfss_lbl_2m_45deg.2port.fits 
       sign: -1
   
 beams: 

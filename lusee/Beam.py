@@ -11,6 +11,7 @@ from scipy.special import sph_harm_y
 from scipy.ndimage import gaussian_filter
 from pyshtools.legendre import legendre
 import os
+from icecream import ic
 
 
 def getLegendre(lmax, theta):
@@ -229,8 +230,10 @@ class Beam:
     """
     
     def __init__ (self, fname = None, id = None):
+        ic(fname)
         if fname is None:
             fname = base = os.environ['LUSEE_DRIVE_DIR']+"Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
+        ic(fname)
         if not (os.path.isfile (fname) and os.access(fname, os.R_OK)):
             print (f"Cannot open {fname}")
             stop()
