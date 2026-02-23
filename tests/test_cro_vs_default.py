@@ -129,7 +129,7 @@ def run_comparison(config_path=None):
     )
 
     # Limit times for quick test (e.g. last 5 times)
-    times = O.times[-5:]    # last 5 times
+    times = O.times[:5]    # first 5 times
     # Bypass cache for reproducible test (cache may have different length)
     extra = {"simulation": {**cfg.get("simulation", {}), "cache_transform": None}}
 
