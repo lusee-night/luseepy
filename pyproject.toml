@@ -20,4 +20,6 @@ dependencies = [
     "lunarsky",
     "bitstring",
     "pytest>=9.0.2",
+    "ctypesgen>=1.1.1",
+    "hexdump>=3.3",
 ]
