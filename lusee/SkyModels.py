@@ -133,29 +133,30 @@ class GalCenter (ConstSky):
         self.frame = "galactic"
         self.freq=freq   
 
-class FitsSky:
-    """
-    Class that reads in a sky map from a FITS file, and reads in the freq list from the FITS header. Computes map A_lms with healpy map2alm, up to specified lmax.
 
-    :param fname: Filename to read in
-    :type fname: str
+class HealpixSky:
+    """
+    Class that contains a sky as a healpix map. Alm representation is precomputed.
+    :param Nside: Size of Healpix map to create
+    :type Nside: int
     :param lmax: Maximum l value for maps
     :type lmax: int
+    :param maps: List of healpix maps to use as sky model, one for each frequency in freq list
+    :type maps: list of arrays
+    :param freq: List of frequencies at which to make sky maps.
+    :type freq: list    
+    :param frame: Coordinate frame of the sky maps (default: "galactic", also accepts "equatorial" and "ecliptic")
+    :type frame: str
+    
     """
-    def __init__ (self, fname, lmax):
-        header      = fitsio.read_header(fname)
-        fits        = fitsio.FITS(fname,'r')
-        maps        = fits[0].read()
-        self.maps   = maps
-        fstart      = header['freq_start']
-        fend        = header['freq_end']
-        fstep       = header['freq_step']
-        self.freq   = np.arange(fstart, fend+1e-3*fstep, fstep)
-
-        assert (len(self.freq) == maps.shape[0])
-
+    def __init__ (self, Nside, lmax, maps, freq=[25.0], frame="galactic"):
+        self.Nside = Nside
+        self.Npix = Nside**2 * 12
+        self.maps = maps
+        self.freq = freq
+        assert (len(maps)==len(freq))
         self.mapalm = np.array([hp.map2alm(m,lmax = lmax) for m in maps])
-        self.frame  = "galactic"
+        self.frame  = frame
 
     def get_alm (self, ndx, freq):
         """
@@ -172,6 +173,44 @@ class FitsSky:
         assert (np.all(self.freq[ndx]==freq))
         return self.mapalm[ndx]
 
+class FitsSky (HealpixSky):
+    """
+    Class that reads in a sky map from a FITS file, and reads in the freq list from the FITS header. Computes map A_lms with healpy map2alm, up to specified lmax.
 
+    :param fname: Filename to read in
+    :type fname: str
+    :param lmax: Maximum l value for maps
+    :type lmax: int
+    """
+    def __init__ (self, fname, lmax):
+        header      = fitsio.read_header(fname)
+        fits        = fitsio.FITS(fname,'r')
+        maps        = fits[0].read()
+        fstart      = header['freq_start']
+        fend        = header['freq_end']
+        fstep       = header['freq_step']
+        freq   = np.arange(fstart, fend+1e-3*fstep, fstep)
+        super().__init__(Nside=hp.npix2nside(maps.shape[1]), lmax=lmax, maps=maps, freq=freq, frame="galactic")
+        
 
-    
+class SingleSourceHealpixSky (HealpixSky):
+    """
+    Class that constructs a temperature map using the Single Source model. Uses HealpixSky class to initialize map.
+
+    :param ra_deg: Right ascension of the single source in degrees
+    :type ra_deg: float
+    :param dec_deg: Declination of the single source in degrees
+    :type dec_deg: float
+    :param Nside: Size of Healpix map to create
+    :type Nside: int
+    :param freq: List of frequencies at which to make sky maps.
+    :type freq: list
+    """
+    def __init__ (self,ra_deg, dec_deg, Nside=128, freq=[25.0]):
+        # convert ra, dec to galactic coordinates and then to pixel number
+        pix = hp.ang2pix(Nside, np.radians(90-dec_deg), np.radians(ra_deg))
+        Npix = Nside**2 * 12
+        map = np.zeros(Npix)
+        map[pix] = 1.0
+        map  = [map for _ in freq]
+        super().__init__(Nside, 3*Nside-1, map, freq=freq, frame="equatorial")

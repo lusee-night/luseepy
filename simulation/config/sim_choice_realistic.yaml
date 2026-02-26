@@ -14,9 +14,7 @@ beam_config:
   couplings:
     opposite:
       combinations: [[N,S], [E,W]]
-      # following is to save CI DL: we should have a 2 port here,
-      # but use this to have CI run through this part of the code
-      two_port: hfss_lbl_3m_75deg.fits 
+      two_port: hfss_lbl_3m_75deg.2port.fits 
       sign: -1
   
 beams: 
@@ -34,16 +32,16 @@ observation:
   lat: -10
   beams: [ N, S, E, W ]
   lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
-  dt: 3600
+  dt: 3600 
   Tground: 0
   lmax: 32
   combinations: all
   freq:
     start: 1
-    end: 6
-    step: 4
+    end: 51
+    step: 1
 
 simulation:
-  engine: default
-  output: sim_example.fits
+  engine: Croissant     # "Default" or "Croissant"
+  # output defaults to sim_{engine}_output.fits (this is specified in the driver/run_Cro_sim.py file)
   cache_transform: lunar_day.pickle  

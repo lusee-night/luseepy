@@ -1,19 +1,20 @@
 """A package for simulation of LuSEE-Night."""
-# -- FIXME --
-
-# -mxp- commented out some imports since the hardcoded cache breaks
-# execution on Singularity and otherwise has undesirable side
-# effects. There is a separate cache in the LunarCalendar class
-# now, which can be propagated to other modules. It behaves
-# gracefully e.g. optionally cleaned up, has db name capability etc.
 
 from .Observation   import Observation
 from .Data          import Data
 from .Satellite     import Satellite, ObservedSatellite
 from .Beam          import Beam, grid2healpix, grid2healpix_alm_fast
+from .BeamInterpolator import BeamInterpolator
 from .BeamGauss     import BeamGauss
 from .BeamCouplings import BeamCouplings
-from .Simulation    import Simulator
+from .DefaultSimulator import DefaultSimulator
+try:
+    from .CroSimulator import CroSimulator
+except (ModuleNotFoundError, ImportError) as e:
+    if "croissant" in str(e).lower() or "s2fft" in str(e).lower():
+        CroSimulator = None  # optional: install croissant (and s2fft) to use CroSimulator
+    else:
+        raise
 
 from .SkyModels     import FitsSky
 from .SkyModels     import GalCenter

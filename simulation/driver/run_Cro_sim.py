@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-# Avoid OpenMP duplicate-library crash on macOS when numpy/scipy/pyshtools link different runtimes
-import os
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-
-from unittest import case
-
 
 if __name__ == "__main__":
     import  lusee
@@ -121,35 +115,67 @@ class SimDriver(dict):
             self.couplings = None
 
     def run(self):
-        print ("Starting simulation :")
-        od = self['observation']
-        O=lusee.Observation(od['lunar_day'],deltaT_sec=self.dt,
-                    lun_lat_deg=od['lat'], lun_long_deg = od['long'])
-        print ("  setting up combinations...")
-        combs = od['combinations']
-        if type(combs)==str:
-            if combs=='all':
+        print("Starting simulation:")
+        od = self["observation"]
+        # Location and time come only from the observation object
+        O = lusee.Observation(
+            od["lunar_day"],
+            deltaT_sec=self.dt,
+            lun_lat_deg=od["lat"],
+            lun_long_deg=od["long"],
+        )
+        print(f"  Using observation: lat={O.lun_lat_deg} deg, lon={O.lun_long_deg} deg, time_range={O.time_range}, N_times={len(O.times)}")
+        print("  setting up combinations...")
+        combs = od["combinations"]
+        if type(combs) == str:
+            if combs == "all":
                 combs = []
                 for i in range(self.Nbeams):
-                    for j in range(i,self.Nbeams):
-                        combs.append((i,j))
+                    for j in range(i, self.Nbeams):
+                        combs.append((i, j))
 
-        
-        print ("  setting up Simulation object...")
-        match self['simulation'].get('engine','default'):
-            case 'default':
-                S = lusee.DefaultSimulator (O,self.beams, self.sky, Tground = od['Tground'], combinations = combs,
-                                    freq = self.freq, lmax = self.lmax,
-                                    cross_power = self.couplings,
-                                    extra_opts = self['simulation'] )
-            case _:
-                print ("Simulation engine not recognized:",self['simulation'].get('engine'))
-                raise Exception('NotImplementedError')
-        print (f"  We will simulate {len(O.times)} timesteps x {len(combs)} data products (some complex) x {len(self.freq)} frequency bins.")
-        print ("  Simulating...")
+        engine = self["simulation"].get("engine")
+        engine = str(engine).strip().lower()
+        if engine == "croissant":
+            if lusee.CroSimulator is None:
+                raise RuntimeError(
+                    "CroSimulator requires optional dependency 'croissant' (and s2fft). "
+                    "Install with: pip install croissant s2fft"
+                )
+            print("  setting up Croissant Simulation object...")
+            S = lusee.CroSimulator(
+                O,
+                self.beams,
+                self.sky,
+                Tground=od["Tground"],
+                combinations=combs,
+                freq=self.freq,
+                lmax=self.lmax,
+                cross_power=self.couplings,
+                extra_opts=self["simulation"],
+            )
+        elif engine == "default":
+            print("  setting up Default Simulation object...")
+            S = lusee.DefaultSimulator(
+                O,
+                self.beams,
+                self.sky,
+                Tground=od["Tground"],
+                combinations=combs,
+                freq=self.freq,
+                lmax=self.lmax,
+                cross_power=self.couplings,
+                extra_opts=self["simulation"],
+            )
+        else:
+            raise ValueError(f"simulation.engine must be 'Default' or 'Croissant', got: {engine}")
+
+        print(f"  Simulating {len(O.times)} timesteps (from observation) x {len(combs)} data products x {len(self.freq)} frequency bins...")
+        print("  Simulating...")
         S.simulate(times=O.times)
-        
-        fname = os.path.join(self.outdir, self['simulation']['output'])
+
+        out_base = self["simulation"].get("output", f"sim_{engine.capitalize()}_output.fits")
+        fname = os.path.join(self.outdir, out_base)
 
         print ("Writing to",fname)
         S.write_fits(fname)
