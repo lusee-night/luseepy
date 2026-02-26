@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import healpy as hp
 from scipy.special import sph_harm_y
+from scipy.ndimage import gaussian_filter
 from pyshtools.legendre import legendre
 import os
 
@@ -268,6 +269,7 @@ class Beam:
         self.phi = self.phi_deg/180*np.pi
         if (self.phi_max != 360) or (self.phi_min != 0):
             print("Code might implicitly assume phi wraparound ... use with care.")
+        assert (self.Etheta.shape == (self.Nfreq,self.Ntheta,self.Nphi))
         
     def rotate(self,deg):
         """
@@ -486,6 +488,37 @@ class Beam:
             ret.Ephi = Ephi
         return ret
 
+    def taper_and_smooth(self, taper=0.03, beam_smooth=None):
+        """
+        Apply theta taper and optional Gaussian smoothing directly to beam fields.
+
+        :param taper: Ground/sky taper width in radians. If None, no taper is applied.
+        :type taper: float
+        :param beam_smooth: Standard deviation for Gaussian smoothing along frequency
+            (0th) dimension only. If a sequence is provided, only the first entry is used.
+            If None, no smoothing is applied.
+        :type beam_smooth: float or sequence
+
+        :returns: Self, with modified Etheta and Ephi fields.
+        :rtype: class
+        """
+
+        if taper is not None:
+            if taper <= 0:
+                raise ValueError("taper must be positive when provided")
+            gtapr = (np.arctan((self.theta - np.pi / 2) / taper) / np.pi + 0.5) ** 2
+            tapr = 1.0 - gtapr
+            self.Etheta *= tapr[None, :, None]
+            self.Ephi *= tapr[None, :, None]
+
+        if beam_smooth is not None:
+            beam_sigma = np.atleast_1d(beam_smooth)[0]
+            sigma = (beam_sigma, 0.0, 0.0)
+            self.Etheta = gaussian_filter(self.Etheta, sigma)
+            self.Ephi = gaussian_filter(self.Ephi, sigma)
+
+        return self
+
     
     def plotE(self, freqndx, toplot = None, noabs=False):
         """
@@ -513,22 +546,61 @@ class Beam:
             cax = divider.append_axes("right", size="5%", pad=0.05)
             plt.colorbar(im, cax=cax)
 
-    def get_healpix_alm(self,lmax, field, freq_ndx = None):
+    def get_healpix_alm(self, lmax, freq_ndx=None, other=None,
+                        return_I_stokes_only=True, return_complex_components=False):
         """
-        Function that produces a healpix map of specified field in harmonic space
+        Function that produces healpix harmonic maps of beam Stokes power.
 
         :param lmax: Maximum l value
         :type lmax: int
-        :param field: Field to map (eg. Etheta)
-        :type field: numpy array[complex]
         :param freq_ndx: Optional list of frequency bin indices. Integer indices, not freq values
         :type freq_ndx: list(int)
-        
-        :returns: Healpix field map
-        :rtype: numpy array
+        :param other: Optional second beam object for cross-power Stokes maps
+        :type other: class
+        :param return_I_stokes_only: If True, return only Stokes-I; if False, return [I,Q,U,V]
+        :type return_I_stokes_only: bool
+        :param return_complex_components: If True, return (real_alm, imag_alm) for each Stokes map
+            where imag_alm is None for real-valued Stokes maps.
+        :type return_complex_components: bool
+
+        :returns: If return_I_stokes_only is True, returns Stokes-I alm (or tuple(real, imag)
+            when return_complex_components=True). Otherwise returns [I,Q,U,V] in the same format.
+        :rtype: numpy array or tuple(numpy array, numpy array) or list
         """
-        
-        if freq_ndx is None:
-            freq_ndx = range(self.Nfreq)
-        return  np.array([grid2healpix_alm_fast(self.theta,self.phi[:-1], field[fi,:,:-1],
-                                                lmax) for fi in freq_ndx])
+
+        flist = range(self.Nfreq) if freq_ndx is None else np.atleast_1d(freq_ndx)
+        stokes_maps = self.power_stokes(cross=other)
+        if return_I_stokes_only:
+            stokes_maps = [stokes_maps[0]]
+
+        def map_to_alm(power_map):
+            return np.array([
+                grid2healpix_alm_fast(self.theta, self.phi[:-1], power_map[fi, :, :-1], lmax)
+                for fi in flist
+            ])
+
+        result = []
+        for stokes_map in stokes_maps:
+            if return_complex_components:
+                alm_real = map_to_alm(np.real(stokes_map))
+                alm_imag = map_to_alm(np.imag(stokes_map)) if np.iscomplexobj(stokes_map) else None
+                result.append((alm_real, alm_imag))
+            else:
+                if np.iscomplexobj(stokes_map):
+                    alm = map_to_alm(np.real(stokes_map)) + 1j * map_to_alm(np.imag(stokes_map))
+                else:
+                    alm = map_to_alm(stokes_map)
+                result.append(alm)
+
+        if np.isscalar(freq_ndx):
+            if return_complex_components:
+                result = [
+                    (stokes_result[0][0], None if stokes_result[1] is None else stokes_result[1][0])
+                    for stokes_result in result
+                ]
+            else:
+                result = [stokes_result[0] for stokes_result in result]
+
+        if return_I_stokes_only:
+            return result[0]
+        return result

@@ -68,24 +68,20 @@ class CroSimulator(SimulatorBase):
     :param sky_model: Sky model [luseepy.skymodels class]
     :param combinations: Beam combination indices [(0,0),(1,1),(0,2),(1,3),(1,2)]
     :param lmax: Maximum l
-    :param taper: Beam taper
     :param Tground: Ground temperature [K]
     :param freq: Frequencies in MHz (from config / obs)
     :param cross_power: BeamCouplings for cross terms [luseepy.BeamCouplings class]
-    :param beam_smooth: Optional beam smoothing
     :param extra_opts: e.g. cache_transform, dump_beams
     """
 
     def __init__ (self, obs, beams, sky_model, Tground = 200.0,
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None,
-                  lmax = 128, taper = 0.03, cross_power = None, beam_smooth = None,
+                  lmax = 128, cross_power = None,
                   extra_opts = {}):
         super().__init__(obs, beams, sky_model, Tground, combinations, freq)
         self.lmax = lmax
-        self.taper = taper
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
-        self.beam_smooth = beam_smooth
         self.prepare_beams (beams, combinations)
 
             

@@ -25,16 +25,12 @@ class DefaultSimulator(SimulatorBase):
     :type combinations: list[tuple]
     :param lmax: Maximum l value of beams
     :type lmax: int
-    :param taper: Instrument beam taper
-    :type taper: float
     :param Tground: Temperature of lunar ground
     :type Tground: float
     :param freq: Frequencies at which instrument observes sky in MHz. If empty, taken from lusee.beam class.
     :type freq: list[float]
     :param cross_power: Beam coupling model for cross-power terms. If empty, uses :class:`lusee.BeamCouplings`.
     :type cross_power: BeamCouplings
-    :param beam_smooth: Standard deviation of Gaussian filter for beam smoothing (in pixel units)
-    :type beam_smooth: float
     :param extra_opts: Extra options for simulation. Supports "dump_beams" (saves instrument beams to file)
         and "cache_transform" (loads/saves beam transformations from file).
     :type extra_opts: dict
@@ -43,14 +39,12 @@ class DefaultSimulator(SimulatorBase):
 
     def __init__ (self, obs, beams, sky_model, Tground = 200.0,
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None,
-                  lmax = 128, taper = 0.03, cross_power = None, beam_smooth = None,
+                  lmax = 128, cross_power = None,
                   extra_opts = {}):
         super().__init__(obs, beams, sky_model, Tground, combinations, freq)
         self.lmax = lmax
-        self.taper = taper
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
-        self.beam_smooth = beam_smooth
         self.prepare_beams (beams, combinations)
 
             

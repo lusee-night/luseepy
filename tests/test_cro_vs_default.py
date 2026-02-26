@@ -60,6 +60,8 @@ def setup_simulation(cfg, lusee):
     # Beams
     broot = os.path.join(root, cfg["paths"]["beam_dir"])
     bdc = cfg["beam_config"]
+    beam_smooth = bdc.get("beam_smooth")
+    taper = bdc.get("taper", cfg.get("simulation", {}).get("taper", 0.03))
     beams = []
     for b in od["beams"]:
         cbeam = cfg["beams"][b]
@@ -75,6 +77,7 @@ def setup_simulation(cfg, lusee):
             B = lusee.Beam(os.path.join(broot, fn), id=b)
         angle = bdc.get("common_beam_angle", 0) + cbeam.get("angle", 0)
         B = B.rotate(angle)
+        B.taper_and_smooth(taper=taper, beam_smooth=beam_smooth)
         beams.append(B)
 
     couplings = None
@@ -97,7 +100,7 @@ def setup_simulation(cfg, lusee):
     if combs == "all":
         combs = [(i, j) for i in range(len(beams)) for j in range(i, len(beams))]
 
-    return O, beams, sky, freq, lmax, od, combs, couplings, bdc.get("beam_smooth")
+    return O, beams, sky, freq, lmax, od, combs, couplings
 
 
 def run_comparison(config_path=None):
@@ -124,7 +127,7 @@ def run_comparison(config_path=None):
             os.path.dirname(__file__), "../config/sim_choice_realistic.yaml"
         )
     cfg = load_config(config_path)
-    O, beams, sky, freq, lmax, od, combs, couplings, beam_smooth = setup_simulation(
+    O, beams, sky, freq, lmax, od, combs, couplings = setup_simulation(
         cfg, lusee
     )
 
@@ -142,7 +145,6 @@ def run_comparison(config_path=None):
         freq=freq,
         lmax=lmax,
         cross_power=couplings,
-        beam_smooth=beam_smooth,
         extra_opts=extra,
     )
     S_def.simulate(times=times)
@@ -156,7 +158,6 @@ def run_comparison(config_path=None):
         freq=freq,
         lmax=lmax,
         cross_power=couplings,
-        beam_smooth=beam_smooth,
         extra_opts=extra,
     )
     S_cro.simulate(times=times)

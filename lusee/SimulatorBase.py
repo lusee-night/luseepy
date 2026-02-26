@@ -1,5 +1,3 @@
-from scipy.ndimage import gaussian_filter
-
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
@@ -173,7 +171,7 @@ class SimulatorBase:
     def prepare_beams(self, beams, combinations):
         """
         Prepare beams for the simulator (shared by DefaultSimulator and CroSimulator).
-        Expects the subclass to have set: lmax, taper, cross_power, beam_smooth,
+        Expects the subclass to have set: lmax, cross_power,
         and optionally extra_opts (e.g. for "dump_beams"), before calling.
 
         :param beams: Instrument beams, from lusee.beam object
@@ -184,34 +182,29 @@ class SimulatorBase:
         
         self.beams = beams
         self.efbeams = []
-        thetas = beams[0].theta
-        #gtapr = np.zeros(len(thetas))
-        gtapr = (np.arctan((thetas-np.pi/2)/self.taper)/np.pi+0.5)**2
-        tapr = 1.0 - gtapr
         bomega = []
         self.combinations = [(int(i),int(j)) for i,j in combinations]
         
         for i,j in self.combinations:
             bi , bj = beams[i], beams[j]
             print (f"  intializing beam combination {bi.id} x {bj.id} ...")
-            #f_ground_i, f_ground_j = f_grounds[i], f_grounds[j]
-            xP = bi.cross_power(bj)[self.freq_ndx_beam,:,:]
             norm = np.sqrt(bi.gain_conv[self.freq_ndx_beam]*bj.gain_conv[self.freq_ndx_beam])
-            beam2 = xP*tapr[None,:,None]*norm[:,None,None]
-            if getattr(self, "beam_smooth", None) is not None:
-                print ("  smoothing beams with ",self.beam_smooth)
-                beam2 = gaussian_filter(beam2,self.beam_smooth)
-
-            # now need to transfrom this to healpy
-            # (Note: we cut on freq_ndx above, so yes, range is fine in the line below)
-            beamreal =  bi.get_healpix_alm(self.lmax, np.real(beam2), range(self.Nfreq))
+            beamreal, beamimag = bi.get_healpix_alm(
+                self.lmax,
+                freq_ndx=self.freq_ndx_beam,
+                other=bj,
+                return_I_stokes_only=True,
+                return_complex_components=True,
+            )
+            beamreal = beamreal * norm[:, None]
+            if beamimag is not None:
+                beamimag = beamimag * norm[:, None]
 
             if i==j:
                 groundPowerReal = np.array([1-np.real(br[0])/np.sqrt(4*np.pi) for br in beamreal])
                 beamimag = None
                 groundPowerImag = 0.
             else:
-                beamimag = bi.get_healpix_alm(self.lmax, np.imag(beam2), range(self.Nfreq))
                 cross_power = self.cross_power.Ex_coupling(bi,bj,self.freq_ndx_beam)
                 print (f"    cross power is {cross_power[0]} ... {cross_power[-1]} ")
                 groundPowerReal = np.array([cp-np.real(br[0])/np.sqrt(4*np.pi) for br,cp in

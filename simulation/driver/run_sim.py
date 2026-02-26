@@ -71,7 +71,8 @@ class SimDriver(dict):
         bdc = self['beam_config']
         couplings = bdc.get('couplings')
         beam_type = bdc.get('type','fits')
-        self.beam_smooth = bdc.get('beam_smooth')
+        beam_smooth = bdc.get('beam_smooth')
+        taper = bdc.get('taper', self.get('simulation', {}).get('taper', 0.03))
         
         if beam_type=='Gaussian': #similar to sky_type above
             print('Creating Gaussian beams!')
@@ -84,6 +85,7 @@ class SimDriver(dict):
                 angle = bdc['common_beam_angle']+cbeam['angle']
                 print ("  rotating: ",angle)
                 B = B.rotate(angle)
+                B.taper_and_smooth(taper=taper, beam_smooth=beam_smooth)
                 beams.append(B)
         elif beam_type == 'fits':
             for b in self['observation']['beams']:
@@ -103,6 +105,7 @@ class SimDriver(dict):
                 angle = bdc['common_beam_angle']+cbeam.get('angle',0)
                 print ("  rotating: ",angle)
                 B=B.rotate(angle)
+                B.taper_and_smooth(taper=taper, beam_smooth=beam_smooth)
                 beams.append(B)
         else:
             print ("Beam type unrecognized")
@@ -137,7 +140,7 @@ class SimDriver(dict):
             case 'default':
                 S = lusee.DefaultSimulator (O,self.beams, self.sky, Tground = od['Tground'], combinations = combs,
                                     freq = self.freq, lmax = self.lmax,
-                                    cross_power = self.couplings, beam_smooth = self.beam_smooth,
+                                    cross_power = self.couplings,
                                     extra_opts = self['simulation'] )
             case _:
                 print ("Simulation engine not recognized:",self['simulation'].get('engine'))
