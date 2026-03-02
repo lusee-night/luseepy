@@ -1,7 +1,7 @@
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
-from .SimulatorBase import SimulatorBase, mean_alm, rot2eul
+from .SimulatorBase import SimulatorBase, rot2eul
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -48,23 +48,14 @@ class DefaultSimulator(SimulatorBase):
         self.lmax = lmax
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
-        self.use_jax_rotate_alm = self._to_bool(self.extra_opts.get("use_jax_rotate_alm", False))
         self._setup_jax_rotate_ops()
         self.prepare_beams (beams, combinations)
         self._convert_efbeams_to_jax()
-
-    @staticmethod
-    def _to_bool(value):
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
-        return bool(value)
+        self._prepare_output_tensors()
+        self._setup_simulation_kernels()
 
     def _setup_jax_rotate_ops(self):
         self._rotate_sky_packed_batch_jax = None
-        if not self.use_jax_rotate_alm:
-            return
         from s2fft.utils.rotation import compute_full
 
         L = self.lmax + 1
@@ -98,14 +89,14 @@ class DefaultSimulator(SimulatorBase):
             packed_pos_idx = jnp.asarray(np.array(packed_pos_idx, dtype=np.int32))
             ell_pos_idx = jnp.asarray(np.array(ell_pos_idx, dtype=np.int32))
             m_pos_idx = jnp.asarray(np.array(m_pos_idx, dtype=np.int32))
-            neg_sign = jnp.asarray(np.array(neg_sign, dtype=np.float32))
+            neg_sign = jnp.asarray(np.array(neg_sign))
         else:
             packed_pos_idx = None
             ell_pos_idx = None
             m_pos_idx = None
             neg_sign = None
 
-        valid_m = np.zeros((L, M), dtype=np.float32)
+        valid_m = np.zeros((L, M))
         for ell in range(L):
             valid_m[ell, m_offset - ell : m_offset + ell + 1] = 1.0
         valid_m = jnp.asarray(valid_m)
@@ -138,6 +129,9 @@ class DefaultSimulator(SimulatorBase):
             return packed_rot
 
         self._rotate_sky_packed_batch_jax = jax.jit(rotate_sky_packed_batch)
+        self._rotate_many_times_jax = jax.jit(
+            jax.vmap(self._rotate_sky_packed_batch_jax, in_axes=(None, 0, 0, 0))
+        )
 
     def _convert_efbeams_to_jax(self):
         """Keep DefaultSimulator internals jax-native while preserving external IO boundaries."""
@@ -154,6 +148,60 @@ class DefaultSimulator(SimulatorBase):
                 )
             )
         self.efbeams = efbeams_jax
+
+    def _prepare_output_tensors(self):
+        """Flatten (combo, real/imag) outputs into a single axis for vectorized contraction."""
+        output_beams = []
+        output_ground = []
+        for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
+            output_beams.append(beamreal)
+            output_ground.append(groundPowerReal)
+            if ci != cj:
+                output_beams.append(beamimag)
+                output_ground.append(groundPowerImag)
+        self._output_beams = jnp.asarray(jnp.stack(output_beams, axis=0))
+        self._output_ground = jnp.asarray(jnp.stack(output_ground, axis=0))
+
+    def _setup_simulation_kernels(self):
+        lmax = self.lmax
+        Tground = float(self.Tground)
+
+        @jax.jit
+        def simulate_from_rotated_sky(sky_time, output_beams, output_ground):
+            # sky_time: [Nt, Nfreq, Nalm], output_beams: [Nout, Nfreq, Nalm]
+            prod = output_beams[None, :, :, :] * jnp.conj(sky_time[:, None, :, :])
+            contracted = (
+                jnp.real(prod[..., : lmax + 1]).sum(axis=-1)
+                + 2 * jnp.real(prod[..., lmax + 1 :]).sum(axis=-1)
+            ) / (4 * jnp.pi)
+            return contracted + Tground * output_ground[None, :, :]
+
+        self._simulate_from_rotated_sky_jax = simulate_from_rotated_sky
+
+    def _compute_zyz_angles(self, lzl, bzl, lyl, byl, Nt):
+        """Compute ZYZ Euler angles that match healpy XYZ rotation convention exactly."""
+        alpha = np.empty(Nt, dtype=float)
+        beta = np.empty(Nt, dtype=float)
+        gamma = np.empty(Nt, dtype=float)
+        for ti in range(Nt):
+            lz, bz, ly, by = lzl[ti], bzl[ti], lyl[ti], byl[ti]
+            zhat = np.array([np.cos(bz) * np.cos(lz), np.cos(bz) * np.sin(lz), np.sin(bz)])
+            yhat = np.array([np.cos(by) * np.cos(ly), np.cos(by) * np.sin(ly), np.sin(by)])
+            xhat = np.cross(yhat, zhat)
+            assert (np.abs(np.dot(zhat, yhat)) < 1e-10)
+            R = np.array([xhat, yhat, zhat]).T
+            a, b, g = rot2eul(R)
+            rot = hp.rotator.Rotator(
+                rot=(float(g), float(-b), float(a)),
+                deg=False,
+                eulertype='XYZ',
+                inv=False,
+            )
+            a_zyz, b_zyz, g_zyz = ScipyRotation.from_matrix(np.asarray(rot.mat)).as_euler("ZYZ")
+            alpha[ti] = a_zyz
+            beta[ti] = b_zyz
+            gamma[ti] = g_zyz
+        return alpha, beta, gamma
 
             
                                 
@@ -184,7 +232,7 @@ class DefaultSimulator(SimulatorBase):
                 
             if not have_transform:
                 print ("Getting pole transformations...")
-                lzl,bzl = self.obs.get_l_b_from_alt_az(jnp.pi/2,0., times)
+                lzl,bzl = self.obs.get_l_b_from_alt_az(np.pi/2,0., times)
                 print ("Getting horizon transformations...")
                 lyl,byl = self.obs.get_l_b_from_alt_az(0.,0., times)  ## astronomical azimuth = 0 = N = our y coordinate
                 if cache_fn is not None:
@@ -196,41 +244,23 @@ class DefaultSimulator(SimulatorBase):
         else:
             raise NotImplementedError
 
-        wfall = []
         Nt = len (times)
-        for ti, t in enumerate(times):
-            if (ti%100==0):
-                print (f"{ti/Nt*100}% done ...")
-            sky = self.sky_model.get_alm (self.freq_ndx_sky, self.freq)
-            if do_rot:
-                lz,bz,ly,by = lzl[ti],bzl[ti],lyl[ti],byl[ti]
-                zhat = jnp.array([jnp.cos(bz)*jnp.cos(lz), jnp.cos(bz)*jnp.sin(lz),jnp.sin(bz)])
-                yhat = jnp.array([jnp.cos(by)*jnp.cos(ly), jnp.cos(by)*jnp.sin(ly),jnp.sin(by)])
-                xhat = jnp.cross(yhat,zhat)
-                assert(float(jnp.abs(jnp.dot(zhat,yhat)))<1e-10)
-                R = jnp.array([xhat,yhat,zhat]).T
-                a,b,g = rot2eul(R)
-                rot = hp.rotator.Rotator(rot=(float(g),float(-b),float(a)),deg=False,eulertype='XYZ',inv=False)
-                if self.use_jax_rotate_alm:
-                    alpha_zyz, beta_zyz, gamma_zyz = ScipyRotation.from_matrix(np.asarray(rot.mat)).as_euler("ZYZ")
-                    sky = self._rotate_sky_packed_batch_jax(
-                        sky,
-                        float(alpha_zyz),
-                        float(beta_zyz),
-                        float(gamma_zyz),
-                    )
-                else:
-                    sky = jnp.asarray(np.asarray([rot.rotate_alm(np.asarray(s_)) for s_ in sky]))
-            res = []
-            for ci,cj,beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
-                T = jnp.array([mean_alm(br_,sky_,self.lmax) for br_,sky_ in zip(beamreal,sky)])
-                T += self.Tground*jnp.asarray(groundPowerReal)
-                res.append(T)
-                if ci!=cj:
-                    Timag = jnp.array([mean_alm(bi_,sky_,self.lmax) for bi_,sky_ in zip(beamimag,sky)])
-                    Timag += self.Tground*jnp.asarray(groundPowerImag)
-                    res.append(Timag)
-            wfall.append(res)
-        self.result = jnp.array(wfall)
+        sky_base = jnp.asarray(self.sky_model.get_alm(self.freq_ndx_sky, self.freq))
+        if do_rot:
+            alpha, beta, gamma = self._compute_zyz_angles(lzl, bzl, lyl, byl, Nt)
+            sky_time = self._rotate_many_times_jax(
+                sky_base,
+                jnp.asarray(alpha),
+                jnp.asarray(beta),
+                jnp.asarray(gamma),
+            )
+        else:
+            sky_time = jnp.broadcast_to(sky_base[None, :, :], (Nt,) + sky_base.shape)
+
+        self.result = self._simulate_from_rotated_sky_jax(
+            sky_time,
+            self._output_beams,
+            self._output_ground,
+        )
         return self.result
             
