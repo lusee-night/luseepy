@@ -68,6 +68,11 @@ class ConstSky:
         mapalm = jnp.asarray(self.mapalm)
         return mapalm[None, :] * T[:, None]
 
+    def get_alm_numpy(self, ndx, freq=None):
+        T = np.asarray(self.T(ndx))
+        mapalm = np.asarray(self.mapalm)
+        return mapalm[None, :] * T[:, None]
+
 class ConstSkyCane1979(ConstSky):
     """
     Class that constructs a monopole sky temperature map using the Cane (1979) radio background sky model. Uses ConstSky class to initialize map.
@@ -175,6 +180,10 @@ class HealpixSky:
         """
         assert (np.all(self.freq[ndx]==freq))
         return jnp.asarray(self.mapalm[ndx])
+
+    def get_alm_numpy(self, ndx, freq):
+        assert (np.all(self.freq[ndx]==freq))
+        return np.asarray(self.mapalm[ndx])
 
 class FitsSky (HealpixSky):
     """

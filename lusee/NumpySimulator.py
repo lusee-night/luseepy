@@ -1,13 +1,18 @@
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
-from .SimulatorBase import SimulatorBase, mean_alm, rot2eul
+from .SimulatorBase import SimulatorBase, rot2eul
 import numpy as np
 import healpy as hp
 import fitsio
 import sys
 import pickle
 import os
+
+
+def _mean_alm_numpy(alm1, alm2, lmax):
+    prod = alm1 * np.conj(alm2)
+    return (np.real(prod[: lmax + 1]).sum() + 2 * np.real(prod[lmax + 1 :]).sum()) / (4 * np.pi)
 
 
 class NumpySimulator(SimulatorBase):
@@ -62,7 +67,14 @@ class NumpySimulator(SimulatorBase):
         for ti, t in enumerate(times):
             if (ti%100==0):
                 print (f"{ti/Nt*100}% done ...")
-            sky = np.asarray(self.sky_model.get_alm (self.freq_ndx_sky, self.freq))
+            # healpy.rotate_alm expects complex128.
+            if hasattr(self.sky_model, "get_alm_numpy"):
+                sky = np.asarray(
+                    self.sky_model.get_alm_numpy(self.freq_ndx_sky, self.freq),
+                    dtype=np.complex128,
+                )
+            else:
+                sky = np.asarray(self.sky_model.get_alm(self.freq_ndx_sky, self.freq), dtype=np.complex128)
             if do_rot:
                 lz,bz,ly,by = lzl[ti],bzl[ti],lyl[ti],byl[ti]
                 zhat = np.array([np.cos(bz)*np.cos(lz), np.cos(bz)*np.sin(lz),np.sin(bz)])
@@ -75,11 +87,13 @@ class NumpySimulator(SimulatorBase):
                 sky = [rot.rotate_alm(s_) for s_ in sky]
             res = []
             for ci,cj,beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
-                T = np.array([mean_alm(br_,sky_,self.lmax) for br_,sky_ in zip(beamreal,sky)])
+                T = np.array([_mean_alm_numpy(br_, sky_, self.lmax) for br_, sky_ in zip(beamreal, sky)])
                 T += self.Tground*groundPowerReal
                 res.append(T)
                 if ci!=cj:
-                    Timag = np.array([mean_alm(bi_,sky_,self.lmax) for bi_,sky_ in zip(beamimag,sky)])
+                    Timag = np.array(
+                        [_mean_alm_numpy(bi_, sky_, self.lmax) for bi_, sky_ in zip(beamimag, sky)]
+                    )
                     Timag += self.Tground*groundPowerImag
                     res.append(Timag)
             wfall.append(res)
