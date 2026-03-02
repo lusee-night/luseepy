@@ -73,6 +73,8 @@ NUMPY_OUT_PATH="${OUT_DIR}/${NUMPY_OUT_NAME}"
 ABS_TOL="${ABS_TOL:-1e-9}"
 JAX_TIME_FILE="$(mktemp)"
 NUMPY_TIME_FILE="$(mktemp)"
+WARMUP_JAX_OUT_NAME="sim_output_quick_jax_warmup.fits"
+WARMUP_NUMPY_OUT_NAME="sim_output_quick_numpy_warmup.fits"
 cleanup() {
   rm -f "${JAX_TIME_FILE}" "${NUMPY_TIME_FILE}"
 }
@@ -86,7 +88,27 @@ FAST_OVERRIDES=(
   "observation.freq.end=${FREQ_END}"
 )
 
-echo "Running default (jax) engine..."
+echo "Warmup run: default (jax) engine..."
+(
+  cd "${MOD_SIM_DIR}"
+  uv run python driver/run_sim.py "${CONFIG_PATH}" \
+    "${FAST_OVERRIDES[@]}" \
+    "engine=default" \
+    "simulation.output=${WARMUP_JAX_OUT_NAME}" \
+    "simulation.cache_transform=quick_2step_jax_warmup.pickle"
+)
+
+echo "Warmup run: numpy engine..."
+(
+  cd "${MOD_SIM_DIR}"
+  uv run python driver/run_sim.py "${CONFIG_PATH}" \
+    "${FAST_OVERRIDES[@]}" \
+    "engine=numpy" \
+    "simulation.output=${WARMUP_NUMPY_OUT_NAME}" \
+    "simulation.cache_transform=quick_2step_numpy_warmup.pickle"
+)
+
+echo "Timed run: default (jax) engine..."
 (
   cd "${MOD_SIM_DIR}"
   /usr/bin/time -p -o "${JAX_TIME_FILE}" uv run python driver/run_sim.py "${CONFIG_PATH}" \
@@ -96,7 +118,7 @@ echo "Running default (jax) engine..."
     "simulation.cache_transform=quick_2step_jax.pickle"
 )
 
-echo "Running numpy engine..."
+echo "Timed run: numpy engine..."
 (
   cd "${MOD_SIM_DIR}"
   /usr/bin/time -p -o "${NUMPY_TIME_FILE}" uv run python driver/run_sim.py "${CONFIG_PATH}" \
