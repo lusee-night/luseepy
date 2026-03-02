@@ -8,6 +8,7 @@ from .BeamInterpolator import BeamInterpolator
 from .BeamGauss     import BeamGauss
 from .BeamCouplings import BeamCouplings
 from .DefaultSimulator import DefaultSimulator
+from .NumpySimulator import NumpySimulator
 try:
     from .CroSimulator import CroSimulator
 except (ModuleNotFoundError, ImportError) as e:
@@ -28,5 +29,4 @@ from .Throughput import Throughput
 
 __version__ = '1.3'
 __comment__ = '1.3 dev'
-
 

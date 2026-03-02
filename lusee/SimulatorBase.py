@@ -26,7 +26,9 @@ def mean_alm(alm1, alm2, lmax):
     
     """
     
-    prod = alm1*np.conj(alm2)
+    alm1_np = np.asarray(alm1)
+    alm2_np = np.asarray(alm2)
+    prod = alm1_np*np.conj(alm2_np)
     sm = (np.real(prod[:lmax+1]).sum()+2*np.real(prod[lmax+1:]).sum())/(4*np.pi)
     return sm
 
@@ -42,9 +44,10 @@ def rot2eul(R):
     
     """
     
-    beta = -np.arcsin(R[2,0])
-    alpha = np.arctan2(R[2,1]/np.cos(beta),R[2,2]/np.cos(beta))
-    gamma = np.arctan2(R[1,0]/np.cos(beta),R[0,0]/np.cos(beta))
+    R_np = np.asarray(R)
+    beta = -np.arcsin(R_np[2,0])
+    alpha = np.arctan2(R_np[2,1]/np.cos(beta),R_np[2,2]/np.cos(beta))
+    gamma = np.arctan2(R_np[1,0]/np.cos(beta),R_np[0,0]/np.cos(beta))
     return np.array((alpha, beta, gamma))
 
 def eul2rot(theta) :
@@ -59,9 +62,10 @@ def eul2rot(theta) :
     
     """
     
-    R = np.array([[np.cos(theta[1])*np.cos(theta[2]),       np.sin(theta[0])*np.sin(theta[1])*np.cos(theta[2]) - np.sin(theta[2])*np.cos(theta[0]),      np.sin(theta[1])*np.cos(theta[0])*np.cos(theta[2]) + np.sin(theta[0])*np.sin(theta[2])],
-                  [np.sin(theta[2])*np.cos(theta[1]),       np.sin(theta[0])*np.sin(theta[1])*np.sin(theta[2]) + np.cos(theta[0])*np.cos(theta[2]),      np.sin(theta[1])*np.sin(theta[2])*np.cos(theta[0]) - np.sin(theta[0])*np.cos(theta[2])],
-                  [-np.sin(theta[1]),                        np.sin(theta[0])*np.cos(theta[1]),                                                           np.cos(theta[0])*np.cos(theta[1])]])
+    theta_np = np.asarray(theta)
+    R = np.array([[np.cos(theta_np[1])*np.cos(theta_np[2]),       np.sin(theta_np[0])*np.sin(theta_np[1])*np.cos(theta_np[2]) - np.sin(theta_np[2])*np.cos(theta_np[0]),      np.sin(theta_np[1])*np.cos(theta_np[0])*np.cos(theta_np[2]) + np.sin(theta_np[0])*np.sin(theta_np[2])],
+                  [np.sin(theta_np[2])*np.cos(theta_np[1]),       np.sin(theta_np[0])*np.sin(theta_np[1])*np.sin(theta_np[2]) + np.cos(theta_np[0])*np.cos(theta_np[2]),      np.sin(theta_np[1])*np.sin(theta_np[2])*np.cos(theta_np[0]) - np.sin(theta_np[0])*np.cos(theta_np[2])],
+                  [-np.sin(theta_np[1]),                        np.sin(theta_np[0])*np.cos(theta_np[1]),                                                           np.cos(theta_np[0])*np.cos(theta_np[1])]])
 
     return R
 
@@ -161,7 +165,7 @@ class SimulatorBase:
             "lun_height_m": self.obs.lun_height_m,
             "deltaT_sec":   self.obs.deltaT_sec
         }
-        fits.write(self.result, header=header, extname='data')
+        fits.write(np.asarray(self.result), header=header, extname='data')
         fits.write(self.freq, extname='freq')
         fits.write(np.array(self.combinations), extname='combinations')
         for i,b in enumerate(self.beams):

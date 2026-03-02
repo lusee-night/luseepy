@@ -3,11 +3,14 @@ from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .SimulatorBase import SimulatorBase, mean_alm, rot2eul
 import numpy as np
+import jax
+import jax.numpy as jnp
 import healpy as hp
 import fitsio
 import sys
 import pickle
 import os
+from scipy.spatial.transform import Rotation as ScipyRotation
 
 
 
@@ -45,7 +48,112 @@ class DefaultSimulator(SimulatorBase):
         self.lmax = lmax
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
+        self.use_jax_rotate_alm = self._to_bool(self.extra_opts.get("use_jax_rotate_alm", False))
+        self._setup_jax_rotate_ops()
         self.prepare_beams (beams, combinations)
+        self._convert_efbeams_to_jax()
+
+    @staticmethod
+    def _to_bool(value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
+
+    def _setup_jax_rotate_ops(self):
+        self._rotate_sky_packed_batch_jax = None
+        if not self.use_jax_rotate_alm:
+            return
+        from s2fft.utils.rotation import compute_full
+
+        L = self.lmax + 1
+        M = 2 * L - 1
+        alm_size = hp.sphtfunc.Alm.getsize(self.lmax)
+        m_offset = L - 1
+
+        packed_idx = []
+        ell_idx = []
+        m_idx = []
+        packed_pos_idx = []
+        ell_pos_idx = []
+        m_pos_idx = []
+        neg_sign = []
+        for ell in range(L):
+            for m in range(ell + 1):
+                pidx = hp.sphtfunc.Alm.getidx(self.lmax, ell, m)
+                packed_idx.append(pidx)
+                ell_idx.append(ell)
+                m_idx.append(m)
+                if m > 0:
+                    packed_pos_idx.append(pidx)
+                    ell_pos_idx.append(ell)
+                    m_pos_idx.append(m)
+                    neg_sign.append(1.0 if (m % 2 == 0) else -1.0)
+
+        packed_idx = jnp.asarray(np.array(packed_idx, dtype=np.int32))
+        ell_idx = jnp.asarray(np.array(ell_idx, dtype=np.int32))
+        m_idx = jnp.asarray(np.array(m_idx, dtype=np.int32))
+        if packed_pos_idx:
+            packed_pos_idx = jnp.asarray(np.array(packed_pos_idx, dtype=np.int32))
+            ell_pos_idx = jnp.asarray(np.array(ell_pos_idx, dtype=np.int32))
+            m_pos_idx = jnp.asarray(np.array(m_pos_idx, dtype=np.int32))
+            neg_sign = jnp.asarray(np.array(neg_sign, dtype=np.float32))
+        else:
+            packed_pos_idx = None
+            ell_pos_idx = None
+            m_pos_idx = None
+            neg_sign = None
+
+        valid_m = np.zeros((L, M), dtype=np.float32)
+        for ell in range(L):
+            valid_m[ell, m_offset - ell : m_offset + ell + 1] = 1.0
+        valid_m = jnp.asarray(valid_m)
+        m_all = jnp.arange(-(L - 1), L)
+
+        def rotate_sky_packed_batch(sky_packed_batch, alpha, beta, gamma):
+            real_dtype = jnp.asarray(beta).dtype
+            dls = jnp.zeros((L, M, M), dtype=real_dtype)
+            dl_iter = jnp.zeros((M, M), dtype=real_dtype)
+            for el in range(L):
+                dl_iter = compute_full(dl_iter, beta, L, el)
+                dls = dls.at[el].set(dl_iter)
+
+            flm = jnp.zeros((sky_packed_batch.shape[0], L, M), dtype=sky_packed_batch.dtype)
+            vals = sky_packed_batch[:, packed_idx]
+            flm = flm.at[:, ell_idx, m_offset + m_idx].set(vals)
+            if packed_pos_idx is not None:
+                vals_neg = neg_sign[None, :] * jnp.conj(sky_packed_batch[:, packed_pos_idx])
+                flm = flm.at[:, ell_pos_idx, m_offset - m_pos_idx].set(vals_neg)
+
+            exp_alpha = jnp.exp(-1j * m_all * alpha)
+            exp_gamma = jnp.exp(-1j * m_all * gamma)
+            valid = valid_m[None, :, :]
+            flm_weighted = flm * exp_gamma[None, None, :] * valid
+            flm_rot = jnp.einsum("lmn,fln->flm", dls, flm_weighted)
+            flm_rot = flm_rot * exp_alpha[None, None, :] * valid
+
+            packed_rot = jnp.zeros((sky_packed_batch.shape[0], alm_size), dtype=sky_packed_batch.dtype)
+            packed_rot = packed_rot.at[:, packed_idx].set(flm_rot[:, ell_idx, m_offset + m_idx])
+            return packed_rot
+
+        self._rotate_sky_packed_batch_jax = jax.jit(rotate_sky_packed_batch)
+
+    def _convert_efbeams_to_jax(self):
+        """Keep DefaultSimulator internals jax-native while preserving external IO boundaries."""
+        efbeams_jax = []
+        for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
+            efbeams_jax.append(
+                (
+                    ci,
+                    cj,
+                    jnp.asarray(beamreal),
+                    None if beamimag is None else jnp.asarray(beamimag),
+                    jnp.asarray(groundPowerReal),
+                    jnp.asarray(groundPowerImag),
+                )
+            )
+        self.efbeams = efbeams_jax
 
             
                                 
@@ -76,7 +184,7 @@ class DefaultSimulator(SimulatorBase):
                 
             if not have_transform:
                 print ("Getting pole transformations...")
-                lzl,bzl = self.obs.get_l_b_from_alt_az(np.pi/2,0., times)
+                lzl,bzl = self.obs.get_l_b_from_alt_az(jnp.pi/2,0., times)
                 print ("Getting horizon transformations...")
                 lyl,byl = self.obs.get_l_b_from_alt_az(0.,0., times)  ## astronomical azimuth = 0 = N = our y coordinate
                 if cache_fn is not None:
@@ -93,27 +201,36 @@ class DefaultSimulator(SimulatorBase):
         for ti, t in enumerate(times):
             if (ti%100==0):
                 print (f"{ti/Nt*100}% done ...")
-            sky = self.sky_model.get_alm (self.freq_ndx_sky, self.freq)
+            sky = jnp.asarray(np.asarray(self.sky_model.get_alm (self.freq_ndx_sky, self.freq)))
             if do_rot:
                 lz,bz,ly,by = lzl[ti],bzl[ti],lyl[ti],byl[ti]
-                zhat = np.array([np.cos(bz)*np.cos(lz), np.cos(bz)*np.sin(lz),np.sin(bz)])
-                yhat = np.array([np.cos(by)*np.cos(ly), np.cos(by)*np.sin(ly),np.sin(by)])
-                xhat = np.cross(yhat,zhat)
-                assert(np.abs(np.dot(zhat,yhat))<1e-10)
-                R = np.array([xhat,yhat,zhat]).T
+                zhat = jnp.array([jnp.cos(bz)*jnp.cos(lz), jnp.cos(bz)*jnp.sin(lz),jnp.sin(bz)])
+                yhat = jnp.array([jnp.cos(by)*jnp.cos(ly), jnp.cos(by)*jnp.sin(ly),jnp.sin(by)])
+                xhat = jnp.cross(yhat,zhat)
+                assert(float(jnp.abs(jnp.dot(zhat,yhat)))<1e-10)
+                R = jnp.array([xhat,yhat,zhat]).T
                 a,b,g = rot2eul(R)
-                rot = hp.rotator.Rotator(rot=(g,-b,a),deg=False,eulertype='XYZ',inv=False)
-                sky = [rot.rotate_alm(s_) for s_ in sky]
+                rot = hp.rotator.Rotator(rot=(float(g),float(-b),float(a)),deg=False,eulertype='XYZ',inv=False)
+                if self.use_jax_rotate_alm:
+                    alpha_zyz, beta_zyz, gamma_zyz = ScipyRotation.from_matrix(np.asarray(rot.mat)).as_euler("ZYZ")
+                    sky = self._rotate_sky_packed_batch_jax(
+                        sky,
+                        float(alpha_zyz),
+                        float(beta_zyz),
+                        float(gamma_zyz),
+                    )
+                else:
+                    sky = jnp.asarray(np.asarray([rot.rotate_alm(np.asarray(s_)) for s_ in sky]))
             res = []
             for ci,cj,beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
-                T = np.array([mean_alm(br_,sky_,self.lmax) for br_,sky_ in zip(beamreal,sky)])
-                T += self.Tground*groundPowerReal
+                T = jnp.array([mean_alm(br_,sky_,self.lmax) for br_,sky_ in zip(beamreal,sky)])
+                T += self.Tground*jnp.asarray(groundPowerReal)
                 res.append(T)
                 if ci!=cj:
-                    Timag = np.array([mean_alm(bi_,sky_,self.lmax) for bi_,sky_ in zip(beamimag,sky)])
-                    Timag += self.Tground*groundPowerImag
+                    Timag = jnp.array([mean_alm(bi_,sky_,self.lmax) for bi_,sky_ in zip(beamimag,sky)])
+                    Timag += self.Tground*jnp.asarray(groundPowerImag)
                     res.append(Timag)
             wfall.append(res)
-        self.result = np.array(wfall)
+        self.result = jnp.array(wfall)
         return self.result
             

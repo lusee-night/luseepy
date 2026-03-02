@@ -43,6 +43,8 @@ observation:
 
 simulation:
   output: sim_output.fits
-  cache_transform: lunar_day.pickle  
+  cache_transform: lunar_day.pickle
+  jax_enable_x64: false
+  use_jax_rotate_alm: false
 
 engine: luseepy

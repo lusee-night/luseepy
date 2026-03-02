@@ -6,13 +6,31 @@ import numpy as np
 
 class SimDriver(dict):
     def __init__(self, cfg):
-        import lusee
-
-        self._lusee = lusee
         self.update(cfg)
+        self._configure_jax_precision()
+        import lusee
+        self._lusee = lusee
         self._parse_base()
         self._parse_sky()
         self._parse_beams()
+
+    @staticmethod
+    def _to_bool(value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
+
+    def _configure_jax_precision(self):
+        sim_cfg = self.get("simulation", {})
+        if "jax_enable_x64" not in sim_cfg:
+            return
+        enabled = self._to_bool(sim_cfg.get("jax_enable_x64", False))
+        os.environ["JAX_ENABLE_X64"] = "1" if enabled else "0"
+        import jax
+        jax.config.update("jax_enable_x64", enabled)
+        print(f"JAX x64 precision enabled: {enabled}")
 
     def _parse_base(self):
         self.lmax = self["observation"]["lmax"]
@@ -128,7 +146,8 @@ class SimDriver(dict):
         aliases = {
             "default": "luseepy",
             "lusee": "luseepy",
-            "numpy": "luseepy",
+            "jax": "luseepy",
+            "numpy": "numpy",
             "croissant": "croissant",
         }
         return aliases.get(e, e)
@@ -187,9 +206,22 @@ class SimDriver(dict):
                 cross_power=self.couplings,
                 extra_opts=self["simulation"],
             )
+        elif engine == "numpy":
+            print("  setting up NumPy Simulation object...")
+            S = lusee.NumpySimulator(
+                O,
+                self.beams,
+                self.sky,
+                Tground=od["Tground"],
+                combinations=combs,
+                freq=self.freq,
+                lmax=self.lmax,
+                cross_power=self.couplings,
+                extra_opts=self["simulation"],
+            )
         else:
             raise ValueError(
-                "engine must be one of {luseepy, croissant} (or aliases default/numpy), "
+                "engine must be one of {luseepy, numpy, croissant} (or aliases default/lusee/jax), "
                 f"got: {engine}"
             )
 
