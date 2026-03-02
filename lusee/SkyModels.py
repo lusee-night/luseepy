@@ -1,6 +1,7 @@
 import fitsio
 import healpy as hp
 import numpy as np
+import jax.numpy as jnp
 from .MonoSkyModels import T_C, T_DarkAges, T_DarkAges_Scaled
 
 class ConstSky:
@@ -63,7 +64,9 @@ class ConstSky:
         :returns: A_lm array
         :rtype: array
         """
-        return [self.mapalm*T for T in self.T(ndx)]
+        T = jnp.asarray(self.T(ndx))
+        mapalm = jnp.asarray(self.mapalm)
+        return mapalm[None, :] * T[:, None]
 
 class ConstSkyCane1979(ConstSky):
     """
@@ -171,7 +174,7 @@ class HealpixSky:
         :rtype: array
         """
         assert (np.all(self.freq[ndx]==freq))
-        return self.mapalm[ndx]
+        return jnp.asarray(self.mapalm[ndx])
 
 class FitsSky (HealpixSky):
     """

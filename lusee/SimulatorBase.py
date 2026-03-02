@@ -3,6 +3,7 @@ from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 
 import numpy as np
+import jax.numpy as jnp
 import healpy as hp
 import fitsio
 import sys
@@ -26,10 +27,8 @@ def mean_alm(alm1, alm2, lmax):
     
     """
     
-    alm1_np = np.asarray(alm1)
-    alm2_np = np.asarray(alm2)
-    prod = alm1_np*np.conj(alm2_np)
-    sm = (np.real(prod[:lmax+1]).sum()+2*np.real(prod[lmax+1:]).sum())/(4*np.pi)
+    prod = alm1*jnp.conj(alm2)
+    sm = (jnp.real(prod[:lmax+1]).sum()+2*jnp.real(prod[lmax+1:]).sum())/(4*jnp.pi)
     return sm
 
 def rot2eul(R):

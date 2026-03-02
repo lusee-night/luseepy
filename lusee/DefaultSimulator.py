@@ -201,7 +201,7 @@ class DefaultSimulator(SimulatorBase):
         for ti, t in enumerate(times):
             if (ti%100==0):
                 print (f"{ti/Nt*100}% done ...")
-            sky = jnp.asarray(np.asarray(self.sky_model.get_alm (self.freq_ndx_sky, self.freq)))
+            sky = self.sky_model.get_alm (self.freq_ndx_sky, self.freq)
             if do_rot:
                 lz,bz,ly,by = lzl[ti],bzl[ti],lyl[ti],byl[ti]
                 zhat = jnp.array([jnp.cos(bz)*jnp.cos(lz), jnp.cos(bz)*jnp.sin(lz),jnp.sin(bz)])

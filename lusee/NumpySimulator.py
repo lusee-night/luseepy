@@ -62,7 +62,7 @@ class NumpySimulator(SimulatorBase):
         for ti, t in enumerate(times):
             if (ti%100==0):
                 print (f"{ti/Nt*100}% done ...")
-            sky = self.sky_model.get_alm (self.freq_ndx_sky, self.freq)
+            sky = np.asarray(self.sky_model.get_alm (self.freq_ndx_sky, self.freq))
             if do_rot:
                 lz,bz,ly,by = lzl[ti],bzl[ti],lyl[ti],byl[ti]
                 zhat = np.array([np.cos(bz)*np.cos(lz), np.cos(bz)*np.sin(lz),np.sin(bz)])
