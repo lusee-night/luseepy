@@ -1,6 +1,7 @@
 import fitsio
 import healpy as hp
 import numpy as np
+import jax.numpy as jnp
 from .MonoSkyModels import T_C, T_DarkAges, T_DarkAges_Scaled
 
 class ConstSky:
@@ -63,7 +64,9 @@ class ConstSky:
         :returns: A_lm array
         :rtype: array
         """
-        return [self.mapalm*T for T in self.T(ndx)]
+        T = jnp.asarray(self.T(ndx))
+        mapalm = jnp.asarray(self.mapalm)
+        return mapalm[None, :] * T[:, None]
 
 class ConstSkyCane1979(ConstSky):
     """
@@ -237,7 +240,7 @@ class SingleSourceHealpixSky (HealpixSky):
         map[pix] = 1.0
         map  = [map*T_ for T_ in T]
         super().__init__(Nside, 3*Nside-1, map, freq=freq, frame=self.frame)
-        
+
 
 class HarmonicPointSourceSky:
     """Point source computed directly in harmonic space — no pixelization or Gibbs ringing.
