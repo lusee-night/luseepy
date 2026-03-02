@@ -23,6 +23,7 @@ class HDF5Writer:
         consts: Optional[Constants] = None,
         dcb_fpga_telemetry: Optional[Dict[str, np.ndarray]] = None,
         dcb_encoder_telemetry: Optional[Dict[str, np.ndarray]] = None,
+        spectra_interpolated_telemetry: Optional[Dict[str, np.ndarray]] = None,
     ):
         self.output_file = output_file
         self.cdi_dir = cdi_dir
@@ -30,6 +31,7 @@ class HDF5Writer:
         self.consts = consts
         self.dcb_fpga_telemetry = dcb_fpga_telemetry
         self.dcb_encoder_telemetry = dcb_encoder_telemetry
+        self.spectra_interpolated_telemetry = spectra_interpolated_telemetry
 
     def write(self):
         """Main method to write HDF5 file."""
@@ -44,6 +46,7 @@ class HDF5Writer:
             self._write_session_invariants(f)
             self._write_constants(f)
             self._write_dcb_telemetry(f)
+            self._write_spectra_interpolated_telemetry(f)
 
             # Track metadata changes
             metadata_groups = self._group_by_metadata()
@@ -86,6 +89,13 @@ class HDF5Writer:
                 continue
             for name, values in dcb_dict.items():
                 telem_group.create_dataset(name, data=np.asarray(values), compression="gzip")
+
+    def _write_spectra_interpolated_telemetry(self, h5_file):
+        if not self.spectra_interpolated_telemetry:
+            return
+        telem_group = h5_file.create_group("spectra_interpolated_telemetry")
+        for name, values in self.spectra_interpolated_telemetry.items():
+            telem_group.create_dataset(name, data=np.asarray(values), compression="gzip")
 
     def _write_session_invariants(self, h5_file):
         invariants = h5_file.create_group('session_invariants')
@@ -534,6 +544,7 @@ def save_to_hdf5(
     consts: Optional[Constants] = None,
     dcb_fpga_telemetry: Optional[Dict[str, np.ndarray]] = None,
     dcb_encoder_telemetry: Optional[Dict[str, np.ndarray]] = None,
+    spectra_interpolated_telemetry: Optional[Dict[str, np.ndarray]] = None,
 ):
     """
     Save a session of packets to HDF5 file.
@@ -542,5 +553,12 @@ def save_to_hdf5(
         cdi_dir: Directory containing CDI output files
         output_file: Path to output HDF5 file
     """
-    writer = HDF5Writer(output_file, cdi_dir, consts, dcb_fpga_telemetry, dcb_encoder_telemetry)
+    writer = HDF5Writer(
+        output_file,
+        cdi_dir,
+        consts,
+        dcb_fpga_telemetry,
+        dcb_encoder_telemetry,
+        spectra_interpolated_telemetry=spectra_interpolated_telemetry,
+    )
     writer.write()

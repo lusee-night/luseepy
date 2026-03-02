@@ -8,6 +8,14 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import h5py
 import numpy as np
 
+from telemetry_utils import TELEMETRY_FIELD_NAMES
+
+
+TELEMETRY_FIELD_ALIASES = {
+    "THERM_FPGA": "FPGA_temperature",
+}
+
+
 class Data:
     """Base class for HDF5-backed data products."""
 
@@ -130,6 +138,10 @@ class Data:
             self.time = self.meta["time"]
         if not constants_seen:
             warnings.warn("Missing constants group in HDF5 file; landing coordinates set to None")
+        self._post_load()
+
+    def _post_load(self):
+        return
 
     def _iter_items(self, h5file: h5py.File) -> List[str]:
         return sorted([key for key in h5file.keys() if key.startswith("item_")])
@@ -207,6 +219,62 @@ class Spectra(Data):
         meta_group = item_group.get("meta")
         meta = self._load_meta(meta_group) if meta_group else {}
         return data, meta
+
+    def _post_load(self):
+        self._load_interpolated_telemetry()
+
+    def _telemetry_attr_name(self, telemetry_key: str) -> str:
+        return TELEMETRY_FIELD_ALIASES.get(telemetry_key, telemetry_key)
+
+    def _load_interpolated_telemetry(self):
+        chunks: Dict[str, List[np.ndarray]] = {}
+        time_chunks: List[np.ndarray] = []
+
+        for path in self.sources:
+            with h5py.File(path, "r") as f:
+                group = f.get("spectra_interpolated_telemetry")
+                if group is None:
+                    continue
+
+                if "time" in group:
+                    time_chunks.append(np.asarray(group["time"][()], dtype=np.float64))
+
+                for key, item in group.items():
+                    if key == "time":
+                        continue
+                    chunks.setdefault(key, []).append(np.asarray(item[()]))
+
+        if not chunks and not time_chunks:
+            return
+
+        if time_chunks:
+            interp_time = np.concatenate(time_chunks, axis=0)
+            if self.data.size > 0 and interp_time.shape[0] != self.data.shape[0]:
+                warnings.warn(
+                    "Interpolated telemetry time length does not match spectra length; "
+                    "keeping existing Spectra.time"
+                )
+            else:
+                self.time = interp_time
+            self.meta["interpolated_time"] = interp_time
+            self.interpolated_time = interp_time
+
+        for key, arrays in chunks.items():
+            arr = np.concatenate(arrays, axis=0)
+            if self.data.size > 0 and arr.shape[0] != self.data.shape[0]:
+                warnings.warn(
+                    f"Interpolated telemetry field '{key}' length ({arr.shape[0]}) does not match "
+                    f"spectra length ({self.data.shape[0]})."
+                )
+            self.meta[key] = arr
+            setattr(self, key, arr)
+            if key in TELEMETRY_FIELD_NAMES:
+                setattr(self, self._telemetry_attr_name(key), arr)
+
+        for key in TELEMETRY_FIELD_NAMES:
+            if key in self.meta:
+                alias = self._telemetry_attr_name(key)
+                self.meta[alias] = self.meta[key]
 
 
 class TRSpectra(Data):

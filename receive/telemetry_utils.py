@@ -319,3 +319,108 @@ def extract_encoder_info(packet) -> dict:
             result[field_name] = field_value
 
     return result
+
+
+def _as_1d_float(values) -> np.ndarray:
+    return np.asarray(values, dtype=np.float64).reshape(-1)
+
+
+def _normalized_relative_axis(values: np.ndarray) -> np.ndarray:
+    arr = _as_1d_float(values)
+    if arr.size == 0:
+        return arr
+    rel = arr - arr[0]
+    if rel.size <= 1:
+        return np.zeros_like(rel, dtype=np.float64)
+    span = rel[-1]
+    if span <= 0:
+        return np.linspace(0.0, 1.0, rel.size, dtype=np.float64)
+    return rel / span
+
+
+def _interp_1d(x_src: np.ndarray, y_src: np.ndarray, x_tgt: np.ndarray) -> np.ndarray:
+    if y_src.size == 0:
+        return np.full_like(x_tgt, np.nan, dtype=np.float64)
+
+    order = np.argsort(x_src, kind="stable")
+    x_sorted = x_src[order]
+    y_sorted = y_src[order]
+
+    unique_x, inv = np.unique(x_sorted, return_inverse=True)
+    if unique_x.size != x_sorted.size:
+        sum_y = np.zeros(unique_x.size, dtype=np.float64)
+        cnt_y = np.zeros(unique_x.size, dtype=np.int64)
+        np.add.at(sum_y, inv, y_sorted)
+        np.add.at(cnt_y, inv, 1)
+        y_unique = sum_y / np.maximum(cnt_y, 1)
+    else:
+        y_unique = y_sorted
+
+    if unique_x.size == 1:
+        return np.full_like(x_tgt, y_unique[0], dtype=np.float64)
+
+    return np.interp(x_tgt, unique_x, y_unique, left=y_unique[0], right=y_unique[-1])
+
+
+def interpolate_telemetry_to_spectra_times(
+    spectra_times: np.ndarray,
+    telemetry: Dict[str, np.ndarray],
+    telemetry_time_key: str = "fpga_mission_seconds",
+    telemetry_subseconds_key: Optional[str] = None,
+    use_normalized_relative_position: bool = False,
+    fields: Optional[List[str]] = None,
+) -> Dict[str, np.ndarray]:
+    """
+    Interpolate telemetry fields onto spectra timestamps.
+
+    Args:
+        spectra_times: Absolute spectra timestamps (target axis).
+        telemetry: Telemetry dictionary with time axis and fields.
+        telemetry_time_key: Key used as telemetry source time axis.
+        telemetry_subseconds_key: Optional subseconds key; interpreted as fraction / 65536.
+        use_normalized_relative_position: If True, interpolate on normalized [0, 1]
+            relative position for each stream (endpoint-to-endpoint alignment).
+        fields: Optional explicit list of telemetry fields to interpolate.
+
+    Returns:
+        Dict containing:
+          - "time": spectra absolute timestamps
+          - one interpolated array per field
+    """
+    spectra_abs = _as_1d_float(spectra_times)
+    out: Dict[str, np.ndarray] = {"time": spectra_abs}
+
+    if spectra_abs.size == 0:
+        if fields:
+            for field in fields:
+                out[field] = np.array([], dtype=np.float64)
+        return out
+
+    telemetry_time = _as_1d_float(telemetry.get(telemetry_time_key, []))
+    if telemetry_subseconds_key and telemetry_subseconds_key in telemetry:
+        sub = _as_1d_float(telemetry.get(telemetry_subseconds_key, []))
+        n = min(telemetry_time.size, sub.size)
+        telemetry_time = telemetry_time[:n] + (sub[:n] / 65536.0)
+
+    if use_normalized_relative_position:
+        x_tgt_full = _normalized_relative_axis(spectra_abs)
+        x_src_full = _normalized_relative_axis(telemetry_time)
+    else:
+        x_tgt_full = spectra_abs
+        x_src_full = telemetry_time
+
+    if fields is None:
+        excluded = {telemetry_time_key}
+        if telemetry_subseconds_key:
+            excluded.add(telemetry_subseconds_key)
+        fields = [k for k in telemetry.keys() if k not in excluded]
+
+    for field in fields:
+        vals = _as_1d_float(telemetry.get(field, []))
+        n = min(x_src_full.size, vals.size)
+        if n == 0:
+            out[field] = np.full(spectra_abs.shape, np.nan, dtype=np.float64)
+            continue
+        out[field] = _interp_1d(x_src_full[:n], vals[:n], x_tgt_full)
+
+    return out
