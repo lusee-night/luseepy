@@ -25,3 +25,12 @@ croissant = [
     "croissant-sim >= 4.0.0, <5.0.0",
     "s2fft",
 ]
+dev = ["pytest>=7"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["tests/attic"]
+pythonpath = ["."]
+markers = [
+    "integration: requires LUSEE_DRIVE_DIR and real data files",
+]

@@ -1,6 +1,7 @@
 """A package for simulation of LuSEE-Night."""
 
 from .Observation   import Observation
+from .CalibratorTrack import CalibratorTrack
 from .Data          import Data
 from .Satellite     import Satellite, ObservedSatellite
 from .Beam          import Beam, grid2healpix, grid2healpix_alm_fast
