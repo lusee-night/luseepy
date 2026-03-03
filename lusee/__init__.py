@@ -9,6 +9,7 @@ from .BeamInterpolator import BeamInterpolator
 from .BeamGauss     import BeamGauss
 from .BeamCouplings import BeamCouplings
 from .DefaultSimulator import DefaultSimulator
+from .CalibratorSimulator import CalibratorSimulator
 try:
     from .CroSimulator import CroSimulator
 except (ModuleNotFoundError, ImportError) as e:

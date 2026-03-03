@@ -5,15 +5,19 @@ class CalibratorTrack:
     """
     Contains the information about a calibrator satellite overpass.
 
-    All arrays must have the same length (number of samples in the overpass).
+    Arrays alt, az, and polarization must have the same length as times
+    (NTime = number of samples in the overpass). tone_freqs and tone_amplitude
+    are NFreq arrays that are independent of NTime; tone_amplitude must match
+    the length of tone_freqs (one amplitude per frequency).
 
     :param times: Observation times (astropy Time array, same format as Observation.times)
     :param alt: Altitude above horizon in radians
     :param az: Azimuth in radians (astronomical convention, from N towards E)
     :param polarization: Spin-2 polarization angle in radians
         (0 = pure E_theta, pi/2 = pure E_phi)
-    :param tone_freqs: Tone frequencies in MHz, one per time sample
-    :param tone_amplitude: Tone amplitudes (same units as sky temperature), one per sample
+    :param tone_freqs: Tone frequencies in MHz — NFreq values, independent of NTime
+    :param tone_amplitude: Tone amplitudes (same units as sky temperature),
+        one per frequency (must match len(tone_freqs))
     """
 
     def __init__(self, times, alt, az, polarization, tone_freqs, tone_amplitude):
@@ -26,17 +30,21 @@ class CalibratorTrack:
 
         n = len(times)
         for name, arr in [
-            ("alt",            alt),
-            ("az",             az),
-            ("polarization",   polarization),
-            ("tone_freqs",     tone_freqs),
-            ("tone_amplitude", tone_amplitude),
+            ("alt",          alt),
+            ("az",           az),
+            ("polarization", polarization),
         ]:
             if len(arr) != n:
                 raise ValueError(
                     f"All arrays must have the same length as times ({n}); "
                     f"got len({name})={len(arr)}"
                 )
+
+        if len(tone_amplitude) != len(tone_freqs):
+            raise ValueError(
+                f"tone_amplitude must have the same length as tone_freqs "
+                f"({len(tone_freqs)}); got len(tone_amplitude)={len(tone_amplitude)}"
+            )
 
         self.times          = times
         self.alt            = alt

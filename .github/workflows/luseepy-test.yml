@@ -28,5 +28,5 @@ jobs:
       - run: ls -l
       - run: pip install ".[dev]"
       - run: pytest tests/ -v
-      - run: cd simulation; ln -s ../Drive .; mkdir output; python driver/run_sim.py config/example.yaml; ls -l output
+      - run: cd simulation; ln -s ../Drive .; mkdir -p output; python driver/run_sim.py config/example.yaml; ls -l output
       - run: python tests/SimReadTest.py simulation/output/sim_example.fits
