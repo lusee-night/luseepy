@@ -20,6 +20,7 @@ jobs:
     container: continuumio/miniconda3
     steps:
       - uses: actions/checkout@v4
+      - run: conda install -y -q python=3.12
       - run: ls -l
       - run: apt-get update && apt-get install -y gfortran build-essential pkg-config cmake libopenblas-dev libfftw3-dev
       - run: pip install .
