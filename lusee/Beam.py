@@ -519,7 +519,56 @@ class Beam:
 
         return self
 
-    
+    def get_Efield_interpolator(self):
+        """
+        Return a pair of callables that interpolate the E-field components over the sky
+        and frequency, pre-scaled by ``sqrt(gain_conv)``.
+
+        Each callable accepts ``(alt, az, freq)`` in radians / MHz (scalars or
+        broadcastable arrays) and returns the complex interpolated field at each
+        ``(alt, az, freq)`` triplet.
+
+        The coordinate mapping is: ``theta = pi/2 - alt``, ``phi = az mod 2*pi``.
+
+        :returns: ``(interp_Etheta, interp_Ephi)``, each with signature
+            ``f(alt, az, freq) -> complex scalar or ndarray`` whose shape matches
+            the broadcast shape of the inputs.
+        :rtype: tuple(callable, callable)
+        """
+        from scipy.interpolate import RegularGridInterpolator
+
+        scale = np.sqrt(self.gain_conv)[:, None, None]          # (Nfreq, 1, 1)
+        Et = (self.Etheta * scale).transpose(1, 2, 0)           # (Ntheta, Nphi, Nfreq)
+        Ep = (self.Ephi   * scale).transpose(1, 2, 0)
+
+        interp_Et = RegularGridInterpolator(
+            (self.theta, self.phi, self.freq), Et,
+            method='linear', bounds_error=False, fill_value=None,
+        )
+        interp_Ep = RegularGridInterpolator(
+            (self.theta, self.phi, self.freq), Ep,
+            method='linear', bounds_error=False, fill_value=None,
+        )
+
+        def _wrapper(interp):
+            def call(alt, az, freq):
+                alt  = np.asarray(alt)
+                az   = np.asarray(az)
+                freq = np.asarray(freq)
+                scalar = alt.ndim == 0 and az.ndim == 0 and freq.ndim == 0
+                shape = np.broadcast_shapes(alt.shape, az.shape, freq.shape)
+                theta = (np.pi / 2 - np.broadcast_to(alt,  shape)).ravel()
+                phi   = (np.broadcast_to(az,   shape).ravel()) % (2 * np.pi)
+                f     = np.broadcast_to(freq, shape).ravel()
+                out   = interp(np.stack([theta, phi, f], axis=-1))  # (N,)
+                if scalar:
+                    return complex(out[0])
+                return out.reshape(shape)
+            return call
+
+        return _wrapper(interp_Et), _wrapper(interp_Ep)
+
+
     def plotE(self, freqndx, toplot = None, noabs=False):
         """
         Function that plots 1D cuts of the E-field as a function of theta and phi

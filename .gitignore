@@ -1,5 +1,6 @@
 **/*.*
 !lusee/*.py
+!tests/*.py
 !notebooks/*.ipynb
 !**.md 
 !**.yaml
