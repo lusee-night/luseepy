@@ -1,8 +1,8 @@
 paths:
-  lusee_drive_dir: $LUSEE_DRIVE_DIR
+  lusee_drive_dir: ${oc.env:LUSEE_DRIVE_DIR}
   sky_dir: Simulations/SkyModels
   beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
-  output_dir: $LUSEE_OUTPUT_DIR
+  output_dir: ${oc.env:LUSEE_OUTPUT_DIR}
     
 sky:
   file: ULSA_32_ddi_smooth.fits
@@ -42,6 +42,8 @@ observation:
     step: 1
 
 simulation:
-  engine: Croissant     # "Default" or "Croissant"
+  engine: Croissant     # backwards-compat fallback; prefer top-level engine
   # output defaults to sim_{engine}_output.fits (this is specified in the driver/run_Cro_sim.py file)
   cache_transform: lunar_day.pickle  
+
+engine: croissant

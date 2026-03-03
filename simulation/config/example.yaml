@@ -1,8 +1,8 @@
 paths:
-  lusee_drive_dir: $LUSEE_DRIVE_DIR
+  lusee_drive_dir: ${oc.env:LUSEE_DRIVE_DIR}
   sky_dir: Simulations/SkyModels
   beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
-  output_dir: $LUSEE_OUTPUT_DIR
+  output_dir: ${oc.env:LUSEE_OUTPUT_DIR}
     
 sky:
   file: ULSA_32_ddi_smooth.fits
@@ -47,3 +47,5 @@ simulation:
   engine: default
   output: sim_example.fits
   cache_transform: lunar_day.pickle  
+
+engine: luseepy
