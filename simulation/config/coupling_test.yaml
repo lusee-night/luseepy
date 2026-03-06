@@ -1,5 +1,5 @@
 paths:
-  lusee_drive_dir: $LUSEE_DRIVE_DIR
+  lusee_drive_dir: ${oc.env:LUSEE_DRIVE_DIR}
   sky_dir: Simulations/SkyModels
   beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
 
@@ -45,6 +45,8 @@ observation:
 
 simulation:
   output: output/coupling_test.fits
+
+engine: luseepy
   
 
   
