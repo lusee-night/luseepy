@@ -20,6 +20,7 @@ except (ModuleNotFoundError, ImportError) as e:
 
 from .SkyModels     import FitsSky
 from .SkyModels     import GalCenter
+from .SkyModels     import HarmonicPointSourceSky
 
 from . import SkyModels     as sky
 

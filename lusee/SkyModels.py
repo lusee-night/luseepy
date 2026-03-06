@@ -214,3 +214,72 @@ class SingleSourceHealpixSky (HealpixSky):
         map[pix] = 1.0
         map  = [map for _ in freq]
         super().__init__(Nside, 3*Nside-1, map, freq=freq, frame="equatorial")
+
+
+class HarmonicPointSourceSky:
+    """Point source computed directly in harmonic space — no pixelization or Gibbs ringing.
+
+    Sets a_lm = Y*_lm(θ, φ) for a delta function at the given sky position.
+    Supports equatorial (ra, dec) or galactic (l, b) coordinates.
+
+    Example::
+
+        sky = HarmonicPointSourceSky(lmax=64, ra_deg=45.0, dec_deg=10.0, freq=[10.0])
+        alms = sky.get_alm([0], freq=np.array([10.0]))
+
+    :param lmax: Maximum spherical harmonic degree.
+    :param freq: Frequency list (the source spectrum is flat; scale via *T*).
+    :param T: Source amplitude, scalar or array per frequency.
+    :param ra_deg: Right ascension (equatorial). Provide *ra_deg*/*dec_deg* or *l_deg*/*b_deg*.
+    :param dec_deg: Declination (equatorial).
+    :param l_deg: Galactic longitude.
+    :param b_deg: Galactic latitude.
+    :param frame: Coordinate frame — inferred from which arguments are given.
+    """
+
+    def __init__(self, lmax, freq, T=1.0, *,
+                 ra_deg=None, dec_deg=None, l_deg=None, b_deg=None):
+        self.lmax = lmax
+        self.freq = np.atleast_1d(freq)
+        T = np.atleast_1d(np.asarray(T, dtype=float))
+        if T.size == 1:
+            T = np.broadcast_to(T, len(self.freq))
+
+        # Determine frame and convert to (theta, phi) in healpy convention
+        has_eq = ra_deg is not None and dec_deg is not None
+        has_gal = l_deg is not None and b_deg is not None
+        if has_eq == has_gal:
+            raise ValueError("provide either (ra_deg, dec_deg) or (l_deg, b_deg), not both")
+
+        if has_eq:
+            self.frame = "equatorial"
+            theta = np.pi / 2 - np.radians(dec_deg)
+            phi = np.radians(ra_deg) % (2 * np.pi)
+        else:
+            self.frame = "galactic"
+            theta = np.pi / 2 - np.radians(b_deg)
+            phi = np.radians(l_deg) % (2 * np.pi)
+
+        # Build healpy-format alm: a_lm = Y*_lm(θ, φ)
+        from scipy.special import sph_harm_y
+        nalm = hp.Alm.getsize(lmax)
+        alm = np.zeros(nalm, dtype=complex)
+        for l in range(lmax + 1):
+            for m in range(l + 1):
+                idx = hp.Alm.getidx(lmax, l, m)
+                alm[idx] = np.conj(sph_harm_y(l, m, theta, phi))
+
+        self._alm = alm
+        self._T = T
+
+    def get_alm(self, ndx, freq=None):
+        """Return alm arrays for the requested frequency indices.
+
+        :param ndx: Frequency index or list of indices.
+        :param freq: Frequency array (checked against self.freq if provided).
+        :returns: List of healpy-format alm arrays.
+        """
+        ndx = np.atleast_1d(ndx)
+        if freq is not None:
+            assert np.all(self.freq[ndx] == np.atleast_1d(freq))
+        return [self._alm * self._T[i] for i in ndx]
