@@ -3,7 +3,7 @@ from functools import partial
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
-from .SimulatorBase import SimulatorBase, rot2eul
+from .SimulatorBase import SimulatorBase, rot2eul, get_topo_z_rotation_angles
 import numpy as np
 import healpy as hp
 import fitsio
@@ -241,9 +241,11 @@ class CroSimulator(SimulatorBase):
             healpy_packed_alm_to_croissant_2d(s_, self.lmax) for s_ in sky_gal
         ])
         sky_mcmf = jax.vmap(gal2mcmf)(jnp.array(sky_2d))
-        phases = crojax.simulator.rot_alm_z(
-            self.lmax, N_times=ntimes, delta_t=delta_t, world="moon"
-        )
+        # Use observation-derived phi(t) so libration is included (fixes Step 2 mismatch).
+        # Build phases here so we don't depend on croissant.rot_alm_z(phi=) in all installs.
+        phi_rad = get_topo_z_rotation_angles(self.obs, times)
+        emms = np.arange(-self.lmax, self.lmax + 1)
+        phases = jnp.asarray(np.exp(-1j * emms[None, :] * phi_rad[:, None]), dtype=jnp.complex128)
         norm_factor = 4.0 * np.pi
         combo_results = []
         for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:

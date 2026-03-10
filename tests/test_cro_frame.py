@@ -112,7 +112,7 @@ def test_cro_single_source():
         combinations=[(0, 0)],
         freq=freq,
         lmax=lmax,
-        extra_opts={"plot_sky_and_beam": True, "use_observer_frame": True},
+        extra_opts={"plot_sky_and_beam": True, "use_observer_frame": False},
     )
     cro_sim.simulate(times=times)
     cro_sim.write_fits(out_cro)

@@ -30,6 +30,33 @@ def mean_alm(alm1, alm2, lmax):
     sm = (np.real(prod[:lmax+1]).sum()+2*np.real(prod[lmax+1:]).sum())/(4*np.pi)
     return sm
 
+def get_R_gal_to_topo(lz, bz, ly, by):
+    """
+    Build 3x3 rotation matrix R such that v_topo = R @ v_gal.
+    Same construction as DefaultSimulator (zenith zhat, north yhat from (l,b)).
+    """
+    zhat = np.array([np.cos(bz) * np.cos(lz), np.cos(bz) * np.sin(lz), np.sin(bz)])
+    yhat = np.array([np.cos(by) * np.cos(ly), np.cos(by) * np.sin(ly), np.sin(by)])
+    xhat = np.cross(yhat, zhat)
+    return np.array([xhat, yhat, zhat]).T
+
+
+def get_topo_z_rotation_angles(obs, times):
+    """
+    Return z-rotation angles phi[i] (radians) of topo frame at times[i] relative to times[0].
+    phi[0] = 0. Uses (l,b)(t) from observation so libration is included.
+    """
+    lzl, bzl = obs.get_l_b_from_alt_az(np.pi / 2, 0.0, times)
+    lyl, byl = obs.get_l_b_from_alt_az(0.0, 0.0, times)
+    R0 = get_R_gal_to_topo(lzl[0], bzl[0], lyl[0], byl[0])
+    phis = np.zeros(len(times))
+    for i in range(len(times)):
+        Ri = get_R_gal_to_topo(lzl[i], bzl[i], lyl[i], byl[i])
+        R_topo0_to_topo_i = Ri @ R0.T
+        phis[i] = np.arctan2(R_topo0_to_topo_i[1, 0], R_topo0_to_topo_i[0, 0])
+    return phis
+
+
 def rot2eul(R):
     """
     Function that converts from rotation matrix to Euler angles
