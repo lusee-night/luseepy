@@ -104,6 +104,13 @@ class DefaultSimulator(SimulatorBase):
                 a,b,g = rot2eul(R)
                 rot = hp.rotator.Rotator(rot=(g,-b,a),deg=False,eulertype='XYZ',inv=False)
                 sky = [rot.rotate_alm(s_) for s_ in sky]
+            if ti == 0 and self.extra_opts.get("plot_sky_and_beam"):
+                nside = getattr(self.sky_model, "Nside", 64)
+                beamreal0 = self.efbeams[0][2]
+                self._plot_sky_beam_healpix(
+                    sky[0], beamreal0[0], nside, self.lmax,
+                    outpath="sky_beam_healpix_default.png", title_prefix="Default ",
+                )
             res = []
             for ci,cj,beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
                 T = np.array([mean_alm(br_,sky_,self.lmax) for br_,sky_ in zip(beamreal,sky)])

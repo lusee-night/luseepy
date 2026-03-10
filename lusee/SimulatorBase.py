@@ -140,7 +140,29 @@ class SimulatorBase:
 
         raise NotImplementedError("simulate() not implemented in base class")
 
-            
+    def _plot_sky_beam_healpix(self, sky_alm, beam_alm, nside, lmax, outpath="sky_beam_healpix.png", title_prefix=""):
+        """
+        Plot sky and beam as healpix mollweide maps (for visual check before convolution).
+        Call when extra_opts["plot_sky_and_beam"] is True.
+        :param sky_alm: Healpy packed alm (1D complex) for sky at one frequency
+        :param beam_alm: Healpy packed alm (1D complex) for beam at one frequency
+        :param nside: Healpix Nside for the map
+        :param lmax: Maximum l for alm2map
+        :param outpath: Output PNG path
+        :param title_prefix: Optional prefix for plot title (e.g. simulator name)
+        """
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        sky_map = hp.alm2map(np.asarray(sky_alm), nside, lmax=lmax)
+        beam_map = hp.alm2map(np.asarray(beam_alm), nside, lmax=lmax)
+        plt.figure(figsize=(12, 5))
+        hp.mollview(sky_map, title=(title_prefix + " Sky").strip(), sub=(1, 2, 1))
+        hp.mollview(beam_map, title=(title_prefix + " Beam").strip(), sub=(1, 2, 2))
+        plt.savefig(outpath, dpi=120, bbox_inches="tight")
+        plt.close()
+        print(f"  plot_sky_and_beam: saved {outpath}")
+
     def write_fits(self, out_file):
         """
         Function that writes out instrument beam patterns from self.beams to fits file

@@ -9,3 +9,4 @@
 !.github/* 
 !docker/*
 !simulation/driver/*.py
+!setup_env.sh

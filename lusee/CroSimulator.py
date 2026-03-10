@@ -3,7 +3,7 @@ from functools import partial
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
-from .SimulatorBase import SimulatorBase
+from .SimulatorBase import SimulatorBase, rot2eul
 import numpy as np
 import healpy as hp
 import fitsio
@@ -62,6 +62,15 @@ class CroSimulator(SimulatorBase):
       crojax.simulator.rot_alm_z (moon sidereal rotation).
     - Croissant handles single polarization / single dipole per beam; each
       combination is convolved separately to match DefaultSimulator output shape.
+    - If extra_opts["use_observer_frame"] is True (default), sky is rotated to observer at each
+      time with the same healpy Rotator as DefaultSimulator and beam is used in topo (observer);
+      then convolve is called per (time, frequency). This keeps sky and beam in the same frame
+      as Default and avoids last-frequency-bin differences from MCMF/phase conventions.
+    - If use_observer_frame is False, the MCMF path is used: beam is transformed topo0→MCMF;
+      at each time the sky is rotated to observer (same healpy rotation as Default), then
+      observer→MCMF via s2fft, and convolve(beam_mcmf, sky_mcmf_ti) with no phase. This
+      matches Default without using rot_alm_z (avoids phase convention mismatch).
+    - Output layout is (N_times, N_combos, N_freq).
 
     :param obs: Observation (time range, deltaT_sec, lun_lat_deg, lun_long_deg)
     :param beams: Instrument beams [luseepy.beam class]
@@ -71,7 +80,7 @@ class CroSimulator(SimulatorBase):
     :param Tground: Ground temperature [K]
     :param freq: Frequencies in MHz (from config / obs)
     :param cross_power: BeamCouplings for cross terms [luseepy.BeamCouplings class]
-    :param extra_opts: e.g. cache_transform, dump_beams
+    :param extra_opts: optional dict, e.g. cache_transform, dump_beams (see DefaultSimulator)
     """
 
     def __init__ (self, obs, beams, sky_model, Tground = 200.0,
@@ -104,33 +113,116 @@ class CroSimulator(SimulatorBase):
             raise NotImplementedError(
                 f"CroSimulator requires galactic sky frame, got {self.sky_model.frame}"
             )
-        self.result = self._simulate_croissant_mcmf(times, ntimes, delta_t)
+        if self.extra_opts.get("use_observer_frame", True):
+            self.result = self._simulate_observer_frame(times, ntimes)
+        else:
+            self.result = self._simulate_croissant_mcmf(times, ntimes, delta_t)
         return self.result
 
+    def _simulate_observer_frame(self, times, ntimes):
+        """Use same frame as DefaultSimulator: sky rotated to observer at each time, beam in topo.
+        Convolve per (time, frequency) so sky and beam are in the same frame before convolution."""
+        cache_fn = self.extra_opts.get("cache_transform")
+        if cache_fn and os.path.isfile(cache_fn):
+            lzl, bzl, lyl, byl = pickle.load(open(cache_fn, "br"))
+            if len(lzl) != ntimes:
+                raise RuntimeError("Cache file mix-up. Array wrong length!")
+        else:
+            lzl, bzl = self.obs.get_l_b_from_alt_az(np.pi / 2, 0.0, times)
+            lyl, byl = self.obs.get_l_b_from_alt_az(0.0, 0.0, times)
+            if cache_fn:
+                pickle.dump((lzl, bzl, lyl, byl), open(cache_fn, "bw"))
+
+        sky_gal = self.sky_model.get_alm(self.freq_ndx_sky, self.freq)
+        # Single-time no-rotation phases for croissant convolve
+        phases_ones = jnp.ones((1, 2 * self.lmax + 1), dtype=jnp.complex128)
+        norm_factor = 4.0 * np.pi
+        combo_results = []
+        plot_done = False
+        for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
+            beam_2d = np.stack([
+                healpy_packed_alm_to_croissant_2d(br_, self.lmax) for br_ in beamreal
+            ])
+            beam_alm_jax = jnp.array(beam_2d)
+            T = np.zeros((ntimes, self.Nfreq), dtype=np.float64)
+            for ti in range(ntimes):
+                lz, bz, ly, by = lzl[ti], bzl[ti], lyl[ti], byl[ti]
+                zhat = np.array([np.cos(bz) * np.cos(lz), np.cos(bz) * np.sin(lz), np.sin(bz)])
+                yhat = np.array([np.cos(by) * np.cos(ly), np.cos(by) * np.sin(ly), np.sin(by)])
+                xhat = np.cross(yhat, zhat)
+                R = np.array([xhat, yhat, zhat]).T
+                a, b, g = rot2eul(R)
+                rot = hp.rotator.Rotator(rot=(g, -b, a), deg=False, eulertype="XYZ", inv=False)
+                sky_ti = [rot.rotate_alm(s_) for s_ in sky_gal]
+                if ti == 0 and self.extra_opts.get("plot_sky_and_beam") and not plot_done:
+                    nside = getattr(self.sky_model, "Nside", 64)
+                    self._plot_sky_beam_healpix(
+                        sky_ti[0], beamreal[0], nside, self.lmax,
+                        outpath="sky_beam_healpix_cro.png", title_prefix="Cro ",
+                    )
+                    plot_done = True
+                sky_2d_ti = np.stack([
+                    healpy_packed_alm_to_croissant_2d(s_, self.lmax) for s_ in sky_ti
+                ])
+                sky_alm_ti = jnp.array(sky_2d_ti)
+                for fi in range(self.Nfreq):
+                    vis = crojax.simulator.convolve(
+                        beam_alm_jax[fi : fi + 1],
+                        sky_alm_ti[fi : fi + 1],
+                        phases_ones,
+                    )
+                    v = np.asarray(vis.real).reshape(-1)[0]
+                    T[ti, fi] = v / norm_factor + self.Tground * groundPowerReal[fi]
+            combo_results.append((T, None))
+            if ci != cj:
+                beamimag_2d = np.stack([
+                    healpy_packed_alm_to_croissant_2d(bi_, self.lmax) for bi_ in beamimag
+                ])
+                beamimag_jax = jnp.array(beamimag_2d)
+                Timag = np.zeros((ntimes, self.Nfreq), dtype=np.float64)
+                for ti in range(ntimes):
+                    lz, bz, ly, by = lzl[ti], bzl[ti], lyl[ti], byl[ti]
+                    zhat = np.array([np.cos(bz) * np.cos(lz), np.cos(bz) * np.sin(lz), np.sin(bz)])
+                    yhat = np.array([np.cos(by) * np.cos(ly), np.cos(by) * np.sin(ly), np.sin(by)])
+                    xhat = np.cross(yhat, zhat)
+                    R = np.array([xhat, yhat, zhat]).T
+                    a, b, g = rot2eul(R)
+                    rot = hp.rotator.Rotator(rot=(g, -b, a), deg=False, eulertype="XYZ", inv=False)
+                    sky_ti = [rot.rotate_alm(s_) for s_ in sky_gal]
+                    sky_2d_ti = np.stack([
+                        healpy_packed_alm_to_croissant_2d(s_, self.lmax) for s_ in sky_ti
+                    ])
+                    sky_alm_ti = jnp.array(sky_2d_ti)
+                    for fi in range(self.Nfreq):
+                        vis_imag = crojax.simulator.convolve(
+                            beamimag_jax[fi : fi + 1],
+                            sky_alm_ti[fi : fi + 1],
+                            phases_ones,
+                        )
+                        vi = np.asarray(vis_imag.real).reshape(-1)[0]
+                        Timag[ti, fi] = vi / norm_factor + self.Tground * groundPowerImag[fi]
+                combo_results[-1] = (T, Timag)
+        wfall = []
+        for ti in range(ntimes):
+            res = []
+            for T, Timag in combo_results:
+                res.append(T[ti])
+                if Timag is not None:
+                    res.append(Timag[ti])
+            wfall.append(res)
+        return np.array(wfall)
+
     def _simulate_croissant_mcmf(self, times, ntimes, delta_t):
-        """Croissant pipeline: location/topo from obs class, MCMF frame, rot_alm_z, convolve."""
-
-
-        # Location and topo from observation class
+        """Simple MCMF pipeline: sky gal→MCMF once, beam topo→MCMF once, rot_alm_z phases for time
+        evolution, then convolve. Does not match Default (phase/frame conventions differ); use
+        use_observer_frame=True to match Default."""
         topo = LunarTopo(obstime=times[0], location=self.obs.loc)
         sim_L = self.lmax + 1
-        # Phases for moon sidereal rotation for all times at once (use N_times, delta_t so JAX gets numeric types)
-        phases = crojax.simulator.rot_alm_z(
-            self.lmax, N_times=ntimes, delta_t=delta_t, world="moon"
-        )
-
-        # Galactic -> MCMF and Topo -> MCMF transforms
         eul_topo, dl_topo = crojax.rotations.generate_euler_dl(
             self.lmax, topo, "mcmf"
         )
         eul_gal, dl_gal = crojax.rotations.generate_euler_dl(
             self.lmax, "galactic", "mcmf"
-        )
-        topo2mcmf = partial(
-            s2fft.utils.rotation.rotate_flms,
-            L=sim_L,
-            rotation=eul_topo,
-            dl_array=dl_topo,
         )
         gal2mcmf = partial(
             s2fft.utils.rotation.rotate_flms,
@@ -138,40 +230,37 @@ class CroSimulator(SimulatorBase):
             rotation=eul_gal,
             dl_array=dl_gal,
         )
-
-        # Sky: get alm (galactic), convert to 2D, transform to MCMF
-        sky = self.sky_model.get_alm(self.freq_ndx_sky, self.freq)
+        topo2mcmf = partial(
+            s2fft.utils.rotation.rotate_flms,
+            L=sim_L,
+            rotation=eul_topo,
+            dl_array=dl_topo,
+        )
+        sky_gal = self.sky_model.get_alm(self.freq_ndx_sky, self.freq)
         sky_2d = np.stack([
-            healpy_packed_alm_to_croissant_2d(s_, self.lmax) for s_ in sky
+            healpy_packed_alm_to_croissant_2d(s_, self.lmax) for s_ in sky_gal
         ])
-        sky_alm_jax = jnp.array(sky_2d)
-        sky_alm_mcmf = jax.vmap(gal2mcmf)(sky_alm_jax)
-
-        # Per combination: beam to MCMF, convolve(beam_mcmf, sky_mcmf, phases), normalize by 4pi, ground
-        # Normalization 4*pi matches DefaultSimulator (mean_alm divides by 4*pi).
-        # Collect (ntimes, N_freq) per combo then build (N_times, N_outputs, N_freq)
+        sky_mcmf = jax.vmap(gal2mcmf)(jnp.array(sky_2d))
+        phases = crojax.simulator.rot_alm_z(
+            self.lmax, N_times=ntimes, delta_t=delta_t, world="moon"
+        )
         norm_factor = 4.0 * np.pi
         combo_results = []
         for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
             beam_2d = np.stack([
                 healpy_packed_alm_to_croissant_2d(br_, self.lmax) for br_ in beamreal
             ])
-            beam_alm_jax = jnp.array(beam_2d)
-            beam_alm_mcmf = jax.vmap(topo2mcmf)(beam_alm_jax)
-            vis = crojax.simulator.convolve(
-                beam_alm_mcmf, sky_alm_mcmf, phases
-            )
-            T = np.asarray(vis.real / norm_factor) + self.Tground * groundPowerReal
+            beam_mcmf = jax.vmap(topo2mcmf)(jnp.array(beam_2d))
+            vis = crojax.simulator.convolve(beam_mcmf, sky_mcmf, phases)
+            T = np.asarray(vis.real) / norm_factor + self.Tground * groundPowerReal
             combo_results.append((T, None))
             if ci != cj:
                 beamimag_2d = np.stack([
                     healpy_packed_alm_to_croissant_2d(bi_, self.lmax) for bi_ in beamimag
                 ])
                 beamimag_mcmf = jax.vmap(topo2mcmf)(jnp.array(beamimag_2d))
-                vis_imag = crojax.simulator.convolve(
-                    beamimag_mcmf, sky_alm_mcmf, phases
-                )
-                Timag = np.asarray(vis_imag.real / norm_factor) + self.Tground * groundPowerImag
+                vis_imag = crojax.simulator.convolve(beamimag_mcmf, sky_mcmf, phases)
+                Timag = np.asarray(vis_imag.real) / norm_factor + self.Tground * groundPowerImag
                 combo_results[-1] = (T, Timag)
         wfall = []
         for ti in range(ntimes):
