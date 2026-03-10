@@ -15,7 +15,6 @@ import croissant as cro
 import croissant.jax as crojax
 import jax
 from lunarsky import LunarTopo
-
 import s2fft
 
 """
@@ -241,7 +240,7 @@ class CroSimulator(SimulatorBase):
             healpy_packed_alm_to_croissant_2d(s_, self.lmax) for s_ in sky_gal
         ])
         sky_mcmf = jax.vmap(gal2mcmf)(jnp.array(sky_2d))
-        # Use observation-derived phi(t) so libration is included (fixes Step 2 mismatch).
+        # Use observation-derived phi(t) so libration is included.
         # Build phases here so we don't depend on croissant.rot_alm_z(phi=) in all installs.
         phi_rad = get_topo_z_rotation_angles(self.obs, times)
         emms = np.arange(-self.lmax, self.lmax + 1)
