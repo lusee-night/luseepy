@@ -181,8 +181,8 @@ class SimulatorBase:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        sky_map = hp.alm2map(np.asarray(sky_alm), nside, lmax=lmax)
-        beam_map = hp.alm2map(np.asarray(beam_alm), nside, lmax=lmax)
+        sky_map = hp.alm2map(np.asarray(sky_alm, dtype=np.complex128), nside, lmax=lmax)
+        beam_map = hp.alm2map(np.asarray(beam_alm, dtype=np.complex128), nside, lmax=lmax)
         plt.figure(figsize=(12, 5))
         hp.mollview(sky_map, title=(title_prefix + " Sky").strip(), sub=(1, 2, 1))
         hp.mollview(beam_map, title=(title_prefix + " Beam").strip(), sub=(1, 2, 2))

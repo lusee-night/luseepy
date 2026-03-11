@@ -46,18 +46,6 @@ def healpy_packed_alm_to_croissant_2d(packed_alm, lmax):
     return out
 
 
-def _croissant_2d_to_healpy_packed(alm_2d, lmax):
-    """Convert croissant 2D alm (lmax+1, 2*lmax+1) to healpy packed (m>=0 only)."""
-    alm_2d = np.asarray(alm_2d)
-    packed = np.zeros(hp.sphtfunc.Alm.getsize(lmax), dtype=np.complex128)
-    for ell in range(lmax + 1):
-        for m in range(0, ell + 1):
-            idx = hp.sphtfunc.Alm.getidx(lmax, ell, m)
-            packed[idx] = alm_2d[ell, lmax + m]
-    return packed
-
-
-
 
 class CroSimulator(SimulatorBase):
     """
@@ -161,8 +149,8 @@ class CroSimulator(SimulatorBase):
             beam_mcmf = jax.vmap(topo2mcmf)(jnp.array(beam_2d))
             if self.extra_opts.get("plot_sky_and_beam") and not plot_done:
                 nside = getattr(self.sky_model, "Nside", 64)
-                sky_packed = _croissant_2d_to_healpy_packed(np.asarray(sky_mcmf[25]), self.lmax)
-                beam_packed = _croissant_2d_to_healpy_packed(np.asarray(beam_mcmf[25]), self.lmax)
+                sky_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(sky_mcmf[25]), self.lmax+1)
+                beam_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(beam_mcmf[25]), self.lmax+1)
                 self._plot_sky_beam_healpix(
                     sky_packed, beam_packed, nside, self.lmax,
                     outpath="sky_beam_healpix_cro.png", title_prefix=f"Crossaint at {self.freq[25]} MHz ",
