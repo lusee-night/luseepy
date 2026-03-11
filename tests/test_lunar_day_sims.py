@@ -117,7 +117,7 @@ def test_lunar_day_28_single_source():
     times = obs.times
     nside = 32
     lmax = 32
-    sigma_deg = 10.0
+    sigma_deg = 70.0
     Tground = 0.0
     freq = np.arange(1, 51, 1, dtype=float)
 
