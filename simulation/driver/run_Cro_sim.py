@@ -130,7 +130,7 @@ class SimDriver(dict):
                 for i in range(self.Nbeams):
                     for j in range(i, self.Nbeams):
                         combs.append((i, j))
-
+        print(f"{len(combs)} Combinations: ", combs)
         engine = self["simulation"].get("engine")
         engine = str(engine).strip().lower()
         if engine == "croissant":
