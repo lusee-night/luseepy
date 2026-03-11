@@ -149,7 +149,7 @@ class SimDriver(dict):
                 freq=self.freq,
                 lmax=self.lmax,
                 cross_power=self.couplings,
-                extra_opts={**self["simulation"], "plot_sky_and_beam": True, "use_observer_frame": self["simulation"].get("use_observer_frame", True)},
+                extra_opts={**self["simulation"], "plot_sky_and_beam": True},
             )
         elif engine == "default":
             print("  setting up Default Simulation object...")
@@ -162,7 +162,7 @@ class SimDriver(dict):
                 freq=self.freq,
                 lmax=self.lmax,
                 cross_power=self.couplings,
-                extra_opts={**self["simulation"], "use_observer_frame": self["simulation"].get("use_observer_frame", True)},
+                extra_opts={**self["simulation"]},
             )
         else:
             raise ValueError(f"simulation.engine must be 'Default' or 'Croissant', got: {engine}")

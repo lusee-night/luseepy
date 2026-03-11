@@ -42,10 +42,7 @@ observation:
     step: 1
 
 simulation:
-  engine: Croissant     # backwards-compat fallback; prefer top-level engine
+  engine: croissant     # backwards-compat fallback; prefer top-level engine
   # output defaults to sim_{engine}_output.fits (this is specified in the driver/run_Cro_sim.py file)
   cache_transform: lunar_day.pickle  
   plot_sky_and_beam: True
-  use_observer_frame: True
-
-engine: croissant

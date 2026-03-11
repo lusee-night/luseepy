@@ -108,8 +108,8 @@ class DefaultSimulator(SimulatorBase):
                 nside = getattr(self.sky_model, "Nside", 64)
                 beamreal0 = self.efbeams[0][2]
                 self._plot_sky_beam_healpix(
-                    sky[0], beamreal0[0], nside, self.lmax,
-                    outpath="sky_beam_healpix_default.png", title_prefix="Default ",
+                    sky[25], beamreal0[25], nside, self.lmax,
+                    outpath="sky_beam_healpix_default.png", title_prefix=f"Default at {self.freq[25]} MHz ",
                 )
             res = []
             for ci,cj,beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:

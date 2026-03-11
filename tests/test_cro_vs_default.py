@@ -177,7 +177,7 @@ def run_comparison(config_path=None):
         Tground=setup["Tground"], combinations=setup["combinations"],
         freq=setup["freq"], lmax=setup["lmax"],
         cross_power=setup["cross_power"],
-        extra_opts={**setup.get("extra_opts", {}), "use_observer_frame": True},
+        extra_opts=setup.get("extra_opts", {}),
     )
     cro_sim.simulate()
     out_cro = cro_sim.result
@@ -279,7 +279,7 @@ def run_comparison(config_path=None):
     print("  Step 4: Sky rotated — Default observer vs Cro MCMF (may differ by frame convention).")
     print("  Step 5: Raw convolution — should match if same beam/sky in same frame.")
     print("  Step 6: Normalization — both use 4*pi.")
-    print("  Step 7: Full result — with use_observer_frame=True, Cro matches Default.")
+    print("  Step 7: Full result — Default (observer frame) vs Cro (MCMF) may differ by frame/phase.")
 
 
 if __name__ == "__main__":

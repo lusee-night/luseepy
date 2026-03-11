@@ -190,6 +190,22 @@ class SimulatorBase:
         plt.close()
         print(f"  plot_sky_and_beam: saved {outpath}")
 
+    def _plot_sky_beam_maps(self, sky_map, beam_map, outpath="sky_beam_healpix.png", title_prefix=""):
+        """
+        Plot sky and beam as healpix mollweide maps (precomputed maps, e.g. from s2fft.inverse).
+        """
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        sky_map = np.asarray(sky_map).real
+        beam_map = np.asarray(beam_map).real
+        plt.figure(figsize=(12, 5))
+        hp.mollview(sky_map, title=(title_prefix + " Sky").strip(), sub=(1, 2, 1))
+        hp.mollview(beam_map, title=(title_prefix + " Beam").strip(), sub=(1, 2, 2))
+        plt.savefig(outpath, dpi=120, bbox_inches="tight")
+        plt.close()
+        print(f"  plot_sky_and_beam: saved {outpath}")
+
     def write_fits(self, out_file):
         """
         Function that writes out instrument beam patterns from self.beams to fits file

@@ -213,7 +213,7 @@ def test_lunar_day_28_single_source():
         combinations=[(0, 0)],
         freq=freq,
         lmax=lmax,
-        extra_opts={"use_observer_frame": False},
+        extra_opts={},
     )
     cro_sim.simulate(times=times)
 
