@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import healpy as hp
 from pathlib import Path
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord, GeocentricMeanEcliptic
 from astropy import units as u
 
 
@@ -30,28 +30,18 @@ def _ra_dec_to_galactic_rad(ra_deg, dec_deg):
 
 
 
-# Mean obliquity of the ecliptic (J2000.0), radians. Defines the inertial ecliptic plane
-# (same plane for any observer; not tied to Earth or Moon).
-_OBLIQUITY_DEG = 23.4392811
-
-
 def _ecliptic_lon_lat_to_ra_dec_deg(lon_deg, lat_deg):
-    """Convert ecliptic (lon, lat) to equatorial (ra, dec) in degrees. Lat=0 is the ecliptic plane.
-    Uses the inertial ecliptic plane and mean obliquity (J2000); valid for any observer (Earth or Moon)."""
-    lam = np.radians(lon_deg)
-    be = np.radians(lat_deg)
-    eps = np.radians(_OBLIQUITY_DEG)
-    # Ecliptic cartesian (x toward vernal equinox, z north ecliptic pole)
-    x_ecl = np.cos(be) * np.cos(lam)
-    y_ecl = np.cos(be) * np.sin(lam)
-    z_ecl = np.sin(be)
-    # Rotate by obliquity: equatorial x = ecliptic x, equatorial y,z from ecliptic y,z
-    x_eq = x_ecl
-    y_eq = y_ecl * np.cos(eps) - z_ecl * np.sin(eps)
-    z_eq = y_ecl * np.sin(eps) + z_ecl * np.cos(eps)
-    ra_rad = np.arctan2(y_eq, x_eq)
-    dec_rad = np.arcsin(np.clip(z_eq, -1, 1))
-    return np.degrees(ra_rad), np.degrees(dec_rad)
+    """Convert ecliptic (lon, lat) to equatorial (ra, dec) in degrees"""
+
+    c = SkyCoord(
+        lon=lon_deg*u.deg,
+        lat=lat_deg*u.deg,
+        frame=GeocentricMeanEcliptic
+    )
+
+    eq = c.icrs
+
+    return eq.ra.deg, eq.dec.deg
 
 
 def _galactic_dir(l_rad, b_rad):
@@ -64,7 +54,8 @@ def _galactic_dir(l_rad, b_rad):
 
 
 class GalacticSkyAdapter:
-    """Wraps equatorial HealpixSky and exposes galactic alms (eq->gal rotation)."""
+    """Wrap equatorial HealpixSky and expose galactic alms."""
+
     def __init__(self, equatorial_sky, lmax):
         self._sky = equatorial_sky
         self._lmax = lmax
@@ -72,16 +63,24 @@ class GalacticSkyAdapter:
         self.freq = equatorial_sky.freq
         self.Nside = equatorial_sky.Nside
         self._rot = hp.rotator.Rotator(coord=["C", "G"])
-        self._alm_size = hp.sphtfunc.Alm.getsize(lmax)
+        self._alm_size = hp.Alm.getsize(lmax)
 
     def get_alm(self, ndx, freq):
         alms = self._sky.get_alm(ndx, freq)
+
+        single = alms.ndim == 1
         alms = np.atleast_2d(alms)
+
         out = []
         for a in alms:
+            lmax_in = hp.Alm.getlmax(len(a))
+            if lmax_in != self._lmax:
+                raise ValueError("Input alm lmax mismatch")
+
             r = self._rot.rotate_alm(a)
-            out.append(r[: self._alm_size].copy())
-        return out
+            out.append(r.copy())
+
+        return out[0] if single else out
 
 
 
@@ -116,7 +115,7 @@ def test_lunar_day_28_single_source():
     )
     times = obs.times
     nside = 32
-    lmax = 32
+    lmax = 3*nside - 1
     sigma_deg = 70.0
     Tground = 0.0
     freq = np.arange(1, 51, 1, dtype=float)
@@ -149,7 +148,8 @@ def test_lunar_day_28_single_source():
         combinations=[(0, 0)],
         freq=freq,
         lmax=lmax,
-        extra_opts={"plot_sky_and_beam": True},
+        extra_opts={"plot_sky_and_beam": True, "plot_dir": "/Users/akshatha.vydula/lusee/luseepy/simulation/output/figures", 
+        "plot_filename": "sky_beam_healpix_default_single_pixel.png"},
     )
     def_sim.simulate(times=times)
 
@@ -160,7 +160,8 @@ def test_lunar_day_28_single_source():
         combinations= [(0, 0)],
         freq=freq,
         lmax=lmax,
-        extra_opts={"plot_sky_and_beam": True},
+        extra_opts={"plot_sky_and_beam": True, "plot_dir": "/Users/akshatha.vydula/lusee/luseepy/simulation/output/figures", 
+        "plot_filename": "sky_beam_healpix_cro_single_pixel.png"},
     )
     cro_sim.simulate(times=times)
 

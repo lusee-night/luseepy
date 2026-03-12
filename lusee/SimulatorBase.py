@@ -167,20 +167,25 @@ class SimulatorBase:
 
         raise NotImplementedError("simulate() not implemented in base class")
 
-    def _plot_sky_beam_healpix(self, sky_alm, beam_alm, nside, lmax, outpath="sky_beam_healpix.png", title_prefix=""):
+    def _plot_sky_beam_healpix(self, sky_alm, beam_alm, nside, lmax, save_dir="output/figures", save_filename="sky_beam_healpix.png", title_prefix=""):
         """
         Plot sky and beam as healpix mollweide maps (for visual check before convolution).
-        Call when extra_opts["plot_sky_and_beam"] is True.
+        Call when extra_opts["plot_sky_and_beam"] is True. When using DefaultSimulator or
+        CroSimulator, you can pass save_dir/save_filename via extra_opts["plot_dir"] and
+        extra_opts["plot_filename"].
         :param sky_alm: Healpy packed alm (1D complex) for sky at one frequency
         :param beam_alm: Healpy packed alm (1D complex) for beam at one frequency
         :param nside: Healpix Nside for the map
         :param lmax: Maximum l for alm2map
-        :param outpath: Output PNG path
+        :param save_dir: Directory to save the figure (default: output/figures)
+        :param save_filename: File name for the saved figure (default: sky_beam_healpix.png)
         :param title_prefix: Optional prefix for plot title (e.g. simulator name)
         """
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        outpath = os.path.join(save_dir, save_filename)
+        os.makedirs(save_dir, exist_ok=True)
         sky_map = hp.alm2map(np.asarray(sky_alm, dtype=np.complex128), nside, lmax=lmax)
         beam_map = hp.alm2map(np.asarray(beam_alm, dtype=np.complex128), nside, lmax=lmax)
         plt.figure(figsize=(12, 5))

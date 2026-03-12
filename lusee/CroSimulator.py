@@ -153,7 +153,9 @@ class CroSimulator(SimulatorBase):
                 beam_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(beam_mcmf[25]), self.lmax+1)
                 self._plot_sky_beam_healpix(
                     sky_packed, beam_packed, nside, self.lmax,
-                    outpath="sky_beam_healpix_cro.png", title_prefix=f"Crossaint at {self.freq[25]} MHz ",
+                    save_dir=self.extra_opts.get("plot_dir", "output/figures"),
+                    save_filename=self.extra_opts.get("plot_filename", "sky_beam_healpix_cro.png"),
+                    title_prefix=f"Crossaint at {self.freq[25]} MHz ",
                 )
                 plot_done = True
             vis = crojax.simulator.convolve(beam_mcmf, sky_mcmf, phases)
