@@ -1,5 +1,6 @@
 **/*.*
 !lusee/*.py
+!tests/*.py
 !notebooks/*.ipynb
 !**.md 
 !**.yaml
@@ -7,3 +8,5 @@
 !**.batch
 !.github/* 
 !docker/*
+!simulation/driver/*.py
+!setup_env.sh

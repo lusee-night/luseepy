@@ -19,7 +19,7 @@ for ofs,c in enumerate(["N","E","S","W"]):
 lmax    = 64
 freq    = [10,12,30]
 sky     = lusee.sky.ConstSky(Nside = 32, lmax = lmax, freq=freq, T=200)
-S       = lusee.Simulator (O,beams, sky, freq=freq, lmax = lmax, combinations=[(0,0),(1,1),(1,3)], Tground = 200. )
+S       = lusee.DefaultSimulator (O,beams, sky, freq=freq, lmax = lmax, combinations=[(0,0),(1,1),(1,3)], Tground = 200. )
 
 print ("Simulating")
 
@@ -36,7 +36,7 @@ beams   = [BG]
 lmax    = 64
 freq    =[1,5,10]
 sky     = lusee.sky.ConstSky(Nside = 32, lmax = lmax, freq=freq, T=200)
-S       = lusee.Simulator (O,beams, sky, freq=freq, lmax = lmax, combinations=[(0,0)],
+S       = lusee.DefaultSimulator (O,beams, sky, freq=freq, lmax = lmax, combinations=[(0,0)],
                      Tground = 0. )
 print ("Simulating")
 WF = S.simulate(times=O.times)

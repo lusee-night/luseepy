@@ -18,6 +18,7 @@ from    datetime        import datetime
 from    datetime        import timedelta
 
 from    .LunarCalendar  import LunarCalendar
+from    .CalibratorTrack import CalibratorTrack
 
 
 # ---
@@ -57,6 +58,7 @@ class Observation:
         lun_long_deg    =   default_lun_long_deg,
         lun_height_m    =   default_lun_height_m,
         deltaT_sec      =   15*60,
+        calibrator_tracks = None,
     ):
         self.time_range     = time_range
         self.lun_lat_deg    = lun_lat_deg  
@@ -101,6 +103,7 @@ class Observation:
 
         self.deltaT = TimeDelta(deltaT_sec * u.s) # NB units
         self.times  = np.arange(self.time_start, self.time_end + self.deltaT, self.deltaT).astype(Time)
+        self.calibrator_tracks = list(calibrator_tracks) if calibrator_tracks is not None else []
 
 
     # ---
@@ -156,7 +159,7 @@ class Observation:
         """
         if times is None:
             times = self.times
-        if type(ra) == float:
+        if type(ra) in [float, np.float32, np.float64]:
             c = SkyCoord(ra=ra, dec=dec, frame="icrs", unit="deg")
         elif type(ra) == str:
             c = SkyCoord(ra=ra, dec=dec, frame="icrs")

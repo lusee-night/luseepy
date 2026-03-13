@@ -70,6 +70,8 @@ observation:
 
 simulation:
   output: output/sim_ULSAgaussLBeam.fits
+
+engine: luseepy
   
   
  
