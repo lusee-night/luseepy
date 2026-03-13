@@ -159,7 +159,7 @@ class Observation:
         """
         if times is None:
             times = self.times
-        if type(ra) == float:
+        if type(ra) in [float, np.float32, np.float64]:
             c = SkyCoord(ra=ra, dec=dec, frame="icrs", unit="deg")
         elif type(ra) == str:
             c = SkyCoord(ra=ra, dec=dec, frame="icrs")

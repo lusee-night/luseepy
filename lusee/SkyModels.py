@@ -158,7 +158,7 @@ class HealpixSky:
         self.mapalm = np.array([hp.map2alm(m,lmax = lmax) for m in maps])
         self.frame  = frame
 
-    def get_alm (self, ndx, freq):
+    def get_alm (self, ndx, freq=None):
         """
         Function that calculates a_lm spherical harmonic decomposition for input FITS file sky map(s) at specified frequency indices. Uses healpy map2alm.
 
@@ -170,7 +170,9 @@ class HealpixSky:
         :returns: A_lm array
         :rtype: array
         """
-        assert (np.all(self.freq[ndx]==freq))
+        ndx = np.atleast_1d(ndx)
+        if freq is not None:
+            assert (np.all(self.freq[ndx]==freq))
         return self.mapalm[ndx]
 
 class FitsSky (HealpixSky):
@@ -206,15 +208,36 @@ class SingleSourceHealpixSky (HealpixSky):
     :param freq: List of frequencies at which to make sky maps.
     :type freq: list
     """
-    def __init__ (self,ra_deg, dec_deg, Nside=128, freq=[25.0]):
+    def __init__ (self, Nside=128, freq=[25.0], T=1.0, *,
+                 ra_deg=None, dec_deg=None, l_deg=None, b_deg=None):
         # convert ra, dec to galactic coordinates and then to pixel number
-        pix = hp.ang2pix(Nside, np.radians(90-dec_deg), np.radians(ra_deg))
+        self.freq = np.atleast_1d(freq)
+        T = np.atleast_1d(np.asarray(T, dtype=float))
+        if T.size == 1:
+            T = np.broadcast_to(T, len(self.freq))
+
+        # Determine frame and convert to (theta, phi) in healpy convention
+        has_eq = ra_deg is not None and dec_deg is not None
+        has_gal = l_deg is not None and b_deg is not None
+        if has_eq == has_gal:
+            raise ValueError("provide either (ra_deg, dec_deg) or (l_deg, b_deg), not both")
+
+        if has_eq:
+            self.frame = "equatorial"
+            theta = np.pi / 2 - np.radians(dec_deg)
+            phi = np.radians(ra_deg) % (2 * np.pi)
+        else:
+            self.frame = "galactic"
+            theta = np.pi / 2 - np.radians(b_deg)
+            phi = np.radians(l_deg) % (2 * np.pi)
+ 
+        pix = hp.ang2pix(Nside, theta, phi)
         Npix = Nside**2 * 12
         map = np.zeros(Npix)
         map[pix] = 1.0
-        map  = [map for _ in freq]
-        super().__init__(Nside, 3*Nside-1, map, freq=freq, frame="equatorial")
-
+        map  = [map*T_ for T_ in T]
+        super().__init__(Nside, 3*Nside-1, map, freq=freq, frame=self.frame)
+        
 
 class HarmonicPointSourceSky:
     """Point source computed directly in harmonic space — no pixelization or Gibbs ringing.
