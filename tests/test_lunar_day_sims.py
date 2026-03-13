@@ -68,7 +68,7 @@ def test_lunar_day_28_single_source():
     sky = lusee.sky.SingleSourceHealpixSky(l_deg=l_deg, b_deg=b_deg, Nside=nside, freq=freq)
 
     beam = lusee.BeamGauss(
-        dec_deg=60.0,
+        dec_deg=40.0,
         sigma_deg=sigma_deg,
         phi_deg=90.0,
         one_over_freq_scaling=False,

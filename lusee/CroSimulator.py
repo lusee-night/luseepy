@@ -11,6 +11,7 @@ import sys
 import os
 import jax.numpy as jnp
 import croissant as cro
+from croissant.constants import sidereal_day
 import croissant.jax as crojax
 import jax
 from lunarsky import LunarTopo
@@ -70,7 +71,8 @@ class CroSimulator(SimulatorBase):
     :param Tground: Ground temperature [K]
     :param freq: Frequencies in MHz (from config / obs)
     :param cross_power: BeamCouplings for cross terms [luseepy.BeamCouplings class]
-    :param extra_opts: optional dict, e.g. cache_transform, dump_beams (see DefaultSimulator)
+    :param extra_opts: optional dict, e.g. cache_transform, dump_beams (see DefaultSimulator),
+        freq_idx_plot (int): index of frequency at which to plot sky and beam.
     """
 
     def __init__ (self, obs, beams, sky_model, Tground = 200.0,
@@ -136,7 +138,10 @@ class CroSimulator(SimulatorBase):
         sky_mcmf = jax.vmap(gal2mcmf)(jnp.array(sky_2d))
         # Use observation-derived phi(t) so libration is included.
         # Build phases here so we don't depend on croissant.rot_alm_z(phi=) in all installs.
-        phi_rad = get_topo_z_rotation_angles(self.obs, times)
+        #phi_rad = get_topo_z_rotation_angles(self.obs, times)
+        delta_t_sec = np.arange(len(times), dtype=float) * self.obs.deltaT_sec
+        phi_rad = 2.0 * np.pi * delta_t_sec / sidereal_day["moon"]
+
         emms = np.arange(-self.lmax, self.lmax + 1)
         phases = jnp.asarray(np.exp(-1j * emms[None, :] * phi_rad[:, None]), dtype=jnp.complex128)
         norm_factor = 4.0 * np.pi
@@ -148,14 +153,15 @@ class CroSimulator(SimulatorBase):
             ])
             beam_mcmf = jax.vmap(topo2mcmf)(jnp.array(beam_2d))
             if self.extra_opts.get("plot_sky_and_beam") and not plot_done:
+                freq_idx_plot = self.extra_opts.get("freq_idx_plot", 0)
                 nside = getattr(self.sky_model, "Nside", 64)
-                sky_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(sky_mcmf[25]), self.lmax+1)
-                beam_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(beam_mcmf[25]), self.lmax+1)
+                sky_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(sky_mcmf[freq_idx_plot]), self.lmax+1)
+                beam_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(beam_mcmf[freq_idx_plot]), self.lmax+1)
                 self._plot_sky_beam_healpix(
                     sky_packed, beam_packed, nside, self.lmax,
                     save_dir=self.extra_opts.get("plot_dir", "output/figures"),
                     save_filename=self.extra_opts.get("plot_filename", "sky_beam_healpix_cro.png"),
-                    title_prefix=f"Crossaint at {self.freq[25]} MHz ",
+                    title_prefix=f"Crossaint at {self.freq[freq_idx_plot]} MHz ",
                 )
                 plot_done = True
             vis = crojax.simulator.convolve(beam_mcmf, sky_mcmf, phases)

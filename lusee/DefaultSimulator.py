@@ -31,8 +31,9 @@ class DefaultSimulator(SimulatorBase):
     :type freq: list[float]
     :param cross_power: Beam coupling model for cross-power terms. If empty, uses :class:`lusee.BeamCouplings`.
     :type cross_power: BeamCouplings
-    :param extra_opts: Extra options for simulation. Supports "dump_beams" (saves instrument beams to file)
-        and "cache_transform" (loads/saves beam transformations from file).
+    :param extra_opts: Extra options for simulation. Supports "dump_beams" (saves instrument beams to file),
+        "cache_transform" (loads/saves beam transformations from file),
+        and "freq_idx_plot" (int): index of frequency at which to plot sky and beam.
     :type extra_opts: dict
     
     """
@@ -105,13 +106,14 @@ class DefaultSimulator(SimulatorBase):
                 rot = hp.rotator.Rotator(rot=(g,-b,a),deg=False,eulertype='XYZ',inv=False)
                 sky = [rot.rotate_alm(s_) for s_ in sky]
             if ti == 0 and self.extra_opts.get("plot_sky_and_beam"):
+                freq_idx_plot = self.extra_opts.get("freq_idx_plot", 0)
                 nside = getattr(self.sky_model, "Nside", 64)
                 beamreal0 = self.efbeams[0][2]
                 self._plot_sky_beam_healpix(
-                    sky[25], beamreal0[25], nside, self.lmax,
+                    sky[freq_idx_plot], beamreal0[freq_idx_plot], nside, self.lmax,
                     save_dir=self.extra_opts.get("plot_dir", "output/figures"),
                     save_filename=self.extra_opts.get("plot_filename", "sky_beam_healpix_default.png"),
-                    title_prefix=f"Default at {self.freq[25]} MHz ",
+                    title_prefix=f"Default at {self.freq[freq_idx_plot]} MHz ",
                 )
             res = []
             for ci,cj,beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
