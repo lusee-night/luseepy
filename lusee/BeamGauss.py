@@ -21,11 +21,12 @@ def gauss_beam(theta,phi,sigma, theta_c,phi_c=0.):
     :rtype: array
     """
     
-    phiprime=np.min((phi-phi_c,2*np.pi-phi+phi_c),axis=0) #phi wrap around
-    norm=1. #beam E^2 is not normalized, E^2*gain_conv is normalized
+    vec  = [np.cos(theta)*np.cos(phi), np.cos(theta)*np.sin(phi), np.sin(theta)]
+    vec_c= [np.cos(theta_c)*np.cos(phi_c), np.cos(theta_c)*np.sin(phi_c), np.sin(theta_c)]
+    cos_angle = vec[0]*vec_c[0] + vec[1]*vec_c[1] + vec[2]*vec_c[2]
+    return np.exp(- (np.arccos(cos_angle))**2/(2*sigma**2))
 
-    return norm*np.exp(- (theta-theta_c)**2/(2*sigma**2)) * np.exp(- (phiprime)**2/(2*(sigma/np.cos(theta))**2))
-    
+
 
 class BeamGauss(Beam):
     """
