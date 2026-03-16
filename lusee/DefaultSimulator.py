@@ -98,12 +98,12 @@ class DefaultSimulator(SimulatorBase):
             if do_rot:
                 lz,bz,ly,by = lzl[ti],bzl[ti],lyl[ti],byl[ti]
                 zhat = np.array([np.cos(bz)*np.cos(lz), np.cos(bz)*np.sin(lz),np.sin(bz)])
-                yhat = np.array([np.cos(by)*np.cos(ly), np.cos(by)*np.sin(ly),np.sin(by)])
-                xhat = np.cross(yhat,zhat)
+                xhat = np.array([np.cos(by)*np.cos(ly), np.cos(by)*np.sin(ly),np.sin(by)])
+                yhat = np.cross(zhat,xhat)
                 assert(np.abs(np.dot(zhat,yhat))<1e-10)
                 R = np.array([xhat,yhat,zhat]).T
                 a,b,g = rot2eul(R)
-                rot = hp.rotator.Rotator(rot=(g,-b,a),deg=False,eulertype='XYZ',inv=False)
+                rot = hp.rotator.Rotator(rot=(g,-b,-a),deg=False,eulertype='XYZ',inv=False)
                 sky = [rot.rotate_alm(s_) for s_ in sky]
             if ti == 0 and self.extra_opts.get("plot_sky_and_beam"):
                 freq_idx_plot = self.extra_opts.get("freq_idx_plot", 0)

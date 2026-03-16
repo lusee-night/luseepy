@@ -35,7 +35,7 @@ def test_lunar_day_28_single_source():
     import matplotlib.pyplot as plt
 
     # Source on the inertial ecliptic plane (lat=0); conversion uses mean obliquity, not geocentric frame
-    ecl_lon_deg, ecl_lat_deg = 45.0, 0.0
+    ecl_lon_deg, ecl_lat_deg = 45.0, 30.0
     c = SkyCoord(lon=ecl_lon_deg * u.deg, lat=ecl_lat_deg * u.deg, frame=GeocentricMeanEcliptic)
     ra_deg, dec_deg = c.icrs.ra.deg, c.icrs.dec.deg
     l_deg, b_deg = c.galactic.l.deg, c.galactic.b.deg
@@ -52,7 +52,7 @@ def test_lunar_day_28_single_source():
     times = obs.times
     nside = 32
     lmax = 3*nside - 1
-    sigma_deg = 10.0
+    sigma_deg = 20.0
     Tground = 0.0
     freq = np.arange(1, 51, 5, dtype=float)
 
@@ -68,9 +68,9 @@ def test_lunar_day_28_single_source():
     sky = lusee.sky.SingleSourceHealpixSky(l_deg=l_deg, b_deg=b_deg, Nside=nside, freq=freq)
 
     beam = lusee.BeamGauss(
-        dec_deg=40.0,
+        dec_deg=60.0,
         sigma_deg=sigma_deg,
-        phi_deg=90.0,
+        phi_deg=00.0,
         one_over_freq_scaling=False,
         id="beam",
     )
@@ -83,7 +83,7 @@ def test_lunar_day_28_single_source():
         combinations=[(0, 0)],
         freq=freq,
         lmax=lmax,
-        extra_opts={"plot_sky_and_beam": True, "freq_idx_plot": 5, "plot_dir": "/Users/akshatha.vydula/lusee/luseepy/simulation/output/figures", 
+        extra_opts={"plot_sky_and_beam": True, "freq_idx_plot": 5, "plot_dir": os.path.join(os.environ["LUSEEPY_PATH"], "simulation/output/figures"), 
         "plot_filename": "sky_beam_healpix_default_single_pixel.png"},
     )
     def_sim.simulate(times=times)
@@ -95,7 +95,7 @@ def test_lunar_day_28_single_source():
         combinations= [(0, 0)],
         freq=freq,
         lmax=lmax,
-        extra_opts={"plot_sky_and_beam": True, "freq_idx_plot": 5, "plot_dir": "/Users/akshatha.vydula/lusee/luseepy/simulation/output/figures", 
+        extra_opts={"plot_sky_and_beam": True, "freq_idx_plot": 5, "plot_dir": os.path.join(os.environ["LUSEEPY_PATH"], "simulation/output/figures"), 
         "plot_filename": "sky_beam_healpix_cro_single_pixel.png"},
     )
     cro_sim.simulate(times=times)
