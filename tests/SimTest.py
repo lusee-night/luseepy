@@ -1,50 +1,79 @@
 #!/usr/bin/env python
 
 import lusee
-import numpy  as np
-import healpy as hp
-import pickle
+import numpy as np
 import os
 
-O = lusee.Observation('2025-02-01 13:00:00 to 2025-03-01 13:00:00', deltaT_sec=24*3600, lun_lat_deg=-00.0)
-B = lusee.Beam(os.environ['LUSEE_DRIVE_DIR'] + '/Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits')
+O = lusee.Observation(
+    "2025-02-01 13:00:00 to 2025-03-01 13:00:00",
+    deltaT_sec=24 * 3600,
+    lun_lat_deg=0.0,
+    lun_long_deg=0.0,
+)
+B = lusee.Beam(
+    os.path.join(
+        os.environ["LUSEE_DRIVE_DIR"],
+        "Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits",
+    )
+)
 
-print ("Setting up object with FITS beams")
+print("Setting up object with FITS beams")
 beams = []
-for ofs,c in enumerate(["N","E","S","W"]):
-    cB = B.rotate(-90*ofs)
+for ofs, c in enumerate(["N", "E", "S", "W"]):
+    cB = B.rotate(-90 * ofs)
     cB.id = c
     beams.append(cB)
-    
-lmax    = 64
-freq    = [10,12,30]
-sky     = lusee.sky.ConstSky(Nside = 32, lmax = lmax, freq=freq, T=200)
-S       = lusee.DefaultSimulator (O,beams, sky, freq=freq, lmax = lmax, combinations=[(0,0),(1,1),(1,3)], Tground = 200. )
 
-print ("Simulating")
+lmax = 64
+freq = [10, 12, 30]
+sky = lusee.sky.ConstSky(Nside=32, lmax=lmax, freq=freq, T=200)
+S = lusee.DefaultSimulator(
+    O,
+    beams,
+    sky,
+    freq=freq,
+    lmax=lmax,
+    combinations=[(0, 0), (1, 1), (1, 3)],
+    Tground=200.0,
+)
+
+print("Simulating")
 
 WF = S.simulate(times=O.times)
 
-print ("Are we close to 200K?")
-assert (np.allclose(WF[:,:2,:],200))
-print ("  OK")
+print("Are we close to 200K?")
+assert np.allclose(WF[:, :2, :], 200)
+print("  OK")
 
-print ("Setting up object with Gauss beam")
-BG      = lusee.BeamGauss(dec_deg=50, sigma_deg=6, phi_deg=0)
-beams   = [BG]
+print("Setting up object with Gauss beam")
+BG = lusee.BeamGauss(
+    alt_deg=50.0,
+    sigma_deg=6.0,
+    az_deg=0.0,
+    one_over_freq_scaling=False,
+    id="beam",
+)
+beams = [BG]
 
-lmax    = 64
-freq    =[1,5,10]
-sky     = lusee.sky.ConstSky(Nside = 32, lmax = lmax, freq=freq, T=200)
-S       = lusee.DefaultSimulator (O,beams, sky, freq=freq, lmax = lmax, combinations=[(0,0)],
-                     Tground = 0. )
-print ("Simulating")
+lmax = 64
+freq = [1, 5, 10]
+sky = lusee.sky.ConstSky(Nside=32, lmax=lmax, freq=freq, T=200)
+S = lusee.DefaultSimulator(
+    O,
+    beams,
+    sky,
+    freq=freq,
+    lmax=lmax,
+    combinations=[(0, 0)],
+    Tground=0.0,
+)
+print("Simulating")
 WF = S.simulate(times=O.times)
 
-print ("Are we close to 200K?")
-print ("We get:", WF[0,0,0])
-assert (np.allclose(WF[:,:2,:],200,rtol=5e-4))
-print ("  OK")
+print("Are we close to 200K?")
+print("We get:", WF[0, 0, 0])
+assert np.allclose(WF[:, :2, :], 200, rtol=5e-4)
+print("  OK")
 
 
 

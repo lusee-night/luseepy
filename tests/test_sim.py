@@ -37,7 +37,7 @@ def test_sim_fits_beams(observation, fits_beam):
 
 
 def test_sim_gauss_beam(observation):
-    BG = lusee.BeamGauss(dec_deg=50, sigma_deg=6, phi_deg=0)
+    BG = lusee.BeamGauss(alt_deg=50, sigma_deg=6, az_deg=0)
     beams = [BG]
 
     lmax = 64
