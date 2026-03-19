@@ -1,13 +1,24 @@
 # Jaxify Notes
 
 ## Scope
-This file summarizes the current differences in this repo vs the clean reference:
-`/Users/anigmetov/code/lusee_night/luseepy_clean/luseepy`
+This branch (an/jaxify) has been rebased onto simulator_ng (2026-03-19) to incorporate bug fixes and improvements while maintaining full JAX differentiability.
 
 Focus:
-- default simulator jaxification
-- preserving a stable NumPy baseline
-- parity/timing test workflow
+- Default simulator JAX-ification with end-to-end differentiability
+- Preserving a stable NumPy baseline (NumpySimulator)
+- Parity/timing test workflow
+- Integration with simulator_ng improvements
+
+## Rebase Summary (2026-03-19)
+Rebased onto simulator_ng (commit fb9aa45) to incorporate:
+- **RBF BeamInterpolator**: Replaced Gaussian kernel with cubic polyharmonic RBF (already JAX-compatible)
+- **HarmonicPointSourceSky**: New class for point sources via direct Y_lm evaluation
+- **CalibratorSimulator**: New NumPy-only simulator for calibrator tracks
+- **Bug fixes**: Type checking in Observation.py, optional freq parameter in SkyModels.py
+- **Plotting support**: _plot_sky_beam_healpix method in SimulatorBase
+- **Helper methods**: get_R_gal_to_topo, get_topo_z_rotation_angles in SimulatorBase
+
+**Note on coordinate transformation**: Commit 49396f6 introduced a coordinate fix that was intentionally reverted in 03f518d "Agreement in simulation outputs" after validation tests. The current version (without the fix) is correct.
 
 ## Engine Split
 - `engine=luseepy` / `engine=default` / `engine=lusee` / `engine=jax`:
