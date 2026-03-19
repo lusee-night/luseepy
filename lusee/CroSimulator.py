@@ -11,7 +11,6 @@ import sys
 import os
 import jax.numpy as jnp
 import croissant as cro
-from croissant.constants import sidereal_day
 import croissant.jax as crojax
 import jax
 from lunarsky import LunarTopo
@@ -56,11 +55,11 @@ class CroSimulator(SimulatorBase):
     - Freq, time grid, and antenna location are taken from the observation
       object (set from config). [luseepy.observation class]
     - Lunar topo frame is built from obs class (obstime=first time, location=obs.loc).
-    - Beam and sky are transformed to MCMF; time evolution uses
+    - Beam and sky are transformed to MEPA; time evolution uses
       crojax.simulator.rot_alm_z (moon sidereal rotation).
     - Croissant handles single polarization / single dipole per beam; each
       combination is convolved separately to match DefaultSimulator output shape.
-    - Sky gal→MCMF once, beam topo(t0)→MCMF once, rot_alm_z(phi(t)) for time evolution, then convolve.
+    - Sky gal→MEPA once (epoch-aware), beam topo(t0)→MEPA once, rot_alm_z(dt) for time evolution, then convolve.
     - Output layout is (N_times, N_combos, N_freq).
 
     :param obs: Observation (time range, deltaT_sec, lun_lat_deg, lun_long_deg)
@@ -91,7 +90,7 @@ class CroSimulator(SimulatorBase):
         """
         Simulate using Croissant.
         freq, time grid, and antenna location from
-        observation; beam and sky transformed to MCMF; rot_alm_z phases;
+        observation; beam and sky transformed to MEPA; rot_alm_z phases;
         crojax.simulator.convolve for sky and beam convolution.
         :param times: List of times; if None, use self.obs.times (from config).
         :returns: Waterfall (N_times, N_combos_with_imag, N_freq), same as DefaultSimulator.
@@ -105,27 +104,18 @@ class CroSimulator(SimulatorBase):
             raise NotImplementedError(
                 f"CroSimulator requires galactic sky frame, got {self.sky_model.frame}"
             )
-        self.result = self._simulate_croissant_mcmf(times, ntimes, delta_t)
+        self.result = self._simulate_croissant_mepa(times, ntimes, delta_t)
         return self.result
 
-    def _simulate_croissant_mcmf(self, times, ntimes, delta_t):
-        """MCMF pipeline: sky gal→MCMF once, beam topo(t0)→MCMF once, rot_alm_z(phi(t)) for time
-        evolution, then convolve."""
+    def _simulate_croissant_mepa(self, times, ntimes, delta_t):
+        """MEPA pipeline: sky gal→MEPA once (epoch-aware), beam topo(t0)→MEPA once,
+        rot_alm_z(dt) for time evolution, then convolve."""
         topo = LunarTopo(obstime=times[0], location=self.obs.loc)
         sim_L = self.lmax + 1
         eul_topo, dl_topo = crojax.rotations.generate_euler_dl(
-            self.lmax, topo, "mcmf"
+            self.lmax, topo, "mepa"
         )
-        eul_gal, dl_gal = crojax.rotations.generate_euler_dl(
-            self.lmax, "galactic", "mcmf"
-        )
-        gal2mcmf = partial(
-            s2fft.utils.rotation.rotate_flms,
-            L=sim_L,
-            rotation=eul_gal,
-            dl_array=dl_gal,
-        )
-        topo2mcmf = partial(
+        topo2mepa = partial(
             s2fft.utils.rotation.rotate_flms,
             L=sim_L,
             rotation=eul_topo,
@@ -135,28 +125,30 @@ class CroSimulator(SimulatorBase):
         sky_2d = np.stack([
             healpy_packed_alm_to_croissant_2d(s_, self.lmax) for s_ in sky_gal
         ])
-        sky_mcmf = jax.vmap(gal2mcmf)(jnp.array(sky_2d))
-        # Use observation-derived phi(t) so libration is included.
-        # Build phases here so we don't depend on croissant.rot_alm_z(phi=) in all installs.
-        #phi_rad = get_topo_z_rotation_angles(self.obs, times)
+        et = cro.rotations.jd_to_et(times[0].jd)
+        sky_mepa = cro.rotations.gal2mepa(sky_2d, et=et)
         delta_t_sec = np.arange(len(times), dtype=float) * self.obs.deltaT_sec
-        phi_rad = 2.0 * np.pi * delta_t_sec / sidereal_day["moon"]
-
-        emms = np.arange(-self.lmax, self.lmax + 1)
-        phases = jnp.asarray(np.exp(-1j * emms[None, :] * phi_rad[:, None]), dtype=jnp.complex128)
+        phases = cro.simulator.rot_alm_z(self.lmax, times=delta_t_sec)
         norm_factor = 4.0 * np.pi
+        # DS-to-LT topo frame correction:
+        # Beam ALMs are in the DefaultSimulator topo frame (DS: x=East, y=North).
+        # generate_euler_dl assumes LunarTopo frame (LT: x=North, y=West).
+        # Relationship: phi_LT = phi_DS - pi/2  →  a_m^LT = a_m^DS * exp(+i*m*pi/2)
+        m_range = np.arange(-self.lmax, self.lmax + 1, dtype=float)
+        lt_phase = np.exp(+1j * m_range * np.pi / 2)  # shape (2*lmax+1,)
         combo_results = []
         plot_done = False
         for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
             beam_2d = np.stack([
                 healpy_packed_alm_to_croissant_2d(br_, self.lmax) for br_ in beamreal
             ])
-            beam_mcmf = jax.vmap(topo2mcmf)(jnp.array(beam_2d))
+            beam_2d = beam_2d * lt_phase[np.newaxis, np.newaxis, :]
+            beam_mepa = jax.vmap(topo2mepa)(jnp.array(beam_2d))
             if self.extra_opts.get("plot_sky_and_beam") and not plot_done:
                 freq_idx_plot = self.extra_opts.get("freq_idx_plot", 0)
                 nside = getattr(self.sky_model, "Nside", 64)
-                sky_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(sky_mcmf[freq_idx_plot]), self.lmax+1)
-                beam_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(beam_mcmf[freq_idx_plot]), self.lmax+1)
+                sky_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(sky_mepa[freq_idx_plot]), self.lmax+1)
+                beam_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(beam_mepa[freq_idx_plot]), self.lmax+1)
                 self._plot_sky_beam_healpix(
                     sky_packed, beam_packed, nside, self.lmax,
                     save_dir=self.extra_opts.get("plot_dir", "output/figures"),
@@ -164,15 +156,16 @@ class CroSimulator(SimulatorBase):
                     title_prefix=f"Crossaint at {self.freq[freq_idx_plot]} MHz ",
                 )
                 plot_done = True
-            vis = crojax.simulator.convolve(beam_mcmf, sky_mcmf, phases)
+            vis = crojax.simulator.convolve(beam_mepa, sky_mepa, phases)
             T = np.asarray(vis.real) / norm_factor + self.Tground * groundPowerReal
             combo_results.append((T, None))
             if ci != cj:
                 beamimag_2d = np.stack([
                     healpy_packed_alm_to_croissant_2d(bi_, self.lmax) for bi_ in beamimag
                 ])
-                beamimag_mcmf = jax.vmap(topo2mcmf)(jnp.array(beamimag_2d))
-                vis_imag = crojax.simulator.convolve(beamimag_mcmf, sky_mcmf, phases)
+                beamimag_2d = beamimag_2d * lt_phase[np.newaxis, np.newaxis, :]
+                beamimag_mepa = jax.vmap(topo2mepa)(jnp.array(beamimag_2d))
+                vis_imag = crojax.simulator.convolve(beamimag_mepa, sky_mepa, phases)
                 Timag = np.asarray(vis_imag.real) / norm_factor + self.Tground * groundPowerImag
                 combo_results[-1] = (T, Timag)
         wfall = []

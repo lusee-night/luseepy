@@ -192,7 +192,7 @@ class Observation:
         """
         if times is None: times = self.times
     
-        if type(l) == float:
+        if type(l) in [float, np.float32, np.float64]:
             c = coord.SkyCoord(l=l, b=b, frame="galactic", unit="deg")
         elif type(l) == str:
             c = coord.SkyCoord(l=l, b=b, frame="galactic")

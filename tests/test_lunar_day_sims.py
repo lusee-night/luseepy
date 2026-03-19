@@ -35,7 +35,7 @@ def test_lunar_day_28_single_source():
     import matplotlib.pyplot as plt
 
     # Source on the inertial ecliptic plane (lat=0); conversion uses mean obliquity, not geocentric frame
-    ecl_lon_deg, ecl_lat_deg = 45.0, 30.0
+    ecl_lon_deg, ecl_lat_deg = 90.0, 00.0
     c = SkyCoord(lon=ecl_lon_deg * u.deg, lat=ecl_lat_deg * u.deg, frame=GeocentricMeanEcliptic)
     ra_deg, dec_deg = c.icrs.ra.deg, c.icrs.dec.deg
     l_deg, b_deg = c.galactic.l.deg, c.galactic.b.deg
@@ -70,7 +70,7 @@ def test_lunar_day_28_single_source():
     beam = lusee.BeamGauss(
         dec_deg=60.0,
         sigma_deg=sigma_deg,
-        phi_deg=00.0,
+        phi_deg=90.0,
         one_over_freq_scaling=False,
         id="beam",
     )
