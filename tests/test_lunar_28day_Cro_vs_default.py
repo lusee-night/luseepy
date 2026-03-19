@@ -100,9 +100,9 @@ def test_lunar_day_28_single_source():
     )
     cro_sim.simulate(times=times)
 
-    out_dir = Path(__file__).resolve().parent
-    cro_sim.write_fits(str(out_dir / "sim_output_cro_singlepixel_28days.fits"))
-    def_sim.write_fits(str(out_dir / "sim_output_default_singlepixel_28days.fits"))
+    out_dir = os.path.join(os.environ["LUSEEPY_PATH"], "simulation", "output")
+    cro_sim.write_fits(os.path.join(out_dir, "sim_output_cro_singlepixel_28days.fits"))
+    def_sim.write_fits(os.path.join(out_dir, "sim_output_default_singlepixel_28days.fits"))
 
 
 if __name__ == "__main__":

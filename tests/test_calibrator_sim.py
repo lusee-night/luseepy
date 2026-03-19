@@ -23,7 +23,7 @@ _SIGMA       = 20.0
 @pytest.fixture(scope="module")
 def beams():
     return [
-        BeamGauss(dec_deg=0, sigma_deg=_SIGMA, phi_deg=90 - angle, id=name)
+        BeamGauss(alt_deg=0, sigma_deg=_SIGMA, az_deg=90 - angle, id=name)
         for name, angle in zip(["N", "E", "S", "W"], _BEAM_ANGLES)
     ]
 
