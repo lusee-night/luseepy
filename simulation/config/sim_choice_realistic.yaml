@@ -42,9 +42,10 @@ observation:
     step: 1
 
 simulation:
-  engine: default 
+  engine: croissant 
   # output defaults to sim_{engine}_output.fits (this is specified in the driver/run_Cro_sim.py file)
   cache_transform: lunar_day.pickle  
   plot_sky_and_beam: True
-  plot_dir: /Users/akshatha.vydula/lusee/luseepy/simulation/output/figures/
-  plot_filename: sim_default_output.png
+  # Relative to luseepy repo root (resolved by simulation/driver/run_Cro_sim.py)
+  plot_dir: simulation/output/figures
+  plot_filename: sim_croissant_output.png

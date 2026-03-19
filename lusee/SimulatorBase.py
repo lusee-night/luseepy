@@ -10,6 +10,13 @@ import pickle
 import os
 
 
+def default_plot_sky_beam_dir():
+    """Default save directory for plot_sky_and_beam (under luseepy/simulation/output/figures)."""
+    return os.path.normpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "simulation", "output", "figures")
+    )
+
+
 def mean_alm(alm1, alm2, lmax):
     """
     Function that calculates the mean of the product of two a_lm arrrays
@@ -177,7 +184,7 @@ class SimulatorBase:
         :param beam_alm: Healpy packed alm (1D complex) for beam at one frequency
         :param nside: Healpix Nside for the map
         :param lmax: Maximum l for alm2map
-        :param save_dir: Directory to save the figure (default: output/figures)
+        :param save_dir: Directory to save the figure (default: luseepy/simulation/output/figures)
         :param save_filename: File name for the saved figure (default: sky_beam_healpix.png)
         :param title_prefix: Optional prefix for plot title (e.g. simulator name)
         """

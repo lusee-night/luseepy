@@ -3,7 +3,7 @@ from functools import partial
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
-from .SimulatorBase import SimulatorBase, get_topo_z_rotation_angles
+from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, get_topo_z_rotation_angles
 import numpy as np
 import healpy as hp
 import fitsio
@@ -151,7 +151,7 @@ class CroSimulator(SimulatorBase):
                 beam_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(beam_mepa[freq_idx_plot]), self.lmax+1)
                 self._plot_sky_beam_healpix(
                     sky_packed, beam_packed, nside, self.lmax,
-                    save_dir=self.extra_opts.get("plot_dir", "output/figures"),
+                    save_dir=self.extra_opts.get("plot_dir", default_plot_sky_beam_dir()),
                     save_filename=self.extra_opts.get("plot_filename", "sky_beam_healpix_cro.png"),
                     title_prefix=f"Crossaint at {self.freq[freq_idx_plot]} MHz ",
                 )

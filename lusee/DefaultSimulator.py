@@ -1,7 +1,7 @@
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
-from .SimulatorBase import SimulatorBase, mean_alm, rot2eul
+from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, mean_alm, rot2eul
 import numpy as np
 import healpy as hp
 import fitsio
@@ -111,7 +111,7 @@ class DefaultSimulator(SimulatorBase):
                 beamreal0 = self.efbeams[0][2]
                 self._plot_sky_beam_healpix(
                     sky[freq_idx_plot], beamreal0[freq_idx_plot], nside, self.lmax,
-                    save_dir=self.extra_opts.get("plot_dir", "output/figures"),
+                    save_dir=self.extra_opts.get("plot_dir", default_plot_sky_beam_dir()),
                     save_filename=self.extra_opts.get("plot_filename", "sky_beam_healpix_default.png"),
                     title_prefix=f"Default at {self.freq[freq_idx_plot]} MHz ",
                 )
