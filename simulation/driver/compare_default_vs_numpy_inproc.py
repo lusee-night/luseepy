@@ -23,6 +23,8 @@ from omegaconf import OmegaConf
 
 from sim_driver import SimDriver
 
+from icecream import ic
+
 
 def parse_args() -> argparse.Namespace:
     default_cfg = Path(__file__).resolve().parent.parent / "config" / "realistic_example.yaml"
@@ -117,14 +119,18 @@ def run_engine(base_cfg: dict, engine: str, output_name: str, cache_name: str):
     sim, times = build_simulator_and_times(driver)
 
     # Warmup pass (compile/traces on JAX engine).
+    t0_warm = time.perf_counter()
     warm = sim.simulate(times=times)
     _block_ready(warm)
+    elapsed_warm = time.perf_counter() - t0_warm
 
     # Timed pass on same simulator object.
     t0 = time.perf_counter()
     out = sim.simulate(times=times)
     _block_ready(out)
     elapsed = time.perf_counter() - t0
+
+    ic(elapsed, elapsed_warm)
 
     warm_np = np.asarray(warm)
     out_np = np.asarray(out)
@@ -201,7 +207,7 @@ def main() -> int:
 
     quick_overrides = [
         "observation.lunar_day='2025-02-01 13:00:00 to 2025-02-01 14:00:00'",
-        "observation.dt=3600",
+        "observation.dt=360",
         f"observation.lmax={args.lmax}",
         f"observation.freq.end={args.freq_end}",
     ]
