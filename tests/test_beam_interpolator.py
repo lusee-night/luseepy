@@ -5,6 +5,9 @@ import jax
 import jax.numpy as jnp
 from lusee.BeamInterpolator import BeamInterpolator
 
+# These tests assert near machine-precision exactness; keep 64-bit enabled.
+jax.config.update("jax_enable_x64", True)
+
 
 # ---- Mock / helpers ----
 

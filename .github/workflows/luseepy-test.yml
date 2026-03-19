@@ -17,6 +17,7 @@ jobs:
        PYTHONPATH: .:..
        LUSEE_DRIVE_DIR: Drive
        LUSEE_OUTPUT_DIR: ./output
+       JAX_ENABLE_X64: "True"
     container: continuumio/miniconda3
     steps:
       - uses: actions/checkout@v4
