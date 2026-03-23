@@ -1,4 +1,5 @@
 from functools import partial
+import warnings
 
 from .Observation import Observation
 from .Beam import Beam
@@ -130,22 +131,30 @@ class CroSimulator(SimulatorBase):
         delta_t_sec = np.arange(len(times), dtype=float) * self.obs.deltaT_sec
         phases = cro.simulator.rot_alm_z(self.lmax, times=delta_t_sec)
         norm_factor = 4.0 * np.pi
-        # DS-to-LT topo frame correction:
-        # Beam ALMs are in the DefaultSimulator topo frame (DS: x=East, y=North).
-        # generate_euler_dl assumes LunarTopo frame (LT: x=North, y=West).
-        # Relationship: phi_LT = phi_DS - pi/2  →  a_m^LT = a_m^DS * exp(+i*m*pi/2)
-        m_range = np.arange(-self.lmax, self.lmax + 1, dtype=float)
-        lt_phase = np.exp(+1j * m_range * np.pi / 2)  # shape (2*lmax+1,)
+        # croissant>=5.1.x handles LunarTopo (NEU) to ENU convention
+        # internally in rotations.get_rot_mat/generate_euler_dl.
+        # Do not apply an additional manual m-dependent phase here.
         combo_results = []
         plot_done = False
         for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
             beam_2d = np.stack([
                 healpy_packed_alm_to_croissant_2d(br_, self.lmax) for br_ in beamreal
             ])
-            beam_2d = beam_2d * lt_phase[np.newaxis, np.newaxis, :]
             beam_mepa = jax.vmap(topo2mepa)(jnp.array(beam_2d))
             if self.extra_opts.get("plot_sky_and_beam") and not plot_done:
-                freq_idx_plot = self.extra_opts.get("freq_idx_plot", 0)
+                nf = len(self.freq)
+                freq_idx_plot = int(self.extra_opts.get("freq_idx_plot", 0))
+                if nf == 0:
+                    raise ValueError("Cannot plot: no frequencies in self.freq")
+                if not (0 <= freq_idx_plot < nf):
+                    clamped = max(0, min(freq_idx_plot, nf - 1))
+                    warnings.warn(
+                        f"freq_idx_plot={freq_idx_plot} is out of bounds for "
+                        f"len(freq)={nf}; using {clamped}.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    freq_idx_plot = clamped
                 nside = getattr(self.sky_model, "Nside", 64)
                 sky_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(sky_mepa[freq_idx_plot]), self.lmax+1)
                 beam_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(beam_mepa[freq_idx_plot]), self.lmax+1)
@@ -153,7 +162,7 @@ class CroSimulator(SimulatorBase):
                     sky_packed, beam_packed, nside, self.lmax,
                     save_dir=self.extra_opts.get("plot_dir", default_plot_sky_beam_dir()),
                     save_filename=self.extra_opts.get("plot_filename", "sky_beam_healpix_cro.png"),
-                    title_prefix=f"Crossaint at {self.freq[freq_idx_plot]} MHz ",
+                    title_prefix=f"Croissant at {self.freq[freq_idx_plot]} MHz ",
                 )
                 plot_done = True
             vis = crojax.simulator.convolve(beam_mepa, sky_mepa, phases)
@@ -163,7 +172,6 @@ class CroSimulator(SimulatorBase):
                 beamimag_2d = np.stack([
                     healpy_packed_alm_to_croissant_2d(bi_, self.lmax) for bi_ in beamimag
                 ])
-                beamimag_2d = beamimag_2d * lt_phase[np.newaxis, np.newaxis, :]
                 beamimag_mepa = jax.vmap(topo2mepa)(jnp.array(beamimag_2d))
                 vis_imag = crojax.simulator.convolve(beamimag_mepa, sky_mepa, phases)
                 Timag = np.asarray(vis_imag.real) / norm_factor + self.Tground * groundPowerImag

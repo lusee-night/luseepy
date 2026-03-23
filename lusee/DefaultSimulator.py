@@ -8,6 +8,7 @@ import fitsio
 import sys
 import pickle
 import os
+import warnings
 
 
 
@@ -106,7 +107,19 @@ class DefaultSimulator(SimulatorBase):
                 rot = hp.rotator.Rotator(rot=(g,-b,a),deg=False,eulertype='XYZ',inv=False)
                 sky = [rot.rotate_alm(s_) for s_ in sky]
             if ti == 0 and self.extra_opts.get("plot_sky_and_beam"):
-                freq_idx_plot = self.extra_opts.get("freq_idx_plot", 0)
+                nf = len(self.freq)
+                freq_idx_plot = int(self.extra_opts.get("freq_idx_plot", 0))
+                if nf == 0:
+                    raise ValueError("Cannot plot: no frequencies in self.freq")
+                if not (0 <= freq_idx_plot < nf):
+                    clamped = max(0, min(freq_idx_plot, nf - 1))
+                    warnings.warn(
+                        f"freq_idx_plot={freq_idx_plot} is out of bounds for "
+                        f"len(freq)={nf}; using {clamped}.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    freq_idx_plot = clamped
                 nside = getattr(self.sky_model, "Nside", 64)
                 beamreal0 = self.efbeams[0][2]
                 self._plot_sky_beam_healpix(

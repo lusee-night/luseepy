@@ -10,9 +10,28 @@ class SimDriver(dict):
 
         self._lusee = lusee
         self.update(cfg)
+        self._resolve_simulation_paths()
         self._parse_base()
         self._parse_sky()
         self._parse_beams()
+
+    def _resolve_simulation_paths(self):
+        """Turn plot_dir paths relative to the luseepy checkout into absolute paths.
+
+        Same behavior as ``run_Cro_sim.SimDriver`` so YAML can use e.g.
+        ``simulation/plot_dir: simulation/output/figures``.
+        """
+        sim = self.get("simulation")
+        if not isinstance(sim, dict):
+            return
+        plot_dir = sim.get("plot_dir")
+        if not plot_dir or os.path.isabs(plot_dir):
+            return
+        here = os.path.dirname(os.path.abspath(__file__))
+        luseepy_root = os.path.abspath(os.path.join(here, "..", ".."))
+        self["simulation"]["plot_dir"] = os.path.normpath(
+            os.path.join(luseepy_root, plot_dir)
+        )
 
     def _parse_base(self):
         self.lmax = self["observation"]["lmax"]
