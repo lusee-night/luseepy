@@ -19,6 +19,9 @@ from pathlib import Path
 from astropy.coordinates import SkyCoord, GeocentricMeanEcliptic
 from astropy import units as u
 
+# luseepy package root (parent of tests/)
+_LUSEEPY_ROOT = Path(__file__).resolve().parent.parent
+
 
 def test_lunar_day_28_single_source():
     """run sim for 28 days, for a single pixel source.
@@ -83,8 +86,12 @@ def test_lunar_day_28_single_source():
         combinations=[(0, 0)],
         freq=freq,
         lmax=lmax,
-        extra_opts={"plot_sky_and_beam": True, "freq_idx_plot": 5, "plot_dir": os.path.join(os.environ["LUSEEPY_PATH"], "simulation/output/figures"), 
-        "plot_filename": "sky_beam_healpix_default_single_pixel.png"},
+        extra_opts={
+            "plot_sky_and_beam": True,
+            "freq_idx_plot": 5,
+            "plot_dir": str(_LUSEEPY_ROOT / "simulation" / "output" / "figures"),
+            "plot_filename": "sky_beam_healpix_default_single_pixel.png",
+        },
     )
     def_sim.simulate(times=times)
 
@@ -95,12 +102,16 @@ def test_lunar_day_28_single_source():
         combinations= [(0, 0)],
         freq=freq,
         lmax=lmax,
-        extra_opts={"plot_sky_and_beam": True, "freq_idx_plot": 5, "plot_dir": os.path.join(os.environ["LUSEEPY_PATH"], "simulation/output/figures"), 
-        "plot_filename": "sky_beam_healpix_cro_single_pixel.png"},
+        extra_opts={
+            "plot_sky_and_beam": True,
+            "freq_idx_plot": 5,
+            "plot_dir": str(_LUSEEPY_ROOT / "simulation" / "output" / "figures"),
+            "plot_filename": "sky_beam_healpix_cro_single_pixel.png",
+        },
     )
     cro_sim.simulate(times=times)
 
-    out_dir = os.path.join(os.environ["LUSEEPY_PATH"], "simulation", "output")
+    out_dir = str(_LUSEEPY_ROOT / "simulation" / "output")
     cro_sim.write_fits(os.path.join(out_dir, "sim_output_cro_singlepixel_28days.fits"))
     def_sim.write_fits(os.path.join(out_dir, "sim_output_default_singlepixel_28days.fits"))
 
