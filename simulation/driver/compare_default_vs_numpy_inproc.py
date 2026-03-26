@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""In-process default-vs-numpy comparison with warmup + timed second run.
+"""In-process jaxsim-vs-default comparison with warmup + timed second run.
 
 Key property:
 - Each engine is instantiated once.
@@ -27,7 +27,7 @@ from sim_driver import SimDriver
 def parse_args() -> argparse.Namespace:
     default_cfg = Path(__file__).resolve().parent.parent / "config" / "realistic_example.yaml"
     parser = argparse.ArgumentParser(
-        description="Compare default(jax) vs numpy engines with in-process warmup/timing."
+        description="Compare jaxsim vs default engines with in-process warmup/timing."
     )
     parser.add_argument("--config-path", default=str(default_cfg), help="Path to hydra yaml config")
     parser.add_argument("--lmax", type=int, default=8, help="Override observation.lmax")
@@ -70,7 +70,7 @@ def build_simulator_and_times(driver: SimDriver):
                 combs.append((i, j))
 
     engine = driver._normalize_engine(driver)
-    if engine == "luseepy":
+    if engine == "default":
         sim = lusee.DefaultSimulator(
             obs,
             driver.beams,
@@ -82,8 +82,8 @@ def build_simulator_and_times(driver: SimDriver):
             cross_power=driver.couplings,
             extra_opts=driver["simulation"],
         )
-    elif engine == "numpy":
-        sim = lusee.NumpySimulator(
+    elif engine == "jaxsim":
+        sim = lusee.JaxSimulator(
             obs,
             driver.beams,
             driver.sky,
@@ -95,7 +95,7 @@ def build_simulator_and_times(driver: SimDriver):
             extra_opts=driver["simulation"],
         )
     else:
-        raise ValueError(f"Only default/luseepy and numpy engines are supported here, got {engine!r}")
+        raise ValueError(f"Only default/luseepy and jaxsim engines are supported here, got {engine!r}")
     return sim, obs.times
 
 
@@ -145,16 +145,16 @@ def load_by_ext(path: Path) -> dict:
     return out
 
 
-def compare_fits(jax_path: Path, numpy_path: Path, abs_tol: float) -> bool:
+def compare_fits(jax_path: Path, default_path: Path, abs_tol: float) -> bool:
     print("Comparing FITS outputs...")
     a = load_by_ext(jax_path)
-    b = load_by_ext(numpy_path)
+    b = load_by_ext(default_path)
 
     ok = True
     if set(a) != set(b):
         print("FAIL: Extension name mismatch")
         print("jax only:", sorted(set(a) - set(b)))
-        print("numpy only:", sorted(set(b) - set(a)))
+        print("default only:", sorted(set(b) - set(a)))
         return False
 
     for name in sorted(a):
@@ -210,19 +210,19 @@ def main() -> int:
         base_cfg.setdefault("simulation", {})
         base_cfg["simulation"]["jax_enable_x64"] = (args.jax_enable_x64 == "true")
 
-    print("Warmup+timed run: default (jax) engine...")
+    print("Warmup+timed run: jaxsim engine...")
     jax_sec, jax_out, n_freq, jax_repeat_max = run_engine(
         base_cfg,
-        engine="default",
-        output_name="sim_output_quick_jax.fits",
+        engine="jaxsim",
+        output_name="sim_output_quick_jaxsim.fits",
         cache_name="quick_2step_jax.pickle",
     )
-    print("Warmup+timed run: numpy engine...")
+    print("Warmup+timed run: default engine...")
     np_sec, np_out, _, np_repeat_max = run_engine(
         base_cfg,
-        engine="numpy",
-        output_name="sim_output_quick_numpy.fits",
-        cache_name="quick_2step_numpy.pickle",
+        engine="default",
+        output_name="sim_output_quick_default.fits",
+        cache_name="quick_2step_default.pickle",
     )
 
     ok = compare_fits(jax_out, np_out, args.abs_tol)
@@ -233,9 +233,9 @@ def main() -> int:
     print(f"  freq bins: {n_freq}")
     print(f"  jax_enable_x64: {base_cfg.get('simulation', {}).get('jax_enable_x64')}")
     print(f"  jax real time (s): {jax_sec:.6f}")
-    print(f"  numpy real time (s): {np_sec:.6f}")
+    print(f"  default real time (s): {np_sec:.6f}")
     print(f"  jax repeat max abs (warmup vs timed): {jax_repeat_max:.6e}")
-    print(f"  numpy repeat max abs (warmup vs timed): {np_repeat_max:.6e}")
+    print(f"  default repeat max abs (warmup vs timed): {np_repeat_max:.6e}")
     print(f"  result: {'PASS' if ok else 'FAIL'}")
 
     return 0 if ok else 1

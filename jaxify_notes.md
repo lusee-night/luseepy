@@ -10,10 +10,10 @@ Focus:
 - parity/timing test workflow
 
 ## Engine Split
-- `engine=luseepy` / `engine=default` / `engine=lusee` / `engine=jax`:
-  uses `lusee.DefaultSimulator` (JAX-oriented path).
-- `engine=numpy`:
-  uses `lusee.NumpySimulator` (legacy NumPy path; baseline for parity checks).
+- `engine=luseepy` / `engine=default` / `engine=numpy`:
+  uses `lusee.DefaultSimulator` (NumPy baseline path).
+- `engine=jaxsim` / `engine=lusee` / `engine=jax`:
+  uses `lusee.JaxSimulator` (JAX-oriented path).
 - `engine=croissant`:
   unchanged.
 
@@ -35,18 +35,18 @@ Files:
 - `simulation/config/realistic_example.yaml`
 - `simulation/driver/sim_driver.py`
 
-## DefaultSimulator (JAX) Architecture
-`DefaultSimulator` is now batch-functional:
+## JaxSimulator Architecture
+`JaxSimulator` is now batch-functional:
 1. Build rotation kernels once.
 2. Rotate one sky across all times via `vmap`.
 3. Contract beams x rotated sky in one batched JIT kernel.
 
 Notable points:
-- Old non-JAX `healpy.rotate_alm` branch removed from `DefaultSimulator`.
+- Old non-JAX `healpy.rotate_alm` branch removed from the JAX simulator path.
 - Output products are flattened to one output axis for vectorized contraction.
 
 File:
-- `lusee/DefaultSimulator.py`
+- `lusee/JaxSimulator.py`
 
 ## Rotation Path (Critical Convention)
 This is the fragile part and must stay consistent.
@@ -93,13 +93,13 @@ It checks autodiff vs finite-diff through:
 Observed relative errors are very small (around `1e-10` to `1e-11`) in x64 mode.
 
 ## NumPy Baseline Isolation (Important)
-To keep `engine=numpy` robust and independent of JAX state:
+To keep the default NumPy path robust and independent of JAX state:
 
-1. `NumpySimulator` enforces complex128 sky ALMs before `healpy.rotate_alm`
+1. `DefaultSimulator` enforces complex128 sky ALMs before `healpy.rotate_alm`
    (`rotate_alm` requires double-precision complex arrays).
-2. `NumpySimulator` uses a pure NumPy `_mean_alm_numpy` helper.
+2. `DefaultSimulator` uses a pure NumPy `_mean_alm_numpy` helper.
 3. Sky models expose NumPy-native ALM accessor `get_alm_numpy`.
-   - `NumpySimulator` uses `get_alm_numpy` when available.
+   - `DefaultSimulator` uses `get_alm_numpy` when available.
 
 Reason:
 - In-process warmup/timing runs exposed cross-talk if NumPy path consumed JAX-returned arrays.
@@ -142,7 +142,7 @@ simulation/driver/compare_default_vs_numpy.sh --lmax 8 --freq-end 3
 ```
 
 ## Constraints to Preserve
-- Keep `engine=numpy` as baseline compatibility path.
-- Keep `DefaultSimulator` as jaxified path.
+- Keep `engine=default` / `engine=luseepy` as the baseline compatibility path.
+- Keep `engine=jaxsim` and `JaxSimulator` as the jaxified path.
 - Do not modify rotation convention plumbing without re-validating parity.
 - For timing comparisons, avoid separate-process warmup assumptions; use in-process second-run timing.

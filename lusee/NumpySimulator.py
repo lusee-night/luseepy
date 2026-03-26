@@ -15,9 +15,9 @@ def _mean_alm_numpy(alm1, alm2, lmax):
     return (np.real(prod[: lmax + 1]).sum() + 2 * np.real(prod[lmax + 1 :]).sum()) / (4 * np.pi)
 
 
-class NumpySimulator(SimulatorBase):
+class DefaultSimulator(SimulatorBase):
     """
-    Legacy NumPy default simulator kept as a separate engine.
+    Default NumPy simulator.
     """
 
     def __init__ (self, obs, beams, sky_model, Tground = 200.0,
@@ -99,3 +99,7 @@ class NumpySimulator(SimulatorBase):
             wfall.append(res)
         self.result = np.array(wfall)
         return self.result
+
+
+# Backward-compatible alias for older imports.
+NumpySimulator = DefaultSimulator

@@ -162,13 +162,15 @@ class SimDriver(dict):
     def _normalize_engine(cfg):
         engine = cfg.get("engine")
         if engine is None:
-            engine = cfg.get("simulation", {}).get("engine", "luseepy")
+            engine = cfg.get("simulation", {}).get("engine", "default")
         e = str(engine).strip().lower()
         aliases = {
-            "default": "luseepy",
-            "lusee": "luseepy",
-            "jax": "luseepy",
-            "numpy": "numpy",
+            "default": "default",
+            "luseepy": "default",
+            "numpy": "default",
+            "jaxsim": "jaxsim",
+            "jax": "jaxsim",
+            "lusee": "jaxsim",
             "croissant": "croissant",
         }
         return aliases.get(e, e)
@@ -214,8 +216,8 @@ class SimDriver(dict):
                 cross_power=self.couplings,
                 extra_opts=self["simulation"],
             )
-        elif engine == "luseepy":
-            print("  setting up Default Simulation object...")
+        elif engine == "default":
+            print("  setting up Default (NumPy) Simulation object...")
             S = lusee.DefaultSimulator(
                 O,
                 self.beams,
@@ -227,9 +229,9 @@ class SimDriver(dict):
                 cross_power=self.couplings,
                 extra_opts=self["simulation"],
             )
-        elif engine == "numpy":
-            print("  setting up NumPy Simulation object...")
-            S = lusee.NumpySimulator(
+        elif engine == "jaxsim":
+            print("  setting up JAX Simulation object...")
+            S = lusee.JaxSimulator(
                 O,
                 self.beams,
                 self.sky,
@@ -242,7 +244,8 @@ class SimDriver(dict):
             )
         else:
             raise ValueError(
-                "engine must be one of {luseepy, numpy, croissant} (or aliases default/lusee/jax), "
+                "engine must be one of {default, luseepy, jaxsim, croissant} "
+                "(legacy aliases: numpy, jax, lusee), "
                 f"got: {engine}"
             )
 

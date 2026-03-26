@@ -17,6 +17,8 @@ import sys
 import numpy as np
 import yaml
 from yaml.loader import SafeLoader
+import time
+from icecream import ic
 
 # Add luseepy to path if needed
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -163,6 +165,7 @@ def run_comparison(config_path=None):
     Nfreq = len(freq)
 
     # Run both simulators (observer frame so they match)
+    def_start = time.time()
     def_sim = lusee.DefaultSimulator(
         setup["obs"], setup["beams"], setup["sky"],
         Tground=setup["Tground"], combinations=setup["combinations"],
@@ -170,8 +173,10 @@ def run_comparison(config_path=None):
         cross_power=setup["cross_power"], extra_opts=setup.get("extra_opts", {}),
     )
     def_sim.simulate()
+    def_elapsed = time.time() - def_start
     out_def = def_sim.result
 
+    cro_start = time.time()
     cro_sim = lusee.CroSimulator(
         setup["obs"], setup["beams"], setup["sky"],
         Tground=setup["Tground"], combinations=setup["combinations"],
@@ -180,7 +185,10 @@ def run_comparison(config_path=None):
         extra_opts=setup.get("extra_opts", {}),
     )
     cro_sim.simulate()
+    cro_elapsed = time.time() - cro_start
     out_cro = cro_sim.result
+
+    ic(def_elapsed, cro_elapsed)
 
     # Step 1: Sky raw
     print("\n" + "=" * 60)
@@ -220,7 +228,7 @@ def run_comparison(config_path=None):
     R = np.array([xhat, yhat, zhat]).T
     a, b, g = rot2eul(R)
     rot = hp.rotator.Rotator(rot=(g, -b, a), deg=False, eulertype="XYZ", inv=False)
-    sky_rot_default = [rot.rotate_alm(s_) for s_ in sky_alm_raw]
+    sky_rot_default = [rot.rotate_alm(np.asarray(s_)) for s_ in sky_alm_raw]
     sky_rot0_mono = np.array([s[hp.sphtfunc.Alm.getidx(lmax, 0, 0)] for s in sky_rot_default])
     # Cro: sky in MCMF (gal2mcmf); at t=0 phases[0] is applied in convolve
     sky_2d = np.stack([healpy_packed_alm_to_croissant_2d(s_, lmax) for s_ in sky_alm_raw])
@@ -269,17 +277,17 @@ def run_comparison(config_path=None):
     stats("Final output t=0 combo=0", out_def[0, 0], out_cro[0, 0])
     cmp("Final output t=0 combo=0 (observer frame)", out_def[0, 0], out_cro[0, 0], tol=1e-5)
 
-    # Summary
-    print("\n" + "=" * 60)
-    print("SUMMARY: Where do the two engines diverge?")
-    print("=" * 60)
-    print("  Step 1: Sky raw — same.")
-    print("  Step 2: Beams (efbeams) — same.")
-    print("  Step 3: Beam healpy->2D — check monopole.")
-    print("  Step 4: Sky rotated — Default observer vs Cro MCMF (may differ by frame convention).")
-    print("  Step 5: Raw convolution — should match if same beam/sky in same frame.")
-    print("  Step 6: Normalization — both use 4*pi.")
-    print("  Step 7: Full result — Default (observer frame) vs Cro (MCMF) may differ by frame/phase.")
+    # # Summary
+    # print("\n" + "=" * 60)
+    # print("SUMMARY: Where do the two engines diverge?")
+    # print("=" * 60)
+    # print("  Step 1: Sky raw — same.")
+    # print("  Step 2: Beams (efbeams) — same.")
+    # print("  Step 3: Beam healpy->2D — check monopole.")
+    # print("  Step 4: Sky rotated — Default observer vs Cro MCMF (may differ by frame convention).")
+    # print("  Step 5: Raw convolution — should match if same beam/sky in same frame.")
+    # print("  Step 6: Normalization — both use 4*pi.")
+    # print("  Step 7: Full result — Default (observer frame) vs Cro (MCMF) may differ by frame/phase.")
 
 
 if __name__ == "__main__":

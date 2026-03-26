@@ -144,8 +144,18 @@ class SimDriver(dict):
                     for j in range(i, self.Nbeams):
                         combs.append((i, j))
         print(f"{len(combs)} Combinations: ", combs)
-        engine = self["simulation"].get("engine")
+        engine = self["simulation"].get("engine", "default")
         engine = str(engine).strip().lower()
+        aliases = {
+            "default": "default",
+            "luseepy": "default",
+            "numpy": "default",
+            "jaxsim": "jaxsim",
+            "jax": "jaxsim",
+            "lusee": "jaxsim",
+            "croissant": "croissant",
+        }
+        engine = aliases.get(engine, engine)
         if engine == "croissant":
             if lusee.CroSimulator is None:
                 raise RuntimeError(
@@ -165,7 +175,7 @@ class SimDriver(dict):
                 extra_opts={**self["simulation"], "plot_sky_and_beam": True},
             )
         elif engine == "default":
-            print("  setting up Default Simulation object...")
+            print("  setting up Default (NumPy) Simulation object...")
             S = lusee.DefaultSimulator(
                 O,
                 self.beams,
@@ -177,8 +187,24 @@ class SimDriver(dict):
                 cross_power=self.couplings,
                 extra_opts={**self["simulation"]},
             )
+        elif engine == "jaxsim":
+            print("  setting up JAX Simulation object...")
+            S = lusee.JaxSimulator(
+                O,
+                self.beams,
+                self.sky,
+                Tground=od["Tground"],
+                combinations=combs,
+                freq=self.freq,
+                lmax=self.lmax,
+                cross_power=self.couplings,
+                extra_opts={**self["simulation"]},
+            )
         else:
-            raise ValueError(f"simulation.engine must be 'Default' or 'Croissant', got: {engine}")
+            raise ValueError(
+                "simulation.engine must be one of {default, luseepy, jaxsim, croissant} "
+                f"(legacy aliases: numpy, jax, lusee), got: {engine}"
+            )
 
         print(f"  Simulating {len(O.times)} timesteps (from observation) x {len(combs)} data products x {len(self.freq)} frequency bins...")
         print("  Simulating...")

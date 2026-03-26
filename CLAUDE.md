@@ -89,7 +89,10 @@ All sky models expose `get_alm(freq_ndx, freq)` returning a list of healpy-forma
 Abstract base. `prepare_beams()` pre-computes beam alm products for all antenna combinations, storing them in `self.efbeams`. Output of `simulate()` is stored in `self.result` as a numpy array of shape `(Ntimes, Ncombinations, Nfreq)`.
 
 **`lusee.DefaultSimulator`** (`lusee/DefaultSimulator.py`)
-Per-timestep rotation of galactic sky alms into the observer frame using healpy rotators. Uses `mean_alm()` for the beam–sky integral.
+Default NumPy simulator.
+
+**`lusee.JaxSimulator`** (`lusee/JaxSimulator.py`)
+JAX-backed simulator. Performs per-timestep rotation of galactic sky alms into the observer frame and uses `mean_alm()` for the beam-sky integral.
 
 **`lusee.CroSimulator`** (`lusee/CroSimulator.py`)
 Alternative engine using the `croissant` library and JAX. Works in MCMF frame with `rot_alm_z` phase rotations rather than per-time full sky rotation. Optional install: `pip install ".[croissant]"`. `CroSimulator` is `None` if croissant is not installed.
@@ -100,13 +103,13 @@ Reads simulator FITS output. Extends `Observation`. Indexed as `D[:, '01I', :]` 
 
 ### Simulation Driver (`simulation/driver/run_sim.py`)
 
-`SimDriver` class reads YAML config, instantiates the appropriate objects, calls `simulator.simulate()`, and writes FITS. Supports `engine: default` (and `engine: croissant` in development). Config fields: `paths`, `sky`, `beam_config`, `beams`, `observation`, `simulation`.
+`SimDriver` class reads YAML config, instantiates the appropriate objects, calls `simulator.simulate()`, and writes FITS. Supports `engine: default` / `engine: luseepy` (NumPy), `engine: jaxsim` (JAX), and `engine: croissant`. Config fields: `paths`, `sky`, `beam_config`, `beams`, `observation`, `simulation`.
 
 ## Coordinate Conventions
 
 - Beam files use theta (0=zenith) × phi (0–360°) grids with wraparound at last phi bin (phi[0] == phi[-1] for most operations; the `-1` index is dropped in alm computation)
 - `lmax` is used consistently in healpy convention; `grid2healpix_alm_fast` uses `lmax+1` internally (different convention from `pyshtools.legendre`)
-- The Euler rotation used in `DefaultSimulator` follows `XYZ` convention via `rot2eul`/`eul2rot`
+- The Euler rotation used in `JaxSimulator` and `DefaultSimulator` follows `XYZ` convention via `rot2eul`/`eul2rot`
 
 ## Version Conventions
 

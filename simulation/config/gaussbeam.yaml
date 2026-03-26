@@ -82,7 +82,7 @@ observation:
 simulation:
   output: output/sim_gaussLBeam.fits
 
-engine: luseepy
+engine: jaxsim
   
   
  

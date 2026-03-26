@@ -42,10 +42,10 @@ observation:
     step: 1
 
 simulation:
-  engine: default
+  engine: jaxsim
   output: sim_output.fits
   cache_transform: lunar_day.pickle
   plot_sky_and_beam: True
   jax_enable_x64: false
   use_jax_rotate_alm: false
-engine: default
+engine: jaxsim
