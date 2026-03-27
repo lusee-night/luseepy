@@ -166,14 +166,19 @@ def run_comparison(config_path=None):
 
     # Run both simulators (observer frame so they match)
     def_start = time.time()
-    def_sim = lusee.DefaultSimulator(
+    jax_ctor_start = time.time()
+    def_sim = lusee.JaxSimulator(
         setup["obs"], setup["beams"], setup["sky"],
         Tground=setup["Tground"], combinations=setup["combinations"],
         freq=setup["freq"], lmax=setup["lmax"],
         cross_power=setup["cross_power"], extra_opts=setup.get("extra_opts", {}),
     )
+    jax_ctor_elapsed = time.time() - jax_ctor_start
     def_sim.simulate()
     def_elapsed = time.time() - def_start
+    jax_2nd_sim_start = time.time()
+    def_sim.simulate()
+    jax_2nd_sim_elapsed = time.time() - jax_2nd_sim_start
     out_def = def_sim.result
 
     cro_start = time.time()
@@ -189,6 +194,7 @@ def run_comparison(config_path=None):
     out_cro = cro_sim.result
 
     ic(def_elapsed, cro_elapsed)
+    ic(jax_ctor_elapsed, jax_2nd_sim_elapsed)
 
     # Step 1: Sky raw
     print("\n" + "=" * 60)
@@ -275,6 +281,9 @@ def run_comparison(config_path=None):
     print("STEP 7: Full pipeline (Default: per-time rotation; Cro: observer frame)")
     print("=" * 60)
     stats("Final output t=0 combo=0", out_def[0, 0], out_cro[0, 0])
+    ic(type(out_def.shape), type(out_cro.shape))
+    ic(out_def.shape, out_cro.shape)
+    ic(np.max(np.abs(out_def - out_cro)))
     cmp("Final output t=0 combo=0 (observer frame)", out_def[0, 0], out_cro[0, 0], tol=1e-5)
 
     # # Summary
