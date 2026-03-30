@@ -18,7 +18,7 @@ import s2fft
 
 """
 CroSimulator: same inputs as DefaultSimulator (beam, sky, obs, etc.) but uses
-the Croissant engine for the actual simulation (MCMF frame, rot_alm_z phases,
+the Croissant engine for the actual simulation (MEPA frame, rot_alm_z phases,
 crojax.simulator.convolve). Freq, time range, and antenna location come from
 the observation object (config). Croissant currently supports single
 polarization / single dipole per beam; one beam combination at a time

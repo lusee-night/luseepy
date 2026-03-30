@@ -92,7 +92,7 @@ Abstract base. `prepare_beams()` pre-computes beam alm products for all antenna 
 Per-timestep rotation of galactic sky alms into the observer frame using healpy rotators. Uses `mean_alm()` for the beam–sky integral.
 
 **`lusee.CroSimulator`** (`lusee/CroSimulator.py`)
-Alternative engine using the `croissant` library and JAX. Works in MCMF frame with `rot_alm_z` phase rotations rather than per-time full sky rotation. Optional install: `pip install ".[croissant]"`. `CroSimulator` is `None` if croissant is not installed.
+Alternative engine using the `croissant` library and JAX. Works in MEPA (Moon-centred Ephemeris Pole Axis) with `rot_alm_z` phase rotations rather than per-time full sky rotation. Optional install: `pip install ".[croissant]"`. `CroSimulator` is `None` if croissant is not installed.
 
 ### Output: `lusee.Data` (`lusee/Data.py`)
 

@@ -146,6 +146,7 @@ def run_comparison(config_path=None):
         print("CroSimulator not available (croissant/s2fft not installed). Skip test.")
         return
 
+    import croissant as cro
     import croissant.jax as crojax
     from functools import partial
     import s2fft
@@ -209,9 +210,9 @@ def run_comparison(config_path=None):
     beam_mono = np.asarray(beam_2d[:, 0, lmax])
     print(f"  Beam monopole (first combo): {beam_mono[:3]} ...")
 
-    # Step 4: Sky at time 0 — Default rotates to observer; Cro uses galactic->MCMF
+    # Step 4: Sky at time 0 — Default rotates to observer; Cro uses galactic->MEPA
     print("\n" + "=" * 60)
-    print("STEP 4: Sky at time 0 — Default rotates to observer; Cro uses galactic->MCMF ---")
+    print("STEP 4: Sky at time 0 — Default rotates to observer; Cro uses galactic->MEPA ---")
     print("=" * 60)
     times = setup["obs"].times
     lzl, bzl = setup["obs"].get_l_b_from_alt_az(np.pi / 2, 0.0, times)
@@ -226,19 +227,22 @@ def run_comparison(config_path=None):
     rot = hp.rotator.Rotator(rot=(g, -b, a), deg=False, eulertype="XYZ", inv=False)
     sky_rot_default = [rot.rotate_alm(s_) for s_ in sky_alm_raw]
     sky_rot0_mono = np.array([s[hp.sphtfunc.Alm.getidx(lmax, 0, 0)] for s in sky_rot_default])
-    # Cro: sky in MCMF (gal2mcmf); at t=0 phases[0] is applied in convolve
+    # Cro: sky in MEPA (same as CroSimulator gal2mepa); at t=0 phases[0] is applied in convolve
     sky_2d = np.stack([hp_packed_alm_to_flm_2d(s_) for s_ in sky_alm_raw])
     sky_2d_j = jnp.array(sky_2d)
-    eul_gal, dl_gal = crojax.rotations.generate_euler_dl(lmax, "galactic", "mcmf")
-    gal2mcmf = partial(
+    et = cro.rotations.jd_to_et(times[0].jd)
+    eul_gal, dl_gal = crojax.rotations.generate_euler_dl(
+        lmax, "galactic", "mepa", et=et
+    )
+    gal2mepa = partial(
         s2fft.utils.rotation.rotate_flms,
         L=lmax + 1,
         rotation=eul_gal,
         dl_array=dl_gal,
     )
-    sky_mcmf = jax.vmap(gal2mcmf)(sky_2d_j)
-    sky_mcmf_mono = np.asarray(sky_mcmf[:, 0, lmax])
-    cmp("Sky monopole after rotation (Default observer vs Cro MCMF)", sky_rot0_mono, sky_mcmf_mono, tol=1e-5)
+    sky_mepa = jax.vmap(gal2mepa)(sky_2d_j)
+    sky_mepa_mono = np.asarray(sky_mepa[:, 0, lmax])
+    cmp("Sky monopole after rotation (Default observer vs Cro MEPA)", sky_rot0_mono, sky_mepa_mono, tol=1e-5)
 
     # Step 5: Raw convolved product (before any normalization)
     print("\n" + "=" * 60)
@@ -268,7 +272,7 @@ def run_comparison(config_path=None):
 
     # Step 7: Full pipeline
     print("\n" + "=" * 60)
-    print("STEP 7: Full pipeline (Default: per-time rotation; Cro: observer frame)")
+    print("STEP 7: Full pipeline (Default: per-time rotation; Cro: MEPA + rot_alm_z)")
     print("=" * 60)
     stats("Final output t=0 combo=0", out_def[0, 0], out_cro[0, 0])
     cmp("Final output t=0 combo=0 (observer frame)", out_def[0, 0], out_cro[0, 0], tol=1e-5)
@@ -280,10 +284,10 @@ def run_comparison(config_path=None):
     print("  Step 1: Sky raw — same.")
     print("  Step 2: Beams (efbeams) — same.")
     print("  Step 3: Beam healpy->2D — check monopole.")
-    print("  Step 4: Sky rotated — Default observer vs Cro MCMF (may differ by frame convention).")
+    print("  Step 4: Sky rotated — Default observer vs Cro MEPA (may differ by frame convention).")
     print("  Step 5: Raw convolution — should match if same beam/sky in same frame.")
     print("  Step 6: Normalization — both use 4*pi.")
-    print("  Step 7: Full result — Default (observer frame) vs Cro (MCMF) may differ by frame/phase.")
+    print("  Step 7: Full result — Default (observer frame) vs Cro (MEPA) may differ by frame/phase.")
 
 
 if __name__ == "__main__":

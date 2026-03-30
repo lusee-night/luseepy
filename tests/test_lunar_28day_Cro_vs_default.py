@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 28-day lunar test: 
-Single source simulation in the topo frame (DefaultSimulator) and the MCMF frame (CroSimulator).
+Single source simulation in the topo frame (DefaultSimulator) and the MEPA frame (CroSimulator).
 
 Usage:
   python tests/test_lunar_day_sims.py
@@ -95,7 +95,7 @@ def test_lunar_day_28_single_source():
     )
     def_sim.simulate(times=times)
 
-    # Run CroSimulator (MCMF frame)
+    # Run CroSimulator (MEPA frame)
     cro_sim = lusee.CroSimulator(
         obs, beams, sky,
         Tground=Tground,
