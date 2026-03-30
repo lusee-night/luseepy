@@ -146,10 +146,14 @@ def run_comparison(config_path=None):
         print("CroSimulator not available (croissant/s2fft not installed). Skip test.")
         return
 
-    from lusee.CroSimulator import healpy_packed_alm_to_croissant_2d
     import croissant.jax as crojax
     from functools import partial
     import s2fft
+
+    def hp_packed_alm_to_flm_2d(alm_1d):
+        return np.asarray(
+            s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(alm_1d), lmax + 1)
+        )
 
     if config_path is None:
         config_path = os.path.join(
@@ -201,7 +205,7 @@ def run_comparison(config_path=None):
     print("\n" + "=" * 60)
     print("STEP 3: Beam healpy -> 2D (monopole)")
     print("=" * 60)
-    beam_2d = np.stack([healpy_packed_alm_to_croissant_2d(br_, lmax) for br_ in beamreal])
+    beam_2d = np.stack([hp_packed_alm_to_flm_2d(br_) for br_ in beamreal])
     beam_mono = np.asarray(beam_2d[:, 0, lmax])
     print(f"  Beam monopole (first combo): {beam_mono[:3]} ...")
 
@@ -223,7 +227,7 @@ def run_comparison(config_path=None):
     sky_rot_default = [rot.rotate_alm(s_) for s_ in sky_alm_raw]
     sky_rot0_mono = np.array([s[hp.sphtfunc.Alm.getidx(lmax, 0, 0)] for s in sky_rot_default])
     # Cro: sky in MCMF (gal2mcmf); at t=0 phases[0] is applied in convolve
-    sky_2d = np.stack([healpy_packed_alm_to_croissant_2d(s_, lmax) for s_ in sky_alm_raw])
+    sky_2d = np.stack([hp_packed_alm_to_flm_2d(s_) for s_ in sky_alm_raw])
     sky_2d_j = jnp.array(sky_2d)
     eul_gal, dl_gal = crojax.rotations.generate_euler_dl(lmax, "galactic", "mcmf")
     gal2mcmf = partial(
@@ -244,7 +248,7 @@ def run_comparison(config_path=None):
         mean_alm(br_, sr_, lmax) * (4 * np.pi)
         for br_, sr_ in zip(beamreal, sky_rot_default)
     ])
-    sky_2d_rot = np.stack([healpy_packed_alm_to_croissant_2d(s_, lmax) for s_ in sky_rot_default])
+    sky_2d_rot = np.stack([hp_packed_alm_to_flm_2d(s_) for s_ in sky_rot_default])
     vis_raw = crojax.simulator.convolve(
         jnp.array(beam_2d), jnp.array(sky_2d_rot),
         jnp.ones((1, 2 * lmax + 1), dtype=jnp.complex128),

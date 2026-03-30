@@ -6,7 +6,6 @@ from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, get_topo_z_rotation_angles
 import numpy as np
-import healpy as hp
 import fitsio
 import sys
 import os
@@ -24,28 +23,6 @@ crojax.simulator.convolve). Freq, time range, and antenna location come from
 the observation object (config). Croissant currently supports single
 polarization / single dipole per beam; one beam combination at a time
 """
-
-
-def healpy_packed_alm_to_croissant_2d(packed_alm, lmax):
-    """
-    Convert healpy packed alm (1D complex) to croissant (l, m) 2D format.
-    Output shape (lmax+1, 2*lmax+1) with m_index = m + lmax (m from -lmax to lmax).
-    Healpy stores only m >= 0; negative m are filled via a_l,-m = (-1)^m conj(a_lm).
-
-    :param packed_alm: 1D complex array, healpy convention (e.g. from Beam.get_healpix_alm).
-    :param lmax: Maximum l.
-    :returns: 2D complex array shape (lmax+1, 2*lmax+1).
-    """
-    out = np.zeros((lmax + 1, 2 * lmax + 1), dtype=np.complex128)
-    for ell in range(lmax + 1):
-        for m in range(0, ell + 1):
-            idx = hp.sphtfunc.Alm.getidx(lmax, ell, m)
-            val = packed_alm[idx]
-            out[ell, lmax + m] = val
-            if m > 0:
-                out[ell, lmax - m] = (-1) ** m * np.conj(val)
-    return out
-
 
 
 class CroSimulator(SimulatorBase):
@@ -124,7 +101,10 @@ class CroSimulator(SimulatorBase):
         )
         sky_gal = self.sky_model.get_alm(self.freq_ndx_sky, self.freq)
         sky_2d = np.stack([
-            healpy_packed_alm_to_croissant_2d(s_, self.lmax) for s_ in sky_gal
+            np.asarray(
+                s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(s_), sim_L)
+            )
+            for s_ in sky_gal
         ])
         et = cro.rotations.jd_to_et(times[0].jd)
         sky_mepa = cro.rotations.gal2mepa(sky_2d, et=et)
@@ -138,7 +118,12 @@ class CroSimulator(SimulatorBase):
         plot_done = False
         for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
             beam_2d = np.stack([
-                healpy_packed_alm_to_croissant_2d(br_, self.lmax) for br_ in beamreal
+                np.asarray(
+                    s2fft.sampling.reindex.flm_hp_to_2d_fast(
+                        jnp.asarray(br_), sim_L
+                    )
+                )
+                for br_ in beamreal
             ])
             beam_mepa = jax.vmap(topo2mepa)(jnp.array(beam_2d))
             if self.extra_opts.get("plot_sky_and_beam") and not plot_done:
@@ -170,7 +155,12 @@ class CroSimulator(SimulatorBase):
             combo_results.append((T, None))
             if ci != cj:
                 beamimag_2d = np.stack([
-                    healpy_packed_alm_to_croissant_2d(bi_, self.lmax) for bi_ in beamimag
+                    np.asarray(
+                        s2fft.sampling.reindex.flm_hp_to_2d_fast(
+                            jnp.asarray(bi_), sim_L
+                        )
+                    )
+                    for bi_ in beamimag
                 ])
                 beamimag_mepa = jax.vmap(topo2mepa)(jnp.array(beamimag_2d))
                 vis_imag = crojax.simulator.convolve(beamimag_mepa, sky_mepa, phases)
