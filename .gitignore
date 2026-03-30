@@ -10,3 +10,4 @@
 !docker/*
 !simulation/driver/*.py
 !setup_env.sh
+setup_env.local.sh

@@ -23,8 +23,12 @@ ljupyter_dev() { port=9600; docker run  -e HOME $PYTHON_SETUP $DEV_MOUNT -w $PWD
 
 # For your own environment, set these variables as shown in these examples
 
-LUSEEPY_PATH="/Users/akshatha.vydula/lusee/luseepy"
-REFSPEC_PATH="/Users/akshatha.vydula/lusee/luseepy"
-LUSEE_DRIVE_DIR="/Users/akshatha.vydula/Google Drive/Shared drives/LuSEE-Night"
-LUSEE_OUTPUT_DIR="/Users/akshatha.vydula/lusee/luseepy/simulation/output"
-CORELOOP_DIR="/Users/akshatha.vydula/lusee/coreloop"
+# LUSEEPY_PATH="/home/user/work/lusee/luseepy"
+# REFSPEC_PATH="/home/user/work/lusee/luseepy"
+# LUSEE_DRIVE_DIR="/home/user/work/lusee/Drive/"
+# LUSEE_OUTPUT_DIR="/home/user/work/lusee/luseepy/simulation/output" 
+
+# load machine-specific overrides
+if [ -f "$(dirname "${BASH_SOURCE[0]}")/setup_env.local.sh" ]; then
+    source "$(dirname "${BASH_SOURCE[0]}")/setup_env.local.sh"
+fi
