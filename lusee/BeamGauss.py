@@ -3,21 +3,21 @@ import numpy as np
 
 def gauss_beam(dec,phi,sigma, dec_c,phi_c=0.):
     """
+
     Function that creates a map-level gaussian beam in theta and phi of width sigma, centered at theta=theta_c and phi=phi_c.
-   
-    :param theta: Array of theta coordinates
-    :type theta: array
-    :param phi: Array of phi coordinates
+    E = 0 deg, N = 90 deg (topocentric frame)
+
+    :param dec: altitide in radians (angle above the local horizon)
+    :type dec: array
+    :param phi: azimuth in radians (angle around the local horizon)
     :type phi: array
+   
     :param sigma: Beam width (standard deviation)
     :type sigma: float
-    :param theta_c: Beam center theta
-    :type theta_c: float
+    :param dec_c: Beam center dec
+    :type dec_c: float
     :param phi_c: Beam center phi
     :type phi_c: float
-    
-    :returns: Gaussian beam in theta and phi
-    :rtype: array
     """
     
     vec  = [np.cos(dec)*np.cos(phi), np.cos(dec)*np.sin(phi), np.sin(dec)]

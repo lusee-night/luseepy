@@ -9,6 +9,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import healpy as hp
 from scipy.special import sph_harm_y
 from scipy.ndimage import gaussian_filter
+from scipy.interpolate import RegularGridInterpolator
 from pyshtools.legendre import legendre
 import os
 
@@ -535,7 +536,7 @@ class Beam:
             the broadcast shape of the inputs.
         :rtype: tuple(callable, callable)
         """
-        from scipy.interpolate import RegularGridInterpolator
+        
 
         scale = np.sqrt(self.gain_conv)[:, None, None]          # (Nfreq, 1, 1)
         Et = (self.Etheta * scale).transpose(1, 2, 0)           # (Ntheta, Nphi, Nfreq)
