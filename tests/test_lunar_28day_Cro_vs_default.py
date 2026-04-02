@@ -115,6 +115,14 @@ def test_lunar_day_28_single_source():
     cro_sim.write_fits(os.path.join(out_dir, "sim_output_cro_singlepixel_28days.fits"))
     def_sim.write_fits(os.path.join(out_dir, "sim_output_default_singlepixel_28days.fits"))
 
+    assert cro_sim.result.shape == def_sim.result.shape
+
+    np_cro_result = np.asarray(cro_sim.result)
+    np_def_result = np.asarray(def_sim.result)
+    diff_norm = np.linalg.norm(np_cro_result - np_def_result)
+    rel = diff_norm / np.linalg.norm(np_def_result)
+    assert rel < 5e-3
+
 
 if __name__ == "__main__":
     test_lunar_day_28_single_source()
