@@ -1,3 +1,5 @@
+# Starter config aligned with sim_choice_realistic.yaml / run_Cro_sim.py pipeline.
+# Engine: croissant (requires croissant-sim + s2fft; see pyproject optional deps).
 paths:
   lusee_drive_dir: $LUSEE_DRIVE_DIR
   sky_dir: Simulations/SkyModels
@@ -34,7 +36,7 @@ observation:
   lat: -10
   beams: [ N, S, E, W ]
   lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
-  dt: 24*3600 
+  dt: 3600
   Tground: 0
   lmax: 32
   combinations: all
@@ -44,5 +46,13 @@ observation:
     step: 4
 
 simulation:
+  engine: croissant
+  # CI and SimReadTest expect this filename; sim_choice_realistic omits output
+  # and uses the driver default name instead.
   output: sim_example.fits
-  cache_transform: lunar_day.pickle  
+  cache_transform: lunar_day.pickle
+  plot_sky_and_beam: true
+  # Must satisfy 0 <= freq_idx_plot < number of frequency bins (see observation.freq).
+  freq_idx_plot: 0
+  plot_dir: simulation/output/figures
+  plot_filename: sim_example_sky_beam.png

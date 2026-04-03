@@ -3,48 +3,48 @@ import numpy as np
 
 def gauss_beam(theta,phi,sigma, theta_c,phi_c=0.):
     """
-    Function that creates a map-level gaussian beam in theta and phi of width sigma, centered at theta=theta_c and phi=phi_c.
-    Uses a naive gaussian function, with wrap around for theta, and phi. Used by BeamGauss class to create a Gaussiam Beam object.
 
-    :param theta: Array of theta coordinates
+    Function that creates a map-level gaussian beam in theta and phi of width sigma, centered at theta=theta_c and phi=phi_c.
+    E = 0 deg, N = 90 deg (topocentric frame)
+
+    :param theta: theta in radians (from local zenith)
     :type theta: array
-    :param phi: Array of phi coordinates
+    :param phi: azimuth in radians (angle around the local zenith, with E=0, N=90)
     :type phi: array
+   
     :param sigma: Beam width (standard deviation)
     :type sigma: float
     :param theta_c: Beam center theta
     :type theta_c: float
     :param phi_c: Beam center phi
     :type phi_c: float
-    
-    :returns: Gaussian beam in theta and phi
-    :rtype: array
     """
     
-    phiprime=np.min((phi-phi_c,2*np.pi-phi+phi_c),axis=0) #phi wrap around
-    norm=1. #beam E^2 is not normalized, E^2*gain_conv is normalized
+    vec  = [np.sin(theta)*np.cos(phi), np.sin(theta)*np.sin(phi), np.cos(theta)]
+    vec_c= [np.sin(theta_c)*np.cos(phi_c), np.sin(theta_c)*np.sin(phi_c), np.cos(theta_c)]
+    cos_angle = vec[0]*vec_c[0] + vec[1]*vec_c[1] + vec[2]*vec_c[2]
+    return np.exp(- (np.arccos(cos_angle))**2/(2*sigma**2))
 
-    return norm*np.exp(- (theta-theta_c)**2/(2*sigma**2)) * np.exp(- (phiprime)**2/(2*(sigma/np.cos(theta))**2))
-    
+
 
 class BeamGauss(Beam):
     """
-    Class that creates a Gaussian Beam object, centered at the given declination (and phi=360-azimuth=0) and of width sigma. 
+    Class that creates a Gaussian Beam object, centered at the given altitude and azimuth and of width sigma. 
 
     :param Beam: Beam object
     :type Beam: class
-    :param dec_deg: Declination of the center of the gaussian beam, in degrees 
-    :type dec_deg: float
+    :param alt_deg: Altitude of the center of the gaussian beam, in degrees 
+    :type alt_deg: float
+    :param az_deg: Azimuth of the center of the gaussian beam, in degrees, az=0->E, az=90->N
+    :type az_deg: float
     :param sigma_deg: Sigma of the gaussian beam at 1MHz, in degrees 
-    :type dec_deg: float
-    :param phi_deg: Phi center of the gaussian beam, in degrees, phi=0->E, phi=90->N
-    :type phi_deg: float
+    :type sigma_deg: float
     :param one_over_freq_scaling: Whether to scale beam sigma with 1/f
     :type one_over_freq_scaling: bool
     :param id: ID string for beam, optional
     :type id: str
     """
-    def __init__ (self, dec_deg, sigma_deg, phi_deg=90, one_over_freq_scaling=False, id = None):     
+    def __init__ (self, alt_deg, az_deg=0, sigma_deg=20.0, one_over_freq_scaling=False, id = None):     
         self.version=2.1 #what should this be? 
         # v1 so that self.freq=np.linspace as below
         # >v2 so that self.ground_fraction() can be calculated
@@ -83,18 +83,19 @@ class BeamGauss(Beam):
 
         #convert to radians and create meshgrid
         sigma=np.deg2rad(sigma_deg)
-        dec=np.deg2rad(dec_deg)
-        phi_rad=np.deg2rad(phi_deg)
-        self.declination=np.pi/2 - self.theta
-        Phi,Declination=np.meshgrid(self.phi,self.declination)
+        alt_rad=np.deg2rad(alt_deg)
+        az_rad=np.deg2rad(az_deg)
+        phi_rad = (np.pi/2 - az_rad) 
+        theta_rad = np.pi/2 - alt_rad   
+        Phi,Theta=np.meshgrid(self.phi,self.theta)
 
         if one_over_freq_scaling: #slow code, hence separate
             for f,freq in enumerate(self.freq):
                 #scale sigma with 1/freq
                 sigma_freq=sigma*(10.0/freq) if one_over_freq_scaling else sigma
                 
-                #create gauss beam centered at declination=dec and phi=0 of width sigma_freq
-                beam=gauss_beam(Declination,Phi,sigma_freq,dec,phi_rad).astype(complex)
+                #create gauss beam centered at altitude=alt and azimuth=az of width sigma_freq
+                beam=gauss_beam(Theta,Phi,sigma_freq,theta_rad,phi_rad).astype(complex)
                 assert(beam.shape==self.Etheta[f,:,:].shape)
                 self.Etheta[f,:,:]=beam
 
@@ -102,8 +103,8 @@ class BeamGauss(Beam):
                 factor=(dA_theta[:,None]*self.power()[f,:,:-1]).sum()/(4*np.pi)
                 self.gain_conv[f]/=factor
         else:
-            #create gauss beam centered at declination=dec and phi=0 of width sigma
-            beam=gauss_beam(Declination,Phi,sigma,dec,phi_rad).astype(complex)
+            #create gauss beam centered at altitude=alt and azimuth=az of width sigma
+            beam=gauss_beam(Theta,Phi,sigma,theta_rad,phi_rad).astype(complex)
             assert(beam.shape==self.Etheta[0,:,:].shape)
             for f,freq in enumerate(self.freq):
                 self.Etheta[f,:,:]=beam

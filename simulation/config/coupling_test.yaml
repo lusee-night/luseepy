@@ -45,6 +45,8 @@ observation:
 
 simulation:
   output: output/coupling_test.fits
+
+engine: luseepy
   
 
   

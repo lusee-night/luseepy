@@ -1,0 +1,27 @@
+paths:
+  lusee_drive_dir: $LUSEE_DRIVE_DIR
+  beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith
+  output_dir: $LUSEE_OUTPUT_DIR
+
+beam_config:
+  type: Gaussian          # no FITS needed for the example
+
+beams:
+  N: {declination: 0, sigma: 20}
+  E: {declination: 0, sigma: 20, angle: 90}
+  S: {declination: 0, sigma: 20, angle: 180}
+  W: {declination: 0, sigma: 20, angle: 270}
+
+satellite:
+  # Orbital parameters (defaults match lusee.Satellite defaults)
+  tone_freqs: [10.0, 12.0, 14.0, 16.0, 18.0, 20.0]  # MHz
+  tone_amplitude: 200.0                                 # same units as sky temperature
+
+observation:
+  lunar_day: 2501
+  dt: 600                 # seconds
+  long: 182.258
+  lat: -23.814
+
+simulation:
+  output: calibrator_sim.fits
