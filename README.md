@@ -12,47 +12,29 @@ This software is documented on the ["Read the Docs" pages](https://luseepy.readt
 
 There are datasets stored in the LuSEE-Night [Google Drive](https://drive.google.com/drive/folders/0AM52i9DVjqkAUk9PVA).
 
-## Docker
-For details, see the [README](docker/README.md) file in the `docker` folder. The current setup
-involves building the _luseepy_ image based on the _refspec_ image. The latter contains C++ based
-software interfaces by means of the _cppyy_ package.
+## Docker (deprecated)
+
+The Docker-based workflow is **deprecated**. Prefer a local Python environment (see [Developing](#developing)). Legacy build notes remain under [`docker/README.md`](docker/README.md) for reference only.
 
 ## Developing
 
-To develop on your laptop, the easiest thing is to use the latest docker environment.
-Please install docker and pull the image
+Use a virtual environment and an editable install from the `luseepy` repository root:
 
-```
-docker pull lusee/lusee-night-unity-luseepy:1.0 # or other appropriate version.
-```
-Next, checkout the lusee repo
-```
+```bash
 git clone git@github.com:lusee-night/luseepy.git
+cd luseepy
+python -m venv .venv
+source .venv/bin/activate   # or appropriate activate script on your OS
+pip install -e ".[dev]"
 ```
 
-Next, source the `setup_env.sh` script inside luseepy dir and even better, put it into your `.bashrc`.
+Set the environment variables in [Environment variables](#environment-variables) (at minimum `LUSEE_DRIVE_DIR` when running simulations that need Drive data). Run tests or scripts with `python` directly, for example:
 
-```
-source setup_env.sh
+```bash
+python tests/LunarCalendarTest.py
 ```
 
-Now you have 4 utility functions:
- * `lpython` starts runs python using shipped luseepy (unless one is in current dir)
- * `lpython_dev` starts runs python using git checkout luseepy 
- * `ljupyter` starts jupyter notebook using shipped luseepy on port 9500
- * `ljupyter_dev` starts jupyter notebook using git checkout luseepy on port 9600
- 
-To better understand the settings, it's worth it to take a look at the contents of `setup_env.sh`.
-In the current version, the `HOME` directory is mounted in the container, so it's possible to
-develop against the full current version of the luseepy/refspec suite. For example, you can now try running
-
-```
-# Simple calendar test
-lpython tests/LunarCalendarTest.py
-# to start jupyter
-ljupyter
-```
-and then connect to the address given in the terminal output.
+If you still use the legacy `setup_env.sh` helpers (`lpython`, `ljupyter`, etc.), they assume Docker and `LUSEE_IMAGE`; that path is unmaintained.
 
 ## Environment variables
 
@@ -61,16 +43,14 @@ User is expected to set up the following environment variables:
  * `LUSEEPY_PATH` -- path to the luseepy checkout
  * `LUSEEOPSIM_PATH` -- path to the lusee opsim package (if used).
  * `LUSEE_DRIVE_DIR` -- path to the checkout of the LuSEE-Night Google Drive
- 
-The following environment variables are set up by the `setup_env.sh` script:
 
- * `LUSEE_IMAGE` -- docker image that has everything to run lusee
+The legacy `setup_env.sh` script may also define `LUSEE_IMAGE` (Docker image name); it is only relevant if you use the deprecated container workflow.
 
 
 
 ## Singularity
 
-__NB. The example below corresponds to an early verion of software, and reference to the image below is deprected.__
+__NB. The example below corresponds to an early version of software, and reference to the image below is deprecated.__
 
 The `tests` folder contains CI-related and other testing scripts. Here's an example
 of a simple test run with Singularity, on a SDCC/BNL node, from the `luseepy` folder:
@@ -84,12 +64,11 @@ singularity exec -B /direct/phenix+u/mxmp/projects/luseepy --env PYTHONPATH=/dir
 
 Cutting a new version entails:
  * having a clean (non dev) version in `__init__.py`
- * updating `setup_env.sh`
+ * updating `setup_env.sh` (if still in use)
  * tagging the github
- * making new docker image
  * bumping version again in `__init__.py` to a +0.1 and a dev
  
-Any small fixes after the fact should be cumping version by 0.01.
+Any small fixes after the fact should be bumping version by 0.01.
 Large changes that break API should bump version into next integer.
 
 
@@ -101,11 +80,31 @@ Go to `simulation` sub-directory. Make sure the `$LUSEE_DRIVE_DIR` points to the
 python driver/run_sim.py config/realistic_example.yaml
 ```
 
+### Simulation engine (`simulation.engine`)
+
+The driver selects the back end from the YAML **engine** keyword. You may set either top-level `engine` or `simulation.engine` (top-level wins if both are present).
+
+| Config value | Back end |
+| --- | --- |
+| `croissant` | [CROISSANT](https://github.com/christianhbye/croissant) (spherical-harmonics / JAX) via `lusee.CroSimulator` |
+| `luseepy` | Built-in `lusee.DefaultSimulator` |
+| `default`, `lusee`, `numpy` | Same as `luseepy` (aliases) |
+
+Croissant requires compatible installs of `croissant-sim` and `s2fft` (see `pyproject.toml`). Example:
+
+```yaml
+simulation:
+  engine: croissant
+  output: sim_example.fits
+```
+
+See `simulation/config/example.yaml` and `simulation/config/sim_choice_realistic.yaml` for full examples.
+
 In the same directory, open a jupyter notebook and plot the results for the NE cross-correlation, imaginary part as:
 ```
 import lusee
 D=lusee.Data('output/sim_output.fits')
-plt.imshow(D[:,'01I',:],aspect='auto',extent=(D.freq[0], D.freq[-1],len(D.times),0))
+plt.imshow(D[:,'01I',:],aspect='auto',extent=(D.freq[0],D.freq[-1],len(D.times),0))
 plt.colorbar()
 plt.xlabel('frequency (MHz)')
 plt.ylabel('time number')
