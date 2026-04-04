@@ -1,25 +1,17 @@
 #
 # LuSEE Beam
 #
-
-from functools import partial
-import os
-
-os.environ["JAX_ENABLE_X64"] = "True"
-
 import fitsio
 import numpy as np
-import jax
-import jax.numpy as jnp
 import copy
 import matplotlib.pyplot as plt
-from jax.scipy.special import sph_harm_y as jax_sph_harm_y
-from jax.tree_util import register_pytree_node_class
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import healpy as hp
 from scipy.special import sph_harm_y
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import RegularGridInterpolator
+from pyshtools.legendre import legendre
+import os
 
 
 def getLegendre(lmax, theta):
@@ -36,44 +28,10 @@ def getLegendre(lmax, theta):
     
     """
     
-    # The current pyshtools-based output matches spherical harmonics evaluated at
-    # phi = 0 for m >= 0, arranged in [l, m] layout.
-    m_idx, l_idx = jnp.triu_indices(lmax + 1)
-    values = jax_sph_harm_y(
-        l_idx,
-        m_idx,
-        jnp.full_like(l_idx, theta, dtype=jnp.asarray(theta).dtype),
-        jnp.zeros_like(m_idx, dtype=jnp.asarray(theta).dtype),
-        n_max=lmax,
-    )
-    return jnp.zeros((lmax + 1, lmax + 1), dtype=values.dtype).at[l_idx, m_idx].set(values.real)
-
-
-@partial(jax.jit, static_argnums=(3,))
-def _grid2healpix_alm_fast_impl(theta, phi, img, lmax):
-    dtheta = theta[1] - theta[0]
-    dA_theta = jnp.sin(theta) * dtheta
-    nphi = phi.shape[0]
-
-    rimg = jnp.fft.rfft(img, axis=1)
-    if rimg.shape[1] < lmax + 1:
-        rimg = jnp.pad(rimg, ((0, 0), (0, lmax + 1 - rimg.shape[1])))
-    else:
-        rimg = rimg[:, : lmax + 1]
-
-    legendre_values = jax.vmap(getLegendre, in_axes=(None, 0))(lmax, theta)
-    m_idx, l_idx = jnp.triu_indices(lmax + 1)
-    coeffs = rimg[:, m_idx] * legendre_values[:, l_idx, m_idx] * dA_theta[:, None]
-    return coeffs.sum(axis=0) * (2 * jnp.pi / nphi)
-
-
-@partial(jax.jit, static_argnums=(3,))
-def _grid2healpix_alm_batch(theta, phi, power_map_batch, lmax):
-    return jax.vmap(lambda power_map: _grid2healpix_alm_fast_impl(theta, phi, power_map, lmax))(power_map_batch)
-
-
-def _to_python_scalar(value):
-    return value.item() if isinstance(value, np.generic) else value
+    L=legendre(lmax,np.cos(theta),normalization='ortho')
+    L[:,1:]/=np.sqrt(2) # m>0 divide by sqrt(2)
+    L[:,1::2]*=-1 # * (-1)**m
+    return L
 
 
 def grid2healpix_alm_reference(theta,phi, img, lmax):
@@ -96,18 +54,18 @@ def grid2healpix_alm_reference(theta,phi, img, lmax):
     lmax = lmax + 1 ## different conventions
     dphi = phi[1]-phi[0]
     dtheta = theta[1]-theta[0]
-    dA_theta = jnp.sin(theta)*dtheta*dphi
-    #alm = jnp.zeros((lmax,lmax),complex)
-    ell = jnp.arange(lmax)
-    theta_list, phi_list = jnp.meshgrid(theta,2*jnp.pi-phi)
+    dA_theta = np.sin(theta)*dtheta*dphi
+    #alm = np.zeros((lmax,lmax),complex)
+    ell = np.arange(lmax)
+    theta_list, phi_list = np.meshgrid(theta,2*np.pi-phi)
     mmax = lmax
     alm = []
     for m in range(lmax):
         for l in range(m,lmax):        
             harm = sph_harm_y (l, m, theta_list, phi_list)
-            assert(not jnp.any(jnp.isnan(harm)))
+            assert(not np.any(np.isnan(harm)))
             alm.append((img*harm.T*dA_theta[:,None]).sum())
-    alm = jnp.array(alm)
+    alm = np.array(alm)
     return alm
 
 
@@ -128,7 +86,24 @@ def grid2healpix_alm_fast(theta,phi, img, lmax):
     :rtype: numpy array
     """
     
-    return _grid2healpix_alm_fast_impl(theta, phi, img, lmax)
+    # lmax has different definitions
+    dtheta = theta[1]-theta[0]
+    dA_theta = np.sin(theta)*dtheta
+    Nphi = len(phi)
+    Ntheta = len(theta)
+    #alm = np.zeros((lmax,lmax),complex)
+    ell = np.arange(lmax)
+    rimg = np.fft.rfft(img,axis=1)
+    mmax = rimg.shape[1]
+    if mmax<lmax:
+        rimg = np.hstack((rimg,np.zeros((Ntheta,lmax-mmax+1),complex)))
+    alm = np.zeros(lmax*(lmax+1)//2+lmax+1,complex)
+    for th_data, th, dA in zip(rimg,theta,dA_theta):
+        L = getLegendre(lmax+1,th)
+        contr = np.hstack([th_data[m]*L[m:lmax+1,m]*dA for m in range(lmax+1)])
+        alm += contr
+    alm*=(2*np.pi/Nphi)
+    return alm
 
 
 def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
@@ -178,25 +153,24 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
     #create projection matrices
     theta = theta
     phi= phi
-    sin = jnp.sin
-    cos = jnp.cos
-    rad = jnp.array([ sin(theta[:,None])*cos(phi[None,:]), sin(theta[:,None])*sin(phi[None,:]),
-                     -cos(theta[:,None])*jnp.ones(self.Nphi)[None,:]])
-    tphi =  jnp.array([-sin(phi), +cos(phi)])
-    ttheta = jnp.array([ cos(theta[:,None])*cos(phi[None,:]), cos(theta[:,None])*sin(phi[None,:]),
-                     +sin(theta[:,None])*jnp.ones(self.Nphi)[None,:]])
+    sin = np.sin
+    cos = np.cos
+    rad = np.array([ sin(theta[:,None])*cos(phi[None,:]), sin(theta[:,None])*sin(phi[None,:]),
+                     -cos(theta[:,None])*np.ones(self.Nphi)[None,:]])
+    tphi =  np.array([-sin(phi), +cos(phi)])
+    ttheta = np.array([ cos(theta[:,None])*cos(phi[None,:]), cos(theta[:,None])*sin(phi[None,:]),
+                     +sin(theta[:,None])*np.ones(self.Nphi)[None,:]])
 
-    Erad = jnp.einsum('fijk,kij->fij',E,rad)
-    Etheta = jnp.einsum('fijk,kij->fij',E,ttheta)
-    Ephi = jnp.einsum('fijk,kj->fij',E[:,:,:,:2],tphi)
-    Emag2 = (jnp.abs(self.E)**2).sum(axis=3)
-    assert(abs(Emag2-jnp.abs(Erad)**2-jnp.abs(Etheta)**2-jnp.abs(Ephi)**2).max()<1e-4)
-    #print ((jnp.abs(Erad)/jnp.sqrt(Emag2)).max())
-    assert(jnp.all(jnp.abs(Erad)/jnp.sqrt(Emag2)<1e-4))
+    Erad = np.einsum('fijk,kij->fij',E,rad)
+    Etheta = np.einsum('fijk,kij->fij',E,ttheta)
+    Ephi = np.einsum('fijk,kj->fij',E[:,:,:,:2],tphi)
+    Emag2 = (np.abs(self.E)**2).sum(axis=3)
+    assert(abs(Emag2-np.abs(Erad)**2-np.abs(Etheta)**2-np.abs(Ephi)**2).max()<1e-4)
+    #print ((np.abs(Erad)/np.sqrt(Emag2)).max())
+    assert(np.all(np.abs(Erad)/np.sqrt(Emag2)<1e-4))
     return Etheta, Ephi
 
 
-@register_pytree_node_class
 class Beam:
     """
     The main beam class, contains beam data and meta parameters. Only filename of beam to load and ID string are explicitly set in class initialization. All others are normally read in from the beam FITS file, but are included here in documentation for completeness.
@@ -263,120 +237,40 @@ class Beam:
             stop()
         header = dict(fitsio.read_header(fname))
         fits = fitsio.FITS(fname,'r')
-        version = _to_python_scalar(header['VERSION'])
+        version = header['VERSION']
         self.id = id
         self.version = version
-        self.Etheta = jnp.asarray(fits['Etheta_real'].read()) + 1j*jnp.asarray(fits['Etheta_imag'].read())
-        self.Ephi = jnp.asarray(fits['Ephi_real'].read()) + 1j*jnp.asarray(fits['Ephi_imag'].read())
-        self.ZRe = jnp.asarray(fits['Z_real'].read())
-        self.ZIm = jnp.asarray(fits['Z_imag'].read())
+        self.Etheta = fits['Etheta_real'].read() + 1j*fits['Etheta_imag'].read()
+        self.Ephi = fits['Ephi_real'].read() + 1j*fits['Ephi_imag'].read()
+        self.ZRe = fits['Z_real'].read()
+        self.ZIm = fits['Z_imag'].read()
         self.Z = self.ZRe + 1j*self.ZIm
-        self.gain = jnp.asarray(fits['gain'].read()) if 'gain' in fits else None
+        self.gain = fits['gain'].read() if 'gain' in fits else None
         if version==1:
-            self.f_ground = jnp.asarray(fits['f_ground'].read())
+            self.f_ground = fits['f_ground'].read()
         elif version==2:
-            self.gain_conv = jnp.asarray(fits['gain_conv'].read())
-            self.freq = jnp.asarray(fits['freq'].read())
+            self.gain_conv = fits['gain_conv'].read()
+            self.freq = fits['freq'].read()
             
-        self.freq_min = float(header['FREQ_MIN'])
-        self.freq_max = float(header['FREQ_MAX'])
-        self.Nfreq = int(header['FREQ_N'])
-        self.theta_min = float(header['THETA_MIN'])
-        self.theta_max = float(header['THETA_MAX'])
-        self.Ntheta = int(header['THETA_N'])
-        self.phi_min = float(header['PHI_MIN'])
-        self.phi_max = float(header['PHI_MAX'])
-        self.Nphi = int(header['PHI_N'])
+        self.freq_min = header['FREQ_MIN']
+        self.freq_max = header['FREQ_MAX']
+        self.Nfreq = header['FREQ_N']
+        self.theta_min = header['THETA_MIN']
+        self.theta_max = header['THETA_MAX']
+        self.Ntheta = header['THETA_N']
+        self.phi_min = header['PHI_MIN']
+        self.phi_max = header['PHI_MAX']
+        self.Nphi = header['PHI_N']
         self.header = header
         if version==1:
-            self.freq = jnp.linspace(self.freq_min, self.freq_max,self.Nfreq)
-        self.theta_deg = jnp.linspace(self.theta_min, self.theta_max,self.Ntheta)
-        self.phi_deg = jnp.linspace(self.phi_min, self.phi_max,self.Nphi)
-        self.theta = self.theta_deg/180*jnp.pi
-        self.phi = self.phi_deg/180*jnp.pi
+            self.freq = np.linspace(self.freq_min, self.freq_max,self.Nfreq)
+        self.theta_deg = np.linspace(self.theta_min, self.theta_max,self.Ntheta)
+        self.phi_deg = np.linspace(self.phi_min, self.phi_max,self.Nphi)
+        self.theta = self.theta_deg/180*np.pi
+        self.phi = self.phi_deg/180*np.pi
         if (self.phi_max != 360) or (self.phi_min != 0):
             print("Code might implicitly assume phi wraparound ... use with care.")
         assert (self.Etheta.shape == (self.Nfreq,self.Ntheta,self.Nphi))
-
-    def tree_flatten(self):
-        children = (
-            self.Etheta,
-            self.Ephi,
-            self.ZRe,
-            self.ZIm,
-            getattr(self, "gain", None),
-            getattr(self, "gain_conv", None),
-            getattr(self, "f_ground", None),
-            self.freq,
-        )
-        aux_data = (
-            self.id,
-            self.version,
-            self.freq_min,
-            self.freq_max,
-            self.Nfreq,
-            self.theta_min,
-            self.theta_max,
-            self.Ntheta,
-            self.phi_min,
-            self.phi_max,
-            self.Nphi,
-        )
-        return children, aux_data
-
-    @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        (
-            id_,
-            version,
-            freq_min,
-            freq_max,
-            Nfreq,
-            theta_min,
-            theta_max,
-            Ntheta,
-            phi_min,
-            phi_max,
-            Nphi,
-        ) = aux_data
-        (
-            Etheta,
-            Ephi,
-            ZRe,
-            ZIm,
-            gain,
-            gain_conv,
-            f_ground,
-            freq,
-        ) = children
-
-        beam = cls.__new__(cls)
-        beam.id = id_
-        beam.version = version
-        beam.Etheta = Etheta
-        beam.Ephi = Ephi
-        beam.ZRe = ZRe
-        beam.ZIm = ZIm
-        beam.gain = gain
-        beam.gain_conv = gain_conv
-        beam.f_ground = f_ground
-        beam.freq = freq
-        beam.freq_min = freq_min
-        beam.freq_max = freq_max
-        beam.Nfreq = Nfreq
-        beam.theta_min = theta_min
-        beam.theta_max = theta_max
-        beam.Ntheta = Ntheta
-        beam.phi_min = phi_min
-        beam.phi_max = phi_max
-        beam.Nphi = Nphi
-        beam.header = None
-        beam.Z = beam.ZRe + 1j * beam.ZIm
-        beam.theta_deg = jnp.linspace(theta_min, theta_max, Ntheta)
-        beam.phi_deg = jnp.linspace(phi_min, phi_max, Nphi)
-        beam.theta = beam.theta_deg / 180 * jnp.pi
-        beam.phi = beam.phi_deg / 180 * jnp.pi
-        return beam
         
     def rotate(self,deg):
         """
@@ -397,9 +291,9 @@ class Beam:
         
         if deg==0:
             return self.copy_beam()
-        rad = deg/180*jnp.pi
-        cosrad = jnp.cos(rad)
-        sinrad = jnp.sin(rad)
+        rad = deg/180*np.pi
+        cosrad = np.cos(rad)
+        sinrad = np.sin(rad)
         # some sanity checks
         assert (self.phi_max == 360)
         assert (self.phi_min == 0)
@@ -407,15 +301,15 @@ class Beam:
         assert (deg%phi_step == 0)
         m = int(deg // phi_step)
         if (m<0):
-            Etheta = jnp.concatenate ((self.Etheta[:,:,m-1:],self.Etheta[:,:,1:m]),axis=2)
-            Ephi = jnp.concatenate ((self.Ephi[:,:,m-1:],self.Ephi[:,:,1:m]),axis=2)
+            Etheta = np.concatenate ((self.Etheta[:,:,m-1:],self.Etheta[:,:,1:m]),axis=2)
+            Ephi = np.concatenate ((self.Ephi[:,:,m-1:],self.Ephi[:,:,1:m]),axis=2)
         else:
-            Etheta = jnp.concatenate ((self.Etheta[:,:,m:],self.Etheta[:,:,1:m+1]),axis=2)
-            Ephi = jnp.concatenate ((self.Ephi[:,:,m:],self.Ephi[:,:,1:m+1]),axis=2)
+            Etheta = np.concatenate ((self.Etheta[:,:,m:],self.Etheta[:,:,1:m+1]),axis=2)
+            Ephi = np.concatenate ((self.Ephi[:,:,m:],self.Ephi[:,:,1:m+1]),axis=2)
 
         # No need to rotate in theta  - phi
-        #rotmat = jnp.array(([[cosrad, +sinrad, 0],[-sinrad,cosrad,0],[0,0,1]]))
-        #E = jnp.einsum('fabj,ij->fabi',E,rotmat)
+        #rotmat = np.array(([[cosrad, +sinrad, 0],[-sinrad,cosrad,0],[0,0,1]]))
+        #E = np.einsum('fabj,ij->fabi',E,rotmat)
 
 
         return self.copy_beam(Etheta=Etheta, Ephi=Ephi)
@@ -432,7 +326,7 @@ class Beam:
         m = int(90 // self.phi_step)
         n = int(180 // self.phi_step)
         o = int(270 // self.phi_step)
-        Ephi = jnp.concatenate ((self.Ephi[:,:,n:0:-1],self.Ephi[:,:,self.Nphi:n-1:-1]),axis=2)
+        Ephi = np.concatenate ((self.Ephi[:,:,n:0:-1],self.Ephi[:,:,self.Nphi:n-1:-1]),axis=2)
         #E[:,:,:,0]*=-1 ## X flips over
         return self.copy_beam(E=E)
 
@@ -444,7 +338,7 @@ class Beam:
         :rtype: float
         """
         
-        P = jnp.abs(self.Etheta**2)+jnp.abs(self.Ephi**2)
+        P = np.abs(self.Etheta**2)+np.abs(self.Ephi**2)
         return P
 
     def power_stokes(self, cross=None):
@@ -459,16 +353,16 @@ class Beam:
         """
         
         if cross is None:
-            I = jnp.abs(self.Etheta*self.Etheta)+jnp.abs(self.Ephi*self.Ephi)
-            Q = jnp.abs(self.Etheta**2)-jnp.abs(self.Ephi**2)
-            T = 2*self.Etheta*jnp.conj(self.Ephi)
-            U = jnp.real(T)
-            V = -jnp.imag(T)
+            I = np.abs(self.Etheta*self.Etheta)+np.abs(self.Ephi*self.Ephi)
+            Q = np.abs(self.Etheta**2)-np.abs(self.Ephi**2)
+            T = 2*self.Etheta*np.conj(self.Ephi)
+            U = np.real(T)
+            V = -np.imag(T)
         else:
-            I = self.Etheta*jnp.conj(cross.Etheta) + self.Ephi*jnp.conj(cross.Ephi)
-            Q = self.Etheta*jnp.conj(cross.Etheta) - self.Ephi*jnp.conj(cross.Ephi)
-            U = self.Etheta*jnp.conj(cross.Ephi)+self.Ephi*jnp.conj(cross.Etheta)
-            V = +1j*(self.Etheta*jnp.conj(cross.Ephi)-self.Ephi*jnp.conj(cross.Etheta))
+            I = self.Etheta*np.conj(cross.Etheta) + self.Ephi*np.conj(cross.Ephi)
+            Q = self.Etheta*np.conj(cross.Etheta) - self.Ephi*np.conj(cross.Ephi)
+            U = self.Etheta*np.conj(cross.Ephi)+self.Ephi*np.conj(cross.Etheta)
+            V = +1j*(self.Etheta*np.conj(cross.Ephi)-self.Ephi*np.conj(cross.Etheta))
         return [I,Q,U,V]
 
     
@@ -483,7 +377,7 @@ class Beam:
         :rtype: float
         """
         
-        xP = self.Etheta*jnp.conj(other.Etheta) + self.Ephi*jnp.conj(other.Ephi)
+        xP = self.Etheta*np.conj(other.Etheta) + self.Ephi*np.conj(other.Ephi)
         return xP
 
 
@@ -504,8 +398,9 @@ class Beam:
         gain = xP*self.gain_conv[:,None,None]
         dphi = self.phi[1]-self.phi[0]
         dtheta = self.theta[1]-self.theta[0]
-        dA_theta = jnp.sin(self.theta)*dtheta*dphi
-        return (dA_theta[None, :, None] * gain[:, :, :-1]).sum(axis=(1, 2)) / (4 * jnp.pi)
+        dA_theta = np.sin(self.theta)*dtheta*dphi
+        f_sky = np.array([(dA_theta[:,None]*gain[i,:,:-1]).sum()/(4*np.pi) for i in range(self.Nfreq)])
+        return f_sky
     
     def ground_fraction(self, cross = None):
         """
@@ -554,13 +449,13 @@ class Beam:
             P *= theta_tapr[None,:,None]
         take_zero = False
         
-        flist = range(self.Nfreq) if freq_ndx is None else jnp.atleast_1d(freq_ndx)
+        flist = range(self.Nfreq) if freq_ndx is None else np.atleast_1d(freq_ndx)
         if cross is None:
             result =  [[grid2healpix(self.theta,self.phi[:-1], P_[i,:,:-1], ellmax, Nside) 
                     for i in flist] for P_ in P]
         else:
-            result =  [[grid2healpix(self.theta,self.phi[:-1], jnp.real(P_[i,:,:-1]), ellmax, Nside)
-                +1j*grid2healpix(self.theta,self.phi[:-1], jnp.imag(P_[i,:,:-1]), ellmax, Nside)
+            result =  [[grid2healpix(self.theta,self.phi[:-1], np.real(P_[i,:,:-1]), ellmax, Nside) 
+                +1j*grid2healpix(self.theta,self.phi[:-1], np.imag(P_[i,:,:-1]), ellmax, Nside)
                     for i in flist] for P_ in P]
 
         if not stokes:
@@ -612,13 +507,13 @@ class Beam:
         if taper is not None:
             if taper <= 0:
                 raise ValueError("taper must be positive when provided")
-            gtapr = (jnp.arctan((self.theta - jnp.pi / 2) / taper) / jnp.pi + 0.5) ** 2
+            gtapr = (np.arctan((self.theta - np.pi / 2) / taper) / np.pi + 0.5) ** 2
             tapr = 1.0 - gtapr
             self.Etheta *= tapr[None, :, None]
             self.Ephi *= tapr[None, :, None]
 
         if beam_smooth is not None:
-            beam_sigma = jnp.atleast_1d(beam_smooth)[0]
+            beam_sigma = np.atleast_1d(beam_smooth)[0]
             sigma = (beam_sigma, 0.0, 0.0)
             self.Etheta = gaussian_filter(self.Etheta, sigma)
             self.Ephi = gaussian_filter(self.Ephi, sigma)
@@ -643,7 +538,7 @@ class Beam:
         """
         
 
-        scale = jnp.sqrt(self.gain_conv)[:, None, None]          # (Nfreq, 1, 1)
+        scale = np.sqrt(self.gain_conv)[:, None, None]          # (Nfreq, 1, 1)
         Et = (self.Etheta * scale).transpose(1, 2, 0)           # (Ntheta, Nphi, Nfreq)
         Ep = (self.Ephi   * scale).transpose(1, 2, 0)
 
@@ -658,15 +553,15 @@ class Beam:
 
         def _wrapper(interp):
             def call(alt, az, freq):
-                alt  = jnp.asarray(alt)
-                az   = jnp.asarray(az)
-                freq = jnp.asarray(freq)
+                alt  = np.asarray(alt)
+                az   = np.asarray(az)
+                freq = np.asarray(freq)
                 scalar = alt.ndim == 0 and az.ndim == 0 and freq.ndim == 0
-                shape = jnp.broadcast_shapes(alt.shape, az.shape, freq.shape)
-                theta = (jnp.pi / 2 - jnp.broadcast_to(alt,  shape)).ravel()
-                phi   = (jnp.broadcast_to(az,   shape).ravel()) % (2 * jnp.pi)
-                f     = jnp.broadcast_to(freq, shape).ravel()
-                out   = interp(jnp.stack([theta, phi, f], axis=-1))  # (N,)
+                shape = np.broadcast_shapes(alt.shape, az.shape, freq.shape)
+                theta = (np.pi / 2 - np.broadcast_to(alt,  shape)).ravel()
+                phi   = (np.broadcast_to(az,   shape).ravel()) % (2 * np.pi)
+                f     = np.broadcast_to(freq, shape).ravel()
+                out   = interp(np.stack([theta, phi, f], axis=-1))  # (N,)
                 if scalar:
                     return complex(out[0])
                 return out.reshape(shape)
@@ -682,7 +577,7 @@ class Beam:
         :param freqndx: List of frequency bins to plot. Integer indices, not freq values
         :type freqndx: list(int)
         :param toplot: Optional list of coord arrays to plot, eg. [self.Etheta, self.Ephi]. Defaults to full theta and phi arrays.
-        :type toplot: list[jnp.array[complex]]
+        :type toplot: list[np.array[complex]]
         :param noabs: Whether to plot absolute value of E-field.
         :type noabs: bool
         
@@ -695,7 +590,7 @@ class Beam:
             ax = plt.gca()
             plt.title (['theta','phi'][i])
             toshow = toplot[i] if toplot is not None else [self.Etheta,self.Ephi][i]
-            toshow = jnp.real(toshow[freqndx,:,:,i]) if noabs else jnp.abs(toshow[freqndx,:,:,i])
+            toshow = np.real(toshow[freqndx,:,:,i]) if noabs else np.abs(toshow[freqndx,:,:,i]) 
             im=ax.imshow(toshow,interpolation='nearest',extent=[0,360,180,0],origin='upper')
             divider = make_axes_locatable(ax)
             cax = divider.append_axes("right", size="5%", pad=0.05)
@@ -723,28 +618,31 @@ class Beam:
         :rtype: numpy array or tuple(numpy array, numpy array) or list
         """
 
-        flist = jnp.arange(self.Nfreq) if freq_ndx is None else jnp.atleast_1d(freq_ndx)
+        flist = range(self.Nfreq) if freq_ndx is None else np.atleast_1d(freq_ndx)
         stokes_maps = self.power_stokes(cross=other)
         if return_I_stokes_only:
             stokes_maps = [stokes_maps[0]]
 
         def map_to_alm(power_map):
-            return _grid2healpix_alm_batch(self.theta, self.phi[:-1], power_map[flist, :, :-1], lmax)
+            return np.array([
+                grid2healpix_alm_fast(self.theta, self.phi[:-1], power_map[fi, :, :-1], lmax)
+                for fi in flist
+            ])
 
         result = []
         for stokes_map in stokes_maps:
             if return_complex_components:
-                alm_real = map_to_alm(jnp.real(stokes_map))
-                alm_imag = map_to_alm(jnp.imag(stokes_map)) if jnp.iscomplexobj(stokes_map) else None
+                alm_real = map_to_alm(np.real(stokes_map))
+                alm_imag = map_to_alm(np.imag(stokes_map)) if np.iscomplexobj(stokes_map) else None
                 result.append((alm_real, alm_imag))
             else:
-                if jnp.iscomplexobj(stokes_map):
-                    alm = map_to_alm(jnp.real(stokes_map)) + 1j * map_to_alm(jnp.imag(stokes_map))
+                if np.iscomplexobj(stokes_map):
+                    alm = map_to_alm(np.real(stokes_map)) + 1j * map_to_alm(np.imag(stokes_map))
                 else:
                     alm = map_to_alm(stokes_map)
                 result.append(alm)
 
-        if jnp.isscalar(freq_ndx):
+        if np.isscalar(freq_ndx):
             if return_complex_components:
                 result = [
                     (stokes_result[0][0], None if stokes_result[1] is None else stokes_result[1][0])
