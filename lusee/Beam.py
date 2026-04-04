@@ -254,6 +254,7 @@ class Beam:
     :param phi: Array of phi bins in radians
     :type phi: numpy array
     """
+    is_jax_pytree_beam = True
     
     def __init__ (self, fname = None, id = None):
         if fname is None:

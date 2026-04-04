@@ -18,6 +18,21 @@ class SimDriver(dict):
         self._parse_sky()
         self._parse_beams()
 
+    @staticmethod
+    def _normalize_engine(cfg):
+        engine = cfg.get("simulation", {}).get("engine", "default")
+        e = str(engine).strip().lower()
+        aliases = {
+            "default": "default",
+            "luseepy": "default",
+            "numpy": "default",
+            "jaxsim": "jaxsim",
+            "jax": "jaxsim",
+            "lusee": "jaxsim",
+            "croissant": "croissant",
+        }
+        return aliases.get(e, e)
+
     def _resolve_simulation_paths(self):
         """Turn plot_dir paths relative to the luseepy checkout into absolute paths."""
         sim = self.get("simulation") or {}
@@ -47,6 +62,7 @@ class SimDriver(dict):
         self.freq = np.arange(od['freq']['start'],od['freq']['end'],od['freq']['step'])
 
     def _parse_sky(self):
+        engine = self._normalize_engine(self)
         sky_type = self['sky'].get('type','file')
         if sky_type == 'file':
             fname = os.path.join(self.root,self['paths']['sky_dir'],self['sky']['file'])
@@ -70,12 +86,15 @@ class SimDriver(dict):
             print (f"Using Dark Ages Monopole sky scaled={scaled}, min={nu_min} MHz, rms={nu_rms}MHz,A={A}K")
             self.sky = lusee.sky.DarkAgesMonopole(self.lmax, lmax=self.lmax, freq = self.freq,
                                                   nu_min=nu_min, nu_rms=nu_rms, A=A)
+        if engine == "default":
+            self.sky = lusee.NpWrapper(self.sky)
             
     def _parse_beams(self):
         broot = os.path.join(self.root,self['paths']['beam_dir'])
         beams = []
         bd = self['beams']
         bdc = self['beam_config']
+        engine = self._normalize_engine(self)
         couplings = bdc.get('couplings')
         beam_type = bdc.get('type','fits')
         self.beam_smooth = bdc.get('beam_smooth')
@@ -85,12 +104,14 @@ class SimDriver(dict):
             for b in self['observation']['beams']:
                 cbeam=bd[b]
                 print ("Creating gaussian beam",b,":")
-                B = lusee.BeamGauss(dec_deg=cbeam['declination'],
+                B = lusee.BeamGauss(alt_deg=cbeam['declination'],
                                       sigma_deg=cbeam['sigma'],
                                       one_over_freq_scaling=cbeam['one_over_freq_scaling'], id = b)
                 angle = bdc['common_beam_angle']+cbeam['angle']
                 print ("  rotating: ",angle)
                 B = B.rotate(angle)
+                if engine == "default":
+                    B = lusee.NpWrapper(B)
                 beams.append(B)
         elif beam_type == 'fits':
             for b in self['observation']['beams']:
@@ -110,6 +131,8 @@ class SimDriver(dict):
                 angle = bdc['common_beam_angle']+cbeam.get('angle',0)
                 print ("  rotating: ",angle)
                 B=B.rotate(angle)
+                if engine == "default":
+                    B = lusee.NpWrapper(B)
                 beams.append(B)
         else:
             print ("Beam type unrecognized")
@@ -144,8 +167,7 @@ class SimDriver(dict):
                     for j in range(i, self.Nbeams):
                         combs.append((i, j))
         print(f"{len(combs)} Combinations: ", combs)
-        engine = self["simulation"].get("engine")
-        engine = str(engine).strip().lower()
+        engine = self._normalize_engine(self)
         if engine == "croissant":
             if lusee.CroSimulator is None:
                 raise RuntimeError(
@@ -165,7 +187,7 @@ class SimDriver(dict):
                 extra_opts={**self["simulation"], "plot_sky_and_beam": True},
             )
         elif engine == "default":
-            print("  setting up Default Simulation object...")
+            print("  setting up Default (NumPy) Simulation object...")
             S = lusee.DefaultSimulator(
                 O,
                 self.beams,
@@ -177,8 +199,24 @@ class SimDriver(dict):
                 cross_power=self.couplings,
                 extra_opts={**self["simulation"]},
             )
+        elif engine == "jaxsim":
+            print("  setting up JAX Simulation object...")
+            S = lusee.JaxSimulator(
+                O,
+                self.beams,
+                self.sky,
+                Tground=od["Tground"],
+                combinations=combs,
+                freq=self.freq,
+                lmax=self.lmax,
+                cross_power=self.couplings,
+                extra_opts={**self["simulation"]},
+            )
         else:
-            raise ValueError(f"simulation.engine must be 'Default' or 'Croissant', got: {engine}")
+            raise ValueError(
+                "simulation.engine must be one of {default, luseepy, jaxsim, croissant} "
+                f"(legacy aliases: numpy, jax, lusee), got: {engine}"
+            )
 
         print(f"  Simulating {len(O.times)} timesteps (from observation) x {len(combs)} data products x {len(self.freq)} frequency bins...")
         print("  Simulating...")

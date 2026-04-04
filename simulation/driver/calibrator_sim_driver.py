@@ -48,7 +48,7 @@ class CalibratorSimDriver(dict):
                     id=b,
                 )
                 B = B.rotate(angle)
-                B.taper_and_smooth(taper=taper, beam_smooth=beam_smooth)
+                B = B.taper_and_smooth(taper=taper, beam_smooth=beam_smooth)
                 beams.append(B)
 
         elif beam_type == "fits":
@@ -64,7 +64,7 @@ class CalibratorSimDriver(dict):
                 angle = bdc.get("common_beam_angle", 0) + cbeam.get("angle", 0)
                 print(f"    rotating: {angle}")
                 B = B.rotate(angle)
-                B.taper_and_smooth(taper=taper, beam_smooth=beam_smooth)
+                B = B.taper_and_smooth(taper=taper, beam_smooth=beam_smooth)
                 beams.append(B)
 
         else:

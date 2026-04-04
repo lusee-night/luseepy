@@ -46,4 +46,3 @@ simulation:
   output: sim_output.fits
   cache_transform: lunar_day.pickle  
   plot_sky_and_beam: True
-engine: default

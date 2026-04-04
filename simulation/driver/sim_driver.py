@@ -6,11 +6,13 @@ import numpy as np
 
 class SimDriver(dict):
     def __init__(self, cfg):
-        import lusee
-
-        self._lusee = lusee
         self.update(cfg)
+        # from simulator_ng
         self._resolve_simulation_paths()
+        # from jaxify
+        self._configure_jax_precision()
+        import lusee
+        self._lusee = lusee
         self._parse_base()
         self._parse_sky()
         self._parse_beams()
@@ -33,6 +35,24 @@ class SimDriver(dict):
             os.path.join(luseepy_root, plot_dir)
         )
 
+    @staticmethod
+    def _to_bool(value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
+
+    def _configure_jax_precision(self):
+        sim_cfg = self.get("simulation", {})
+        if "jax_enable_x64" not in sim_cfg:
+            return
+        enabled = self._to_bool(sim_cfg.get("jax_enable_x64", False))
+        os.environ["JAX_ENABLE_X64"] = "1" if enabled else "0"
+        import jax
+        jax.config.update("jax_enable_x64", enabled)
+        print(f"JAX x64 precision enabled: {enabled}")
+
     def _parse_base(self):
         self.lmax = self["observation"]["lmax"]
         self.root = self["paths"]["lusee_drive_dir"]
@@ -50,6 +70,7 @@ class SimDriver(dict):
 
     def _parse_sky(self):
         lusee = self._lusee
+        engine = self._normalize_engine(self)
         sky_type = self["sky"].get("type", "file")
         if sky_type == "file":
             fname = os.path.join(self.root, self["paths"]["sky_dir"], self["sky"]["file"])
@@ -81,6 +102,8 @@ class SimDriver(dict):
             )
         else:
             raise ValueError(f"Unknown sky.type={sky_type!r}")
+        if engine == "default":
+            self.sky = lusee.NpWrapper(self.sky)
 
     def _parse_beams(self):
         lusee = self._lusee
@@ -88,6 +111,7 @@ class SimDriver(dict):
         beams = []
         bd = self["beams"]
         bdc = self["beam_config"]
+        engine = self._normalize_engine(self)
         couplings = bdc.get("couplings")
         beam_type = bdc.get("type", "fits")
         beam_smooth = bdc.get("beam_smooth")
@@ -99,7 +123,7 @@ class SimDriver(dict):
                 cbeam = bd[b]
                 print("Creating gaussian beam", b, ":")
                 B = lusee.BeamGauss(
-                    dec_deg=cbeam["declination"],
+                    alt_deg=cbeam["declination"],
                     sigma_deg=cbeam["sigma"],
                     one_over_freq_scaling=cbeam["one_over_freq_scaling"],
                     id=b,
@@ -107,7 +131,9 @@ class SimDriver(dict):
                 angle = bdc["common_beam_angle"] + cbeam["angle"]
                 print("  rotating: ", angle)
                 B = B.rotate(angle)
-                B.taper_and_smooth(taper=taper, beam_smooth=beam_smooth)
+                B = B.taper_and_smooth(taper=taper, beam_smooth=beam_smooth)
+                if engine == "default":
+                    B = lusee.NpWrapper(B)
                 beams.append(B)
         elif beam_type == "fits":
             for b in self["observation"]["beams"]:
@@ -124,7 +150,9 @@ class SimDriver(dict):
                 angle = bdc["common_beam_angle"] + cbeam.get("angle", 0)
                 print("  rotating: ", angle)
                 B = B.rotate(angle)
-                B.taper_and_smooth(taper=taper, beam_smooth=beam_smooth)
+                B = B.taper_and_smooth(taper=taper, beam_smooth=beam_smooth)
+                if engine == "default":
+                    B = lusee.NpWrapper(B)
                 beams.append(B)
         else:
             raise ValueError(f"Unknown beam_config.type={beam_type!r}")
@@ -140,14 +168,15 @@ class SimDriver(dict):
 
     @staticmethod
     def _normalize_engine(cfg):
-        engine = cfg.get("engine")
-        if engine is None:
-            engine = cfg.get("simulation", {}).get("engine", "luseepy")
+        engine = cfg.get("simulation", {}).get("engine", "default")
         e = str(engine).strip().lower()
         aliases = {
-            "default": "luseepy",
-            "lusee": "luseepy",
-            "numpy": "luseepy",
+            "default": "default",
+            "luseepy": "default",
+            "numpy": "default",
+            "jaxsim": "jaxsim",
+            "jax": "jaxsim",
+            "lusee": "jaxsim",
             "croissant": "croissant",
         }
         return aliases.get(e, e)
@@ -193,9 +222,22 @@ class SimDriver(dict):
                 cross_power=self.couplings,
                 extra_opts=self["simulation"],
             )
-        elif engine == "luseepy":
-            print("  setting up Default Simulation object...")
+        elif engine == "default":
+            print("  setting up Default (NumPy) Simulation object...")
             S = lusee.DefaultSimulator(
+                O,
+                self.beams,
+                self.sky,
+                Tground=od["Tground"],
+                combinations=combs,
+                freq=self.freq,
+                lmax=self.lmax,
+                cross_power=self.couplings,
+                extra_opts=self["simulation"],
+            )
+        elif engine == "jaxsim":
+            print("  setting up JAX Simulation object...")
+            S = lusee.JaxSimulator(
                 O,
                 self.beams,
                 self.sky,
@@ -208,7 +250,8 @@ class SimDriver(dict):
             )
         else:
             raise ValueError(
-                "engine must be one of {luseepy, croissant} (or aliases default/numpy), "
+                "engine must be one of {default, luseepy, jaxsim, croissant} "
+                "(legacy aliases: numpy, jax, lusee), "
                 f"got: {engine}"
             )
 
