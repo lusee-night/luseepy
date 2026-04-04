@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-28-day lunar test: 
-Single source simulation in the topo frame (DefaultSimulator) and the MEPA frame (CroSimulator).
+28-day lunar test:
+Single source simulation in the topo frame (DefaultSimulator), the JAX topo
+frame (JaxSimulator), and the MEPA frame (CroSimulator).
 
 Usage:
   python tests/test_lunar_day_sims.py
@@ -11,6 +12,9 @@ Usage:
 import os
 import sys
 import numpy as np
+import pytest
+
+os.environ["JAX_ENABLE_X64"] = "True"
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -35,7 +39,6 @@ def test_lunar_day_28_single_source():
     import lusee
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     # Source on the inertial ecliptic plane (lat=0); conversion uses mean obliquity, not geocentric frame
     ecl_lon_deg, ecl_lat_deg = 90.0, 00.0
@@ -59,29 +62,22 @@ def test_lunar_day_28_single_source():
     Tground = 0.0
     freq = np.arange(1, 51, 5, dtype=float)
 
-    #combinations
-    Nbeams = 4
-    combs = []
-    for i in range(Nbeams):
-        for j in range(i, Nbeams):
-            combs.append((i, j))
-
-
     # Single-pixel sky (equatorial) wrapped to galactic
     sky = lusee.sky.SingleSourceHealpixSky(l_deg=l_deg, b_deg=b_deg, Nside=nside, freq=freq)
-
     beam = lusee.BeamGauss(
-
         alt_deg=90.0,
         az_deg=0.0,
         sigma_deg=sigma_deg,
         one_over_freq_scaling=False,
     )
+    np_sky = lusee.NpWrapper(sky)
+    np_beam = lusee.NpWrapper(beam)
     beams = [beam]
+    np_beams = [np_beam]
 
     # Run DefaultSimulator (topo frame)
     def_sim = lusee.DefaultSimulator(
-        obs, beams, sky,
+        obs, np_beams, np_sky,
         Tground=Tground,
         combinations=[(0, 0)],
         freq=freq,
@@ -95,7 +91,22 @@ def test_lunar_day_28_single_source():
     )
     def_sim.simulate(times=times)
 
+    # Run JaxSimulator (topo frame)
+    jax_sim = lusee.JaxSimulator(
+        obs, beams, sky,
+        Tground=Tground,
+        combinations=[(0, 0)],
+        freq=freq,
+        lmax=lmax,
+        extra_opts={
+            "plot_sky_and_beam": False,
+        },
+    )
+    jax_sim.simulate(times=times)
+
     # Run CroSimulator (MEPA frame)
+    if lusee.CroSimulator is None:
+        pytest.skip("CroSimulator requires optional croissant and s2fft dependencies")
     cro_sim = lusee.CroSimulator(
         obs, beams, sky,
         Tground=Tground,
@@ -114,13 +125,25 @@ def test_lunar_day_28_single_source():
     out_dir = str(_LUSEEPY_ROOT / "simulation" / "output")
     cro_sim.write_fits(os.path.join(out_dir, "sim_output_cro_singlepixel_28days.fits"))
     def_sim.write_fits(os.path.join(out_dir, "sim_output_default_singlepixel_28days.fits"))
+    jax_sim.write_fits(os.path.join(out_dir, "sim_output_jax_singlepixel_28days.fits"))
 
     assert cro_sim.result.shape == def_sim.result.shape
+    assert jax_sim.result.shape == def_sim.result.shape
 
     np_cro_result = np.asarray(cro_sim.result)
     np_def_result = np.asarray(def_sim.result)
+    np_jax_result = np.asarray(jax_sim.result)
+
+    diff_norm = np.linalg.norm(np_jax_result - np_def_result)
+    rel = diff_norm / np.linalg.norm(np_def_result)
+    assert rel < 1e-9
+
     diff_norm = np.linalg.norm(np_cro_result - np_def_result)
     rel = diff_norm / np.linalg.norm(np_def_result)
+    assert rel < 5e-3
+
+    diff_norm = np.linalg.norm(np_cro_result - np_jax_result)
+    rel = diff_norm / np.linalg.norm(np_jax_result)
     assert rel < 5e-3
 
 

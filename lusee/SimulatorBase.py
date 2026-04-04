@@ -3,11 +3,14 @@ from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 
 import numpy as np
+import jax.numpy as jnp
 import healpy as hp
 import fitsio
 import sys
 import pickle
 import os
+import json
+import hashlib
 
 
 def default_plot_sky_beam_dir():
@@ -32,20 +35,29 @@ def mean_alm(alm1, alm2, lmax):
     :rtype: float
     
     """
-    
-    prod = alm1*np.conj(alm2)
-    sm = (np.real(prod[:lmax+1]).sum()+2*np.real(prod[lmax+1:]).sum())/(4*np.pi)
+    alm1 = jnp.asarray(alm1)
+    alm2 = jnp.asarray(alm2)
+    prod = alm1*jnp.conj(alm2)
+    sm = (jnp.real(prod[:lmax+1]).sum()+2*jnp.real(prod[lmax+1:]).sum())/(4*jnp.pi)
     return sm
+
+
+def mean_alm_np(alm1, alm2, lmax):
+    return np.asarray(mean_alm(alm1, alm2, lmax))
 
 def get_R_gal_to_topo(lz, bz, ly, by):
     """
     Build 3x3 rotation matrix R such that v_topo = R @ v_gal.
     Same construction as DefaultSimulator (zenith zhat, north yhat from (l,b)).
     """
-    zhat = np.array([np.cos(bz) * np.cos(lz), np.cos(bz) * np.sin(lz), np.sin(bz)])
-    yhat = np.array([np.cos(by) * np.cos(ly), np.cos(by) * np.sin(ly), np.sin(by)])
-    xhat = np.cross(yhat, zhat)
-    return np.array([xhat, yhat, zhat]).T
+    zhat = jnp.array([jnp.cos(bz) * jnp.cos(lz), jnp.cos(bz) * jnp.sin(lz), jnp.sin(bz)])
+    yhat = jnp.array([jnp.cos(by) * jnp.cos(ly), jnp.cos(by) * jnp.sin(ly), jnp.sin(by)])
+    xhat = jnp.cross(yhat, zhat)
+    return jnp.array([xhat, yhat, zhat]).T
+
+
+def get_R_gal_to_topo_np(lz, bz, ly, by):
+    return np.asarray(get_R_gal_to_topo(lz, bz, ly, by))
 
 
 def get_topo_z_rotation_angles(obs, times):
@@ -55,10 +67,10 @@ def get_topo_z_rotation_angles(obs, times):
     """
     lzl, bzl = obs.get_l_b_from_alt_az(np.pi / 2, 0.0, times)
     lyl, byl = obs.get_l_b_from_alt_az(0.0, 0.0, times)
-    R0 = get_R_gal_to_topo(lzl[0], bzl[0], lyl[0], byl[0])
+    R0 = get_R_gal_to_topo_np(lzl[0], bzl[0], lyl[0], byl[0])
     phis = np.zeros(len(times))
     for i in range(len(times)):
-        Ri = get_R_gal_to_topo(lzl[i], bzl[i], lyl[i], byl[i])
+        Ri = get_R_gal_to_topo_np(lzl[i], bzl[i], lyl[i], byl[i])
         R_topo0_to_topo_i = Ri @ R0.T
         phis[i] = np.arctan2(R_topo0_to_topo_i[1, 0], R_topo0_to_topo_i[0, 0])
     return phis
@@ -75,11 +87,15 @@ def rot2eul(R):
     :rtype: numpy array
     
     """
-    
-    beta = -np.arcsin(R[2,0])
-    alpha = np.arctan2(R[2,1]/np.cos(beta),R[2,2]/np.cos(beta))
-    gamma = np.arctan2(R[1,0]/np.cos(beta),R[0,0]/np.cos(beta))
-    return np.array((alpha, beta, gamma))
+    R = jnp.asarray(R)
+    beta = -jnp.arcsin(R[2,0])
+    alpha = jnp.arctan2(R[2,1]/jnp.cos(beta),R[2,2]/jnp.cos(beta))
+    gamma = jnp.arctan2(R[1,0]/jnp.cos(beta),R[0,0]/jnp.cos(beta))
+    return jnp.array((alpha, beta, gamma))
+
+
+def rot2eul_np(R):
+    return np.asarray(rot2eul(R))
 
 def eul2rot(theta) :
     """
@@ -92,12 +108,16 @@ def eul2rot(theta) :
     :rtype: numpy array
     
     """
-    
-    R = np.array([[np.cos(theta[1])*np.cos(theta[2]),       np.sin(theta[0])*np.sin(theta[1])*np.cos(theta[2]) - np.sin(theta[2])*np.cos(theta[0]),      np.sin(theta[1])*np.cos(theta[0])*np.cos(theta[2]) + np.sin(theta[0])*np.sin(theta[2])],
-                  [np.sin(theta[2])*np.cos(theta[1]),       np.sin(theta[0])*np.sin(theta[1])*np.sin(theta[2]) + np.cos(theta[0])*np.cos(theta[2]),      np.sin(theta[1])*np.sin(theta[2])*np.cos(theta[0]) - np.sin(theta[0])*np.cos(theta[2])],
-                  [-np.sin(theta[1]),                        np.sin(theta[0])*np.cos(theta[1]),                                                           np.cos(theta[0])*np.cos(theta[1])]])
+    theta = jnp.asarray(theta)
+    R = jnp.array([[jnp.cos(theta[1])*jnp.cos(theta[2]),       jnp.sin(theta[0])*jnp.sin(theta[1])*jnp.cos(theta[2]) - jnp.sin(theta[2])*jnp.cos(theta[0]),      jnp.sin(theta[1])*jnp.cos(theta[0])*jnp.cos(theta[2]) + jnp.sin(theta[0])*jnp.sin(theta[2])],
+                  [jnp.sin(theta[2])*jnp.cos(theta[1]),       jnp.sin(theta[0])*jnp.sin(theta[1])*jnp.sin(theta[2]) + jnp.cos(theta[0])*jnp.cos(theta[2]),      jnp.sin(theta[1])*jnp.sin(theta[2])*jnp.cos(theta[0]) - jnp.sin(theta[0])*jnp.cos(theta[2])],
+                  [-jnp.sin(theta[1]),                        jnp.sin(theta[0])*jnp.cos(theta[1]),                                                           jnp.cos(theta[0])*jnp.cos(theta[1])]])
 
     return R
+
+
+def eul2rot_np(theta) :
+    return np.asarray(eul2rot(theta))
 
     
 
@@ -174,6 +194,44 @@ class SimulatorBase:
 
         raise NotImplementedError("simulate() not implemented in base class")
 
+    def _cache_bool(self, value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
+
+    def _transform_cache_force_recompute(self):
+        return self._cache_bool(
+            self.extra_opts.get(
+                "force_recompute_cache_transform",
+                self.extra_opts.get("recompute_cache_transform", False),
+            )
+        )
+
+    def _transform_cache_key(self, times):
+        time_jd = np.asarray([t.jd for t in times], dtype=float)
+        payload = {
+            "cache_version": 1,
+            "time_jd": time_jd.tolist(),
+            "lun_lat_deg": float(self.obs.lun_lat_deg),
+            "lun_long_deg": float(self.obs.lun_long_deg),
+            "lun_height_m": float(self.obs.lun_height_m),
+            "deltaT_sec": float(self.obs.deltaT_sec),
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:16]
+
+    def _transform_cache_file(self, times):
+        cache_prefix = self.extra_opts.get("cache_transform")
+        if cache_prefix is None:
+            return None
+        root, ext = os.path.splitext(cache_prefix)
+        if ext == "":
+            ext = ".pickle"
+        return f"{root}__rot_transforms_{self._transform_cache_key(times)}{ext}"
+
     def _plot_sky_beam_healpix(self, sky_alm, beam_alm, nside, lmax, save_dir="output/figures", save_filename="sky_beam_healpix.png", title_prefix=""):
         """
         Plot sky and beam as healpix mollweide maps (for visual check before convolution).
@@ -242,8 +300,8 @@ class SimulatorBase:
         fits.write(self.freq, extname='freq')
         fits.write(np.array(self.combinations), extname='combinations')
         for i,b in enumerate(self.beams):
-            fits.write(b.ZRe[self.freq_ndx_beam],extname=f'ZRe_{i}')
-            fits.write(b.ZIm[self.freq_ndx_beam],extname=f'ZIm_{i}')
+            fits.write(np.asarray(b.ZRe)[self.freq_ndx_beam],extname=f'ZRe_{i}')
+            fits.write(np.asarray(b.ZIm)[self.freq_ndx_beam],extname=f'ZIm_{i}')
 
     def prepare_beams(self, beams, combinations):
         """
@@ -265,7 +323,7 @@ class SimulatorBase:
         for i,j in self.combinations:
             bi , bj = beams[i], beams[j]
             print (f"  intializing beam combination {bi.id} x {bj.id} ...")
-            norm = np.sqrt(bi.gain_conv[self.freq_ndx_beam]*bj.gain_conv[self.freq_ndx_beam])
+            norm = np.sqrt(np.asarray(bi.gain_conv)[self.freq_ndx_beam]*np.asarray(bj.gain_conv)[self.freq_ndx_beam])
             beamreal, beamimag = bi.get_healpix_alm(
                 self.lmax,
                 freq_ndx=self.freq_ndx_beam,
