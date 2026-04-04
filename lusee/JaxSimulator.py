@@ -36,6 +36,7 @@ class JaxSimulator(SimulatorBase):
     :type cross_power: BeamCouplings
     :param extra_opts: Extra options for simulation. Supports "dump_beams" (saves instrument beams to file),
         "cache_transform" (loads/saves beam transformations from file),
+        "force_recompute_cache_transform" (ignores any existing cached transform file),
         and "freq_idx_plot" (int): index of frequency at which to plot sky and beam.
     :type extra_opts: dict
     """
@@ -285,8 +286,11 @@ class JaxSimulator(SimulatorBase):
             times = self.obs.times
         if self.sky_model.frame=="galactic":
             do_rot = True
-            cache_fn = self.extra_opts.get("cache_transform")
-            if (cache_fn is not None) and (os.path.isfile(cache_fn)):
+            cache_fn = self._transform_cache_file(times)
+            force_recompute = self._transform_cache_force_recompute()
+            if force_recompute and (cache_fn is not None):
+                print (f"Ignoring cached transform and recomputing: {cache_fn}")
+            if (cache_fn is not None) and (not force_recompute) and (os.path.isfile(cache_fn)):
                 print (f"Loading cached transform from {cache_fn}...")
                 lzl,bzl,lyl,byl = pickle.load(open(cache_fn,'br'))
                 if (len(lzl)!=len(times)):
