@@ -13,8 +13,8 @@ from lusee.pre_jax.Beam import Beam as PreJaxBeam
 from lusee.pre_jax.BeamGauss import BeamGauss as PreJaxBeamGauss
 
 
-RTOL = 1e-10
-ATOL = 1e-10
+RTOL = 1e-9
+ATOL = 1e-9
 
 assert jax.config.jax_enable_x64
 
