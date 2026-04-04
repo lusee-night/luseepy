@@ -17,7 +17,7 @@ def _pixel_point_source_alm(theta, phi, nside, lmax):
 
 def _apply_gaussian_beam(alm, sigma_rad, lmax):
     """Multiply each a_lm by b_l = exp(-l(l+1)σ²/2)."""
-    out = alm.copy()
+    out = np.asarray(alm).copy()
     for l in range(lmax + 1):
         bl = np.exp(-l * (l + 1) * sigma_rad ** 2 / 2)
         for m in range(l + 1):
