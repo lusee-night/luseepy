@@ -80,9 +80,8 @@ observation:
     step: 4
 
 simulation:
+  engine: luseepy
   output: output/sim_gaussLBeam.fits
-
-engine: luseepy
   
   
  
