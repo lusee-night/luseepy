@@ -7,9 +7,12 @@ from .Satellite     import Satellite, ObservedSatellite
 from .Beam          import Beam, grid2healpix, grid2healpix_alm_fast
 from .BeamInterpolator import BeamInterpolator
 from .BeamGauss     import BeamGauss
+from .NpWrapper     import NpWrapper
 from .BeamCouplings import BeamCouplings
 from .DefaultSimulator import DefaultSimulator
+from .JaxSimulator import JaxSimulator
 from .CalibratorSimulator import CalibratorSimulator
+from .NumpySimulator import NumpySimulator
 try:
     from .CroSimulator import CroSimulator
 except (ModuleNotFoundError, ImportError) as e:
@@ -31,5 +34,3 @@ from .Throughput import Throughput
 
 __version__ = '1.3'
 __comment__ = '1.3 dev'
-
-
