@@ -116,13 +116,13 @@ def test_transit_cases():
             freq=FREQ,
             lmax=LMAX,
         )
-        cro_sim.simulate(times=times)
+        cro_result = cro_sim.simulate()
         cro_path = str(out_dir / f"sim_output_cro_case_{name}.fits")
-        cro_sim.write_fits(cro_path)
+        cro_sim.write_fits(cro_path, result=cro_result)
 
         # freq-averaged time stream: shape (Ntimes,)
         def_freq_avg = np.mean(def_sim.result[:, 0, :], axis=1)
-        cro_freq_avg = np.mean(cro_sim.result[:, 0, :], axis=1)
+        cro_freq_avg = np.mean(np.asarray(cro_result)[:, 0, :], axis=1)
 
         def_max = def_freq_avg.max()
         cro_max = cro_freq_avg.max()

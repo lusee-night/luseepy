@@ -217,9 +217,21 @@ class SimDriver(dict):
             f"data products x {len(self.freq)} frequency bins..."
         )
         print("  Simulating...")
-        S.simulate(times=O.times)
-
-        out_base = self["simulation"].get("output", f"sim_{engine}_output.fits")
-        fname = os.path.join(self.outdir, out_base)
-        print("Writing to", fname)
-        S.write_fits(fname)
+        if engine == "croissant":
+            result = S.simulate()
+            if self["simulation"].get("plot_sky_and_beam"):
+                S.plot_sky_beam(
+                    freq_idx=int(self["simulation"].get("freq_idx_plot", 0)),
+                    save_dir=self["simulation"].get("plot_dir"),
+                    save_filename=self["simulation"].get("plot_filename"),
+                )
+            out_base = self["simulation"].get("output", f"sim_{engine}_output.fits")
+            fname = os.path.join(self.outdir, out_base)
+            print("Writing to", fname)
+            S.write_fits(fname, result=result)
+        else:
+            S.simulate(times=O.times)
+            out_base = self["simulation"].get("output", f"sim_{engine}_output.fits")
+            fname = os.path.join(self.outdir, out_base)
+            print("Writing to", fname)
+            S.write_fits(fname)

@@ -1,177 +1,344 @@
+"""
+CroSimulator — JAX-differentiable radio telescope simulator.
+
+The constructor precomputes observation-fixed quantities (MEPA rotation
+matrices, time-evolution phases).  ``simulate()`` takes the differentiable
+inputs — beam ALMs, sky ALMs, ground temperature, ground power — as
+explicit arguments, so ``jax.jit`` and ``jax.grad`` work naturally::
+
+    sim = CroSimulator(obs, beams, sky, Tground=0, ...)
+    wf  = sim.simulate(sim.beam_alms, sim.sky_mepa,
+                       sim.Tground, sim.ground_power)
+
+    # gradient w.r.t. beam ALMs
+    grad_fn = jax.grad(lambda b: jnp.sum(
+        sim.simulate(b, sim.sky_mepa, sim.Tground, sim.ground_power) ** 2))
+    g = grad_fn(sim.beam_alms)
+"""
+
 from functools import partial
 import warnings
 
-from .Observation import Observation
-from .Beam import Beam
-from .BeamCouplings import BeamCouplings
-from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, get_topo_z_rotation_angles
-import numpy as np
-import fitsio
-import sys
-import os
-import jax.numpy as jnp
-import croissant as cro
-import croissant.jax as crojax
 import jax
-from lunarsky import LunarTopo
+import jax.numpy as jnp
+import numpy as np
+import os
+import sys
+
+import croissant as cro
 import s2fft
+from lunarsky import LunarTopo
 
-"""
-CroSimulator: same inputs as DefaultSimulator (beam, sky, obs, etc.) but uses
-the Croissant engine for the actual simulation (MEPA frame, rot_alm_z phases,
-crojax.simulator.convolve). Freq, time range, and antenna location come from
-the observation object (config). Croissant currently supports single
-polarization / single dipole per beam; one beam combination at a time
-"""
+from .BeamCouplings import BeamCouplings
 
 
-class CroSimulator(SimulatorBase):
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _default_plot_dir():
+    """Default save directory for diagnostic plots."""
+    return os.path.normpath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "..", "simulation", "output", "figures")
+    )
+
+
+def _prepare_beams(beams, combinations, lmax, freq_ndx_beam,
+                   cross_power=None, extra_opts=None):
+    """Prepare beam ALM products for all antenna combinations.
+
+    Returns a list of (i, j, beamreal, beamimag, groundPowerReal,
+    groundPowerImag) tuples.
     """
-    Croissant simulator: same inputs as DefaultSimulator (obs, beams, sky_model,
-    combinations, freq, lmax) 
+    if cross_power is None:
+        cross_power = BeamCouplings()
+    if extra_opts is None:
+        extra_opts = {}
+    efbeams = []
+    combinations = [(int(i), int(j)) for i, j in combinations]
+    for i, j in combinations:
+        bi, bj = beams[i], beams[j]
+        print(f"  intializing beam combination {bi.id} x {bj.id} ...")
+        norm = np.sqrt(bi.gain_conv[freq_ndx_beam] * bj.gain_conv[freq_ndx_beam])
+        beamreal, beamimag = bi.get_healpix_alm(
+            lmax, freq_ndx=freq_ndx_beam, other=bj,
+            return_I_stokes_only=True, return_complex_components=True,
+        )
+        beamreal = beamreal * norm[:, None]
+        if beamimag is not None:
+            beamimag = beamimag * norm[:, None]
+        if i == j:
+            groundPowerReal = np.array([1 - np.real(br[0]) / np.sqrt(4 * np.pi)
+                                        for br in beamreal])
+            beamimag = None
+            groundPowerImag = 0.0
+        else:
+            cp = cross_power.Ex_coupling(bi, bj, freq_ndx_beam)
+            print(f"    cross power is {cp[0]} ... {cp[-1]} ")
+            groundPowerReal = np.array([c - np.real(br[0]) / np.sqrt(4 * np.pi)
+                                        for br, c in zip(beamreal, cp)])
+            groundPowerImag = np.array([0 - np.real(bi_[0]) / np.sqrt(4 * np.pi)
+                                        for bi_ in beamimag])
+        if "dump_beams" in extra_opts:
+            np.save(bi.id + bj.id, beamreal)
+        efbeams.append((i, j, beamreal, beamimag, groundPowerReal, groundPowerImag))
+    return efbeams
 
-    - Freq, time grid, and antenna location are taken from the observation
-      object (set from config). [luseepy.observation class]
-    - Lunar topo frame is built from obs class (obstime=first time, location=obs.loc).
-    - Beam and sky are transformed to MEPA; time evolution uses
-      crojax.simulator.rot_alm_z (moon sidereal rotation).
-    - Croissant handles single polarization / single dipole per beam; each
-      combination is convolved separately to match DefaultSimulator output shape.
-    - Sky gal→MEPA once (epoch-aware), beam topo(t0)→MEPA once, rot_alm_z(dt) for time evolution, then convolve.
-    - Output layout is (N_times, N_combos, N_freq).
 
-    :param obs: Observation (time range, deltaT_sec, lun_lat_deg, lun_long_deg)
-    :param beams: Instrument beams [luseepy.beam class]
-    :param sky_model: Sky model [luseepy.skymodels class]
-    :param combinations: Beam combination indices [(0,0),(1,1),(0,2),(1,3),(1,2)]
-    :param lmax: Maximum l
-    :param Tground: Ground temperature [K]
-    :param freq: Frequencies in MHz (from config / obs)
-    :param cross_power: BeamCouplings for cross terms [luseepy.BeamCouplings class]
-    :param extra_opts: optional dict, e.g. cache_transform, dump_beams (see DefaultSimulator),
-        freq_idx_plot (int): index of frequency at which to plot sky and beam.
+def _hp_to_2d(alms, sim_L):
+    """Convert a stack of healpy-packed ALMs to s2fft 2D layout."""
+    return jnp.stack([
+        s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(a), sim_L)
+        for a in alms
+    ])
+
+
+def _plot_sky_beam_healpix(sky_alm, beam_alm, nside, lmax,
+                           save_dir="output/figures",
+                           save_filename="sky_beam_healpix_cro.png",
+                           title_prefix=""):
+    """Plot sky and beam as healpix mollweide maps (side-effect, not JAX)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import healpy as hp
+
+    outpath = os.path.join(save_dir, save_filename)
+    os.makedirs(save_dir, exist_ok=True)
+    sky_map = hp.alm2map(np.asarray(sky_alm, dtype=np.complex128), nside, lmax=lmax)
+    beam_map = hp.alm2map(np.asarray(beam_alm, dtype=np.complex128), nside, lmax=lmax)
+    plt.figure(figsize=(12, 5))
+    hp.mollview(sky_map, title=(title_prefix + " Sky").strip(), sub=(1, 2, 1))
+    hp.mollview(beam_map, title=(title_prefix + " Beam").strip(), sub=(1, 2, 2))
+    plt.savefig(outpath, dpi=120, bbox_inches="tight")
+    plt.close()
+    print(f"  plot_sky_and_beam: saved {outpath}")
+
+
+# ---------------------------------------------------------------------------
+# CroSimulator
+# ---------------------------------------------------------------------------
+
+class CroSimulator:
+    """JAX-differentiable Croissant simulator.
+
+    The constructor precomputes observation-fixed quantities and stores
+    default values for the differentiable inputs as attributes.
+    ``simulate()`` takes those differentiable inputs as explicit arguments,
+    making ``jax.jit`` / ``jax.grad`` straightforward.
+
+    Precomputed (fixed per observation, stored on ``self``):
+        ``eul_topo``, ``dl_topo``, ``phases`` — MEPA rotation & time phases.
+
+    Default differentiable arrays (also stored on ``self`` for convenience):
+        ``beam_alms``, ``sky_mepa``, ``Tground``, ``ground_power``.
+
+    :param obs: Observation (time range, location).
+    :param beams: Instrument beams (lusee.Beam / BeamGauss).
+    :param sky_model: Sky model (must have ``frame == "galactic"``).
+    :param Tground: Ground temperature [K].
+    :param combinations: Beam combination indices, e.g. ``[(0,0),(1,1),(0,2)]``.
+    :param freq: Frequencies in MHz (default: from beams).
+    :param lmax: Maximum spherical harmonic degree.
+    :param cross_power: BeamCouplings for cross terms.
+    :param extra_opts: Dict for plotting / dump_beams options.
     """
 
-    def __init__ (self, obs, beams, sky_model, Tground = 200.0,
-                  combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None,
-                  lmax = 128, cross_power = None,
-                  extra_opts = {}):
-        super().__init__(obs, beams, sky_model, Tground, combinations, freq)
+    def __init__(self, obs, beams, sky_model, Tground=200.0,
+                 combinations=((0, 0), (1, 1), (0, 2), (1, 3), (1, 2)),
+                 freq=None, lmax=128, cross_power=None, extra_opts=None):
+        if extra_opts is None:
+            extra_opts = {}
+
+        # ── frequency index setup ──
+        if freq is None:
+            freq = beams[0].freq
+        freq = np.asarray(freq)
+        freq_ndx_beam = []
+        freq_ndx_sky = []
+        for f in freq:
+            try:
+                ndx = list(beams[0].freq).index(f)
+            except ValueError:
+                print(f"Error: Frequency {f} does not exist in beams.")
+                sys.exit(1)
+            freq_ndx_beam.append(ndx)
+            try:
+                ndx = list(sky_model.freq).index(f)
+            except ValueError:
+                print(f"Error: Frequency {f} does not exist in sky model.")
+                sys.exit(1)
+            freq_ndx_sky.append(ndx)
+
         self.lmax = lmax
-        self.extra_opts = extra_opts
-        self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
-        self.prepare_beams (beams, combinations)
+        self.freq = freq
+        self._freq_ndx_beam = freq_ndx_beam
 
-            
-                                
-    def simulate(self, times=None):
-        """
-        Simulate using Croissant.
-        freq, time grid, and antenna location from
-        observation; beam and sky transformed to MEPA; rot_alm_z phases;
-        crojax.simulator.convolve for sky and beam convolution.
-        :param times: List of times; if None, use self.obs.times (from config).
-        :returns: Waterfall (N_times, N_combos_with_imag, N_freq), same as DefaultSimulator.
-        """
-        if times is None:
-            times = self.obs.times
-        ntimes = len(times)
-        delta_t = float(self.obs.deltaT_sec)
+        # prepare beams (numpy) to stack into JAX arrays
+        combinations = [(int(i), int(j)) for i, j in combinations]
+        self._combinations = combinations
+        efbeams = _prepare_beams(
+            beams, combinations, lmax, freq_ndx_beam,
+            cross_power=cross_power, extra_opts=extra_opts,
+        )
 
-        if self.sky_model.frame != "galactic":
+        sim_L = lmax + 1
+        all_beam_2d = []
+        all_ground = []
+        channel_layout = []
+        for ci, cj, beamreal, beamimag, gpr, gpi in efbeams:
+            all_beam_2d.append(_hp_to_2d(beamreal, sim_L))
+            all_ground.append(np.asarray(gpr))
+            channel_layout.append(f"{ci}{cj}R")
+            if ci != cj:
+                all_beam_2d.append(_hp_to_2d(beamimag, sim_L))
+                all_ground.append(np.asarray(gpi))
+                channel_layout.append(f"{ci}{cj}I")
+
+        self.beam_alms = jnp.stack(all_beam_2d)       # (Nch, Nf, L, 2L-1)
+        self.ground_power = jnp.stack(all_ground)      # (Nch, Nf)
+        self.Tground = jnp.asarray(float(Tground))
+        self.channel_layout = tuple(channel_layout)
+
+        # ── MEPA setup (fixed per observation) ──
+        if sky_model.frame != "galactic":
             raise NotImplementedError(
-                f"CroSimulator requires galactic sky frame, got {self.sky_model.frame}"
+                f"CroSimulator requires galactic sky frame, got {sky_model.frame}"
             )
-        self.result = self._simulate_croissant_mepa(times, ntimes, delta_t)
-        return self.result
+        times = obs.times
+        topo = LunarTopo(obstime=times[0], location=obs.loc)
+        eul_topo, dl_topo = cro.rotations.generate_euler_dl(lmax, topo, "mepa")
+        self.eul_topo = tuple(float(a) for a in eul_topo)
+        self.dl_topo = jnp.asarray(dl_topo)
 
-    def _simulate_croissant_mepa(self, times, ntimes, delta_t):
-        """MEPA pipeline: sky gal→MEPA once (epoch-aware), beam topo(t0)→MEPA once,
-        rot_alm_z(dt) for time evolution, then convolve."""
-        topo = LunarTopo(obstime=times[0], location=self.obs.loc)
-        sim_L = self.lmax + 1
-        eul_topo, dl_topo = crojax.rotations.generate_euler_dl(
-            self.lmax, topo, "mepa"
-        )
-        topo2mepa = partial(
-            s2fft.utils.rotation.rotate_flms,
-            L=sim_L,
-            rotation=eul_topo,
-            dl_array=dl_topo,
-        )
-        sky_gal = self.sky_model.get_alm(self.freq_ndx_sky, self.freq)
-        sky_2d = np.stack([
-            np.asarray(
-                s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(s_), sim_L)
-            )
-            for s_ in sky_gal
+        sky_gal = sky_model.get_alm(freq_ndx_sky, freq)
+        sky_2d = jnp.stack([
+            s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(s), sim_L)
+            for s in sky_gal
         ])
         et = cro.rotations.jd_to_et(times[0].jd)
-        sky_mepa = cro.rotations.gal2mepa(sky_2d, et=et)
-        delta_t_sec = np.arange(len(times), dtype=float) * self.obs.deltaT_sec
-        phases = cro.simulator.rot_alm_z(self.lmax, times=delta_t_sec)
-        norm_factor = 4.0 * np.pi
-        # croissant>=5.1.x handles LunarTopo (NEU) to ENU convention
-        # internally in rotations.get_rot_mat/generate_euler_dl.
-        # Do not apply an additional manual m-dependent phase here.
-        combo_results = []
-        plot_done = False
-        for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
-            beam_2d = np.stack([
-                np.asarray(
-                    s2fft.sampling.reindex.flm_hp_to_2d_fast(
-                        jnp.asarray(br_), sim_L
-                    )
-                )
-                for br_ in beamreal
-            ])
-            beam_mepa = jax.vmap(topo2mepa)(jnp.array(beam_2d))
-            if self.extra_opts.get("plot_sky_and_beam") and not plot_done:
-                nf = len(self.freq)
-                freq_idx_plot = int(self.extra_opts.get("freq_idx_plot", 0))
-                if nf == 0:
-                    raise ValueError("Cannot plot: no frequencies in self.freq")
-                if not (0 <= freq_idx_plot < nf):
-                    clamped = max(0, min(freq_idx_plot, nf - 1))
-                    warnings.warn(
-                        f"freq_idx_plot={freq_idx_plot} is out of bounds for "
-                        f"len(freq)={nf}; using {clamped}.",
-                        UserWarning,
-                        stacklevel=2,
-                    )
-                    freq_idx_plot = clamped
-                nside = getattr(self.sky_model, "Nside", 64)
-                sky_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(sky_mepa[freq_idx_plot]), self.lmax+1)
-                beam_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(beam_mepa[freq_idx_plot]), self.lmax+1)
-                self._plot_sky_beam_healpix(
-                    sky_packed, beam_packed, nside, self.lmax,
-                    save_dir=self.extra_opts.get("plot_dir", default_plot_sky_beam_dir()),
-                    save_filename=self.extra_opts.get("plot_filename", "sky_beam_healpix_cro.png"),
-                    title_prefix=f"Croissant at {self.freq[freq_idx_plot]} MHz ",
-                )
-                plot_done = True
-            vis = crojax.simulator.convolve(beam_mepa, sky_mepa, phases)
-            T = np.asarray(vis.real) / norm_factor + self.Tground * groundPowerReal
-            combo_results.append((T, None))
-            if ci != cj:
-                beamimag_2d = np.stack([
-                    np.asarray(
-                        s2fft.sampling.reindex.flm_hp_to_2d_fast(
-                            jnp.asarray(bi_), sim_L
-                        )
-                    )
-                    for bi_ in beamimag
-                ])
-                beamimag_mepa = jax.vmap(topo2mepa)(jnp.array(beamimag_2d))
-                vis_imag = crojax.simulator.convolve(beamimag_mepa, sky_mepa, phases)
-                Timag = np.asarray(vis_imag.real) / norm_factor + self.Tground * groundPowerImag
-                combo_results[-1] = (T, Timag)
-        wfall = []
-        for ti in range(ntimes):
-            res = []
-            for T, Timag in combo_results:
-                res.append(T[ti])
-                if Timag is not None:
-                    res.append(Timag[ti])
-            wfall.append(res)
-        return np.array(wfall)
+        self.sky_mepa = jnp.asarray(cro.rotations.gal2mepa(sky_2d, et=et))
+
+        delta_t_sec = np.arange(len(times), dtype=float) * obs.deltaT_sec
+        self.phases = jnp.asarray(cro.simulator.rot_alm_z(lmax, times=delta_t_sec))
+        self._nside = getattr(sky_model, "Nside", 64)
+
+        # ── I/O metadata ──
+        self._obs_meta = {
+            "version":      0.1,
+            "lunar_day":    obs.time_range,
+            "lun_lat_deg":  obs.lun_lat_deg,
+            "lun_long_deg": obs.lun_long_deg,
+            "lun_height_m": obs.lun_height_m,
+            "deltaT_sec":   obs.deltaT_sec,
+        }
+        self._beams_ZReIm = tuple(
+            (b.ZRe[freq_ndx_beam], b.ZIm[freq_ndx_beam]) for b in beams
+        )
+
+    # -----------------------------------------------------------------
+    # Pure-JAX simulation
+    # -----------------------------------------------------------------
+
+    def simulate(self, beam_alms=None, sky_mepa=None,
+                 Tground=None, ground_power=None):
+        """Run the beam-sky convolution.
+
+        All arguments are optional — defaults come from the values computed
+        in ``__init__``.  Pass explicit JAX arrays to differentiate through
+        them with ``jax.grad``.
+
+        **Pure JAX** when called with explicit arguments (no Python
+        side-effects, compatible with ``jax.jit`` / ``jax.grad``).
+
+        :param beam_alms: ``(Nchannels, Nfreq, L, 2L-1)`` beam ALMs in
+            topo-frame s2fft 2D layout.
+        :param sky_mepa: ``(Nfreq, L, 2L-1)`` sky ALMs in MEPA frame.
+            The galactic→MEPA rotation is a fixed linear transform applied
+            once in ``__init__``; sampling/optimizing in MEPA avoids
+            repeating that rotation every forward pass and the gradient
+            landscape is identical (just rotated).
+        :param Tground: Scalar ground temperature [K].
+        :param ground_power: ``(Nchannels, Nfreq)`` ground power fractions.
+        :returns: Waterfall array, shape ``(Ntimes, Nchannels, Nfreq)``.
+        """
+        if beam_alms is None:
+            beam_alms = self.beam_alms
+        if sky_mepa is None:
+            sky_mepa = self.sky_mepa
+        if Tground is None:
+            Tground = self.Tground
+        if ground_power is None:
+            ground_power = self.ground_power
+
+        sim_L = self.lmax + 1
+        topo2mepa = partial(
+            s2fft.utils.rotation.rotate_flms,
+            L=sim_L, rotation=self.eul_topo, dl_array=self.dl_topo,
+        )
+        # Rotate all beam channels: vmap over channels, then over freqs.
+        beam_mepa = jax.vmap(jax.vmap(topo2mepa))(beam_alms)
+        # Convolve all channels with sky at once.
+        vis = cro.multipair.multi_convolve(beam_mepa, sky_mepa, self.phases)
+        # vis: (Nchannels, Ntimes, Nfreq)
+        T = vis.real / (4.0 * jnp.pi) + Tground * ground_power[:, None, :]
+        return jnp.moveaxis(T, 0, 1)   # (Ntimes, Nchannels, Nfreq)
+
+    # -----------------------------------------------------------------
+    # I/O
+    # -----------------------------------------------------------------
+
+    def write_fits(self, out_file, result=None):
+        """Write simulation result to FITS.
+
+        :param out_file: Output file path.
+        :param result: Waterfall array; if *None*, calls ``simulate()``.
+        """
+        import fitsio
+        if result is None:
+            result = self.simulate()
+        fits = fitsio.FITS(out_file, 'rw', clobber=True)
+        fits.write(np.asarray(result), header=self._obs_meta, extname='data')
+        fits.write(np.asarray(self.freq), extname='freq')
+        fits.write(np.array(self._combinations), extname='combinations')
+        for i, (zre, zim) in enumerate(self._beams_ZReIm):
+            fits.write(np.asarray(zre), extname=f'ZRe_{i}')
+            fits.write(np.asarray(zim), extname=f'ZIm_{i}')
+
+    # -----------------------------------------------------------------
+    # Diagnostics
+    # -----------------------------------------------------------------
+
+    def plot_sky_beam(self, freq_idx=0, save_dir=None, save_filename=None):
+        """Plot sky and beam at one frequency as healpix mollweide maps.
+
+        :param freq_idx: Frequency index to plot.
+        :param save_dir: Output directory (default: simulation/output/figures).
+        :param save_filename: Output filename.
+        """
+        sim_L = self.lmax + 1
+        nf = len(self.freq)
+        if nf == 0:
+            raise ValueError("Cannot plot: no frequencies")
+        if not (0 <= freq_idx < nf):
+            freq_idx = max(0, min(freq_idx, nf - 1))
+            warnings.warn(
+                f"freq_idx={freq_idx} out of bounds for len(freq)={nf}.",
+                UserWarning, stacklevel=2,
+            )
+        topo2mepa = partial(
+            s2fft.utils.rotation.rotate_flms,
+            L=sim_L, rotation=self.eul_topo, dl_array=self.dl_topo,
+        )
+        beam0_mepa = jax.vmap(topo2mepa)(self.beam_alms[0])
+        sky_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(
+            np.asarray(self.sky_mepa[freq_idx]), sim_L)
+        beam_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(
+            np.asarray(beam0_mepa[freq_idx]), sim_L)
+        _plot_sky_beam_healpix(
+            sky_packed, beam_packed, self._nside, self.lmax,
+            save_dir=save_dir or _default_plot_dir(),
+            save_filename=save_filename or "sky_beam_healpix_cro.png",
+            title_prefix=f"Croissant at {self.freq[freq_idx]} MHz ",
+        )

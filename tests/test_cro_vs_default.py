@@ -184,8 +184,7 @@ def run_comparison(config_path=None):
         cross_power=setup["cross_power"],
         extra_opts=setup.get("extra_opts", {}),
     )
-    cro_sim.simulate()
-    out_cro = cro_sim.result
+    out_cro = np.asarray(cro_sim.simulate())
 
     # Step 1: Sky raw
     print("\n" + "=" * 60)

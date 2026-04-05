@@ -99,26 +99,24 @@ def test_lunar_day_28_single_source():
     cro_sim = lusee.CroSimulator(
         obs, beams, sky,
         Tground=Tground,
-        combinations= [(0, 0)],
+        combinations=[(0, 0)],
         freq=freq,
         lmax=lmax,
-        extra_opts={
-            "plot_sky_and_beam": True,
-            "freq_idx_plot": 5,
-            "plot_dir": str(_LUSEEPY_ROOT / "simulation" / "output" / "figures"),
-            "plot_filename": "sky_beam_healpix_cro_single_pixel.png",
-        },
     )
-    cro_sim.simulate(times=times)
+    cro_result = cro_sim.simulate()
+    cro_sim.plot_sky_beam(
+        freq_idx=5,
+        save_dir=str(_LUSEEPY_ROOT / "simulation" / "output" / "figures"),
+        save_filename="sky_beam_healpix_cro_single_pixel.png",
+    )
 
     out_dir = str(_LUSEEPY_ROOT / "simulation" / "output")
-    cro_sim.write_fits(os.path.join(out_dir, "sim_output_cro_singlepixel_28days.fits"))
+    cro_sim.write_fits(os.path.join(out_dir, "sim_output_cro_singlepixel_28days.fits"), result=cro_result)
     def_sim.write_fits(os.path.join(out_dir, "sim_output_default_singlepixel_28days.fits"))
 
-    assert cro_sim.result.shape == def_sim.result.shape
-
-    np_cro_result = np.asarray(cro_sim.result)
+    np_cro_result = np.asarray(cro_result)
     np_def_result = np.asarray(def_sim.result)
+    assert np_cro_result.shape == np_def_result.shape
     diff_norm = np.linalg.norm(np_cro_result - np_def_result)
     rel = diff_norm / np.linalg.norm(np_def_result)
     assert rel < 5e-3
