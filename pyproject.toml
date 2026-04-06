@@ -30,6 +30,12 @@ croissant = [
     "croissant-sim >= 5.1.3",
     "s2fft",
 ]
+cuda12 = [
+    "jax[cuda12]; sys_platform == 'linux'",
+]
+cuda13 = [
+    "jax[cuda13]; sys_platform == 'linux'",
+]
 dev = ["pytest>=7"]
 
 [tool.pytest.ini_options]
