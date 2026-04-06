@@ -6,6 +6,7 @@ os.environ["JAX_ENABLE_X64"] = "True"
 
 import jax
 import jax.numpy as jnp
+import pytest
 
 
 def _small_grad_setup(tmp_path):
@@ -65,6 +66,70 @@ def test_jaxsim_grad_wrt_sky(tmp_path):
 
     def loss_fn(sky):
         sim = lusee.JaxSimulator(
+            obs,
+            [beam],
+            sky,
+            Tground=0.0,
+            combinations=[(0, 0)],
+            freq=freq,
+            lmax=lmax,
+            extra_opts={"cache_transform": cache_prefix},
+        )
+        result = sim.simulate(times=times)
+        return jnp.real(jnp.vdot(result, result))
+
+    grad_sky = jax.grad(loss_fn)(sky)
+
+    assert isinstance(grad_sky, lusee.sky.HarmonicPointSourceSky)
+    assert jnp.isfinite(grad_sky._alm).all()
+    assert jnp.isfinite(grad_sky._T).all()
+    assert jnp.linalg.norm(grad_sky._alm) > 0
+    assert jnp.linalg.norm(grad_sky._T) > 0
+
+
+def test_crosim_grad_wrt_beam(tmp_path):
+    """Differentiate a small CroSimulator loss with respect to a Gaussian beam."""
+    import lusee
+
+    if lusee.CroSimulator is None:
+        pytest.skip("CroSimulator requires optional croissant and s2fft dependencies")
+
+    lusee, obs, times, freq, lmax, sky, beam, cache_prefix = _small_grad_setup(tmp_path)
+
+    def loss_fn(beam):
+        sim = lusee.CroSimulator(
+            obs,
+            [beam],
+            sky,
+            Tground=0.0,
+            combinations=[(0, 0)],
+            freq=freq,
+            lmax=lmax,
+            extra_opts={"cache_transform": cache_prefix},
+        )
+        result = sim.simulate(times=times)
+        return jnp.real(jnp.vdot(result, result))
+
+    grad_beam = jax.grad(loss_fn)(beam)
+
+    assert isinstance(grad_beam, lusee.BeamGauss)
+    assert jnp.isfinite(grad_beam.Etheta).all()
+    assert jnp.isfinite(grad_beam.gain_conv).all()
+    assert jnp.linalg.norm(grad_beam.Etheta) > 0
+    assert jnp.linalg.norm(grad_beam.gain_conv) > 0
+
+
+def test_crosim_grad_wrt_sky(tmp_path):
+    """Differentiate a small CroSimulator loss with respect to a point-source sky."""
+    import lusee
+
+    if lusee.CroSimulator is None:
+        pytest.skip("CroSimulator requires optional croissant and s2fft dependencies")
+
+    lusee, obs, times, freq, lmax, sky, beam, cache_prefix = _small_grad_setup(tmp_path)
+
+    def loss_fn(sky):
+        sim = lusee.CroSimulator(
             obs,
             [beam],
             sky,
