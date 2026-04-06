@@ -108,7 +108,7 @@ class CroSimulator(SimulatorBase):
 
             
                                 
-    def simulate(self, times=None, *, sky=None):
+    def simulate(self, times=None, *, sky=None, beam=None):
         """
         Simulate using Croissant.
 
@@ -116,11 +116,12 @@ class CroSimulator(SimulatorBase):
         :param sky: Optional pytree sky object with ``.get_alm(ndx, freq)``
             and ``.frame == "galactic"``.  When provided, the sky's
             ``get_alm()`` is called inside the traced computation so
-            ``jax.grad`` flows through the pytree leaves::
-
-                grad = jax.grad(lambda s: jnp.sum(
-                    sim.simulate(sky=s) ** 2))(sky)
-
+            ``jax.grad`` flows through the pytree leaves.
+        :param beam: Optional pytree beam object with an ``.efbeams``
+            property returning a list of
+            ``(ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag)``
+            tuples.  Arrays in the tuples are JAX-traced so ``jax.grad``
+            flows through the pytree leaves.
         :returns: Waterfall (N_times, N_combos_with_imag, N_freq).
         """
         if times is None:
@@ -133,15 +134,20 @@ class CroSimulator(SimulatorBase):
             raise NotImplementedError(
                 f"CroSimulator requires galactic sky frame, got {sky_model.frame}"
             )
+        efbeams = beam.efbeams if beam is not None else self.efbeams
         self.result = self._simulate_croissant_mepa(times, ntimes, delta_t,
-                                                     sky_model=sky_model)
+                                                     sky_model=sky_model,
+                                                     efbeams=efbeams)
         return self.result
 
-    def _simulate_croissant_mepa(self, times, ntimes, delta_t, sky_model=None):
+    def _simulate_croissant_mepa(self, times, ntimes, delta_t,
+                                    sky_model=None, efbeams=None):
         """MEPA pipeline: sky gal→MEPA once (epoch-aware), beam topo(t0)→MEPA once,
         rot_alm_z(dt) for time evolution, then convolve."""
         if sky_model is None:
             sky_model = self.sky_model
+        if efbeams is None:
+            efbeams = self.efbeams
         topo = LunarTopo(obstime=times[0], location=self.obs.loc)
         sim_L = self.lmax + 1
         eul_topo, dl_topo = crojax.rotations.generate_euler_dl(
@@ -168,7 +174,7 @@ class CroSimulator(SimulatorBase):
         # Do not apply an additional manual m-dependent phase here.
         combo_results = []
         plot_done = False
-        for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
+        for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in efbeams:
             beam_2d = jnp.stack([
                 s2fft.sampling.reindex.flm_hp_to_2d_fast(
                     jnp.asarray(br_), sim_L
