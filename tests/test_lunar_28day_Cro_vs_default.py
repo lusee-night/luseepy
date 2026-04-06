@@ -61,16 +61,16 @@ def test_lunar_day_28_single_source():
     lmax = 3*nside - 1
     sigma_deg = 20.0
     Tground = 0.0
-    freq = np.arange(1, 51, 5, dtype=float)
-
-    # Single-pixel sky (equatorial) wrapped to galactic
-    sky = lusee.sky.SingleSourceHealpixSky(l_deg=l_deg, b_deg=b_deg, Nside=nside, freq=freq)
     beam = lusee.BeamGauss(
         alt_deg=90.0,
         az_deg=0.0,
         sigma_deg=sigma_deg,
         one_over_freq_scaling=False,
     )
+    freq = beam.freq[::5]
+
+    # Single-pixel sky (equatorial) wrapped to galactic
+    sky = lusee.sky.SingleSourceHealpixSky(l_deg=l_deg, b_deg=b_deg, Nside=nside, freq=freq)
     np_sky = lusee.NpWrapper(sky)
     np_beam = lusee.NpWrapper(beam)
     beams = [beam]
