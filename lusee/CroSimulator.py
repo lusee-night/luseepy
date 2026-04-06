@@ -212,13 +212,15 @@ class CroSimulator:
         self.eul_topo = tuple(float(a) for a in eul_topo)
         self.dl_topo = jnp.asarray(dl_topo)
 
+        self._freq_ndx_sky = freq_ndx_sky
+        self._et = cro.rotations.jd_to_et(times[0].jd)
+
         sky_gal = sky_model.get_alm(freq_ndx_sky, freq)
         sky_2d = jnp.stack([
             s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(s), sim_L)
             for s in sky_gal
         ])
-        et = cro.rotations.jd_to_et(times[0].jd)
-        self.sky_mepa = jnp.asarray(cro.rotations.gal2mepa(sky_2d, et=et))
+        self.sky_mepa = jnp.asarray(cro.rotations.gal2mepa(sky_2d, et=self._et))
 
         delta_t_sec = np.arange(len(times), dtype=float) * obs.deltaT_sec
         self.phases = jnp.asarray(cro.simulator.rot_alm_z(lmax, times=delta_t_sec))
@@ -242,27 +244,43 @@ class CroSimulator:
     # -----------------------------------------------------------------
 
     def simulate(self, beam_alms=None, sky_mepa=None,
-                 Tground=None, ground_power=None):
+                 Tground=None, ground_power=None, *,
+                 beam=None, sky=None):
         """Run the beam-sky convolution.
 
         All arguments are optional — defaults come from the values computed
         in ``__init__``.  Pass explicit JAX arrays to differentiate through
         them with ``jax.grad``.
 
-        **Pure JAX** when called with explicit arguments (no Python
-        side-effects, compatible with ``jax.jit`` / ``jax.grad``).
+        **Pytree interface** (preferred): pass ``beam=`` and/or ``sky=``
+        with pytree objects.  The simulator calls their methods inside the
+        traced computation so ``jax.grad`` sees through to the pytree
+        leaves::
 
+            grad = jax.grad(lambda s: jnp.sum(sim.simulate(sky=s) ** 2))(sky)
+
+        **Raw-array interface**: pass ``beam_alms=``, ``sky_mepa=``, etc.
+        directly as JAX arrays (backward-compatible).
+
+        :param beam: A pytree beam object with ``.beam_alms`` and
+            ``.ground_power`` attributes.
+        :param sky: A pytree sky object with ``.get_alm(ndx, freq)`` and
+            ``.frame`` (must be ``"galactic"``).  The galactic→MEPA
+            rotation runs inside the traced computation.
         :param beam_alms: ``(Nchannels, Nfreq, L, 2L-1)`` beam ALMs in
             topo-frame s2fft 2D layout.
         :param sky_mepa: ``(Nfreq, L, 2L-1)`` sky ALMs in MEPA frame.
-            The galactic→MEPA rotation is a fixed linear transform applied
-            once in ``__init__``; sampling/optimizing in MEPA avoids
-            repeating that rotation every forward pass and the gradient
-            landscape is identical (just rotated).
         :param Tground: Scalar ground temperature [K].
         :param ground_power: ``(Nchannels, Nfreq)`` ground power fractions.
         :returns: Waterfall array, shape ``(Ntimes, Nchannels, Nfreq)``.
         """
+        if beam is not None:
+            beam_alms = beam.beam_alms
+            ground_power = beam.ground_power
+        if sky is not None:
+            sky_hp = sky.get_alm(self._freq_ndx_sky, self.freq)
+            sky_mepa = cro.rotations.gal2mepa(
+                _hp_to_2d(sky_hp, self.lmax + 1), et=self._et)
         if beam_alms is None:
             beam_alms = self.beam_alms
         if sky_mepa is None:

@@ -306,3 +306,28 @@ class HarmonicPointSourceSky:
         if freq is not None:
             assert np.all(self.freq[ndx] == np.atleast_1d(freq))
         return [self._alm * self._T[i] for i in ndx]
+
+    # -- JAX pytree protocol --
+
+    def tree_flatten(self):
+        children = (self._T, self._alm)
+        aux = (self.lmax, self.frame, tuple(float(f) for f in self.freq))
+        return children, aux
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        lmax, frame, freq_tuple = aux
+        obj = object.__new__(cls)
+        obj._T = children[0]
+        obj._alm = children[1]
+        obj.lmax = lmax
+        obj.frame = frame
+        obj.freq = np.array(freq_tuple)
+        return obj
+
+
+try:
+    import jax
+    jax.tree_util.register_pytree_node_class(HarmonicPointSourceSky)
+except ImportError:
+    pass
