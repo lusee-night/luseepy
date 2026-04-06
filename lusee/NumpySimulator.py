@@ -94,7 +94,7 @@ class DefaultSimulator(SimulatorBase):
         else:
             raise NotImplementedError
 
-        sky_base = self.sky_model.get_alm (self.freq_ndx_sky, self.freq)
+        sky_base = [np.asarray(s_, dtype=np.complex128) for s_ in self.sky_model.get_alm (self.freq_ndx_sky, self.freq)]
         wfall = []
         Nt = len (times)
         for ti, t in enumerate(times):

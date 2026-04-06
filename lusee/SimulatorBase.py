@@ -296,8 +296,8 @@ class SimulatorBase:
             "lun_height_m": self.obs.lun_height_m,
             "deltaT_sec":   self.obs.deltaT_sec
         }
-        fits.write(self.result, header=header, extname='data')
-        fits.write(self.freq, extname='freq')
+        fits.write(np.asarray(self.result), header=header, extname='data')
+        fits.write(np.asarray(self.freq), extname='freq')
         fits.write(np.array(self.combinations), extname='combinations')
         for i,b in enumerate(self.beams):
             fits.write(np.asarray(b.ZRe)[self.freq_ndx_beam],extname=f'ZRe_{i}')
