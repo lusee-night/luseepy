@@ -60,7 +60,51 @@ class CroSimulator(SimulatorBase):
         self.lmax = lmax
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
-        self.prepare_beams (beams, combinations)
+        self._prepare_beams_for_simulation(beams, combinations)
+
+    def _prepare_beams_for_simulation(self, beams, combinations):
+        if all(getattr(beam, "is_jax_pytree_beam", False) for beam in beams):
+            self._prepare_beams_jax(beams, combinations)
+            return
+        self.prepare_beams(beams, combinations)
+
+    def _prepare_beams_jax(self, beams, combinations):
+        self.beams = beams
+        self.efbeams = []
+        self.combinations = [(int(i), int(j)) for i, j in combinations]
+        beam_idx = jnp.asarray(np.array(self.freq_ndx_beam, dtype=np.int32))
+
+        for i, j in self.combinations:
+            bi, bj = beams[i], beams[j]
+            print (f"  intializing beam combination {bi.id} x {bj.id} ...")
+            norm = jnp.sqrt(
+                jnp.asarray(bi.gain_conv)[beam_idx]
+                * jnp.asarray(bj.gain_conv)[beam_idx]
+            )
+            beamreal, beamimag = bi.get_healpix_alm(
+                self.lmax,
+                freq_ndx=self.freq_ndx_beam,
+                other=bj,
+                return_I_stokes_only=True,
+                return_complex_components=True,
+            )
+            beamreal = jnp.asarray(beamreal) * norm[:, None]
+            if beamimag is not None:
+                beamimag = jnp.asarray(beamimag) * norm[:, None]
+
+            if i==j:
+                groundPowerReal = 1.0 - jnp.real(beamreal[:,0]) / jnp.sqrt(4*jnp.pi)
+                beamimag = None
+                groundPowerImag = 0.0
+            else:
+                cross_power = jnp.asarray(self.cross_power.Ex_coupling(bi,bj,self.freq_ndx_beam))
+                print (f"    cross power is {cross_power[0]} ... {cross_power[-1]} ")
+                groundPowerReal = cross_power - jnp.real(beamreal[:,0]) / jnp.sqrt(4*jnp.pi)
+                groundPowerImag = -jnp.real(beamimag[:,0]) / jnp.sqrt(4*jnp.pi)
+            if "dump_beams" in getattr(self, "extra_opts", {}):
+                np.save(bi.id+bj.id, np.asarray(beamreal))
+            self.efbeams.append((i,j,beamreal, beamimag, groundPowerReal,
+                                 groundPowerImag))
 
             
                                 
@@ -100,10 +144,8 @@ class CroSimulator(SimulatorBase):
             dl_array=dl_topo,
         )
         sky_gal = self.sky_model.get_alm(self.freq_ndx_sky, self.freq)
-        sky_2d = np.stack([
-            np.asarray(
-                s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(s_), sim_L)
-            )
+        sky_2d = jnp.stack([
+            s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(s_), sim_L)
             for s_ in sky_gal
         ])
         et = cro.rotations.jd_to_et(times[0].jd)
@@ -117,15 +159,13 @@ class CroSimulator(SimulatorBase):
         combo_results = []
         plot_done = False
         for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
-            beam_2d = np.stack([
-                np.asarray(
-                    s2fft.sampling.reindex.flm_hp_to_2d_fast(
-                        jnp.asarray(br_), sim_L
-                    )
+            beam_2d = jnp.stack([
+                s2fft.sampling.reindex.flm_hp_to_2d_fast(
+                    jnp.asarray(br_), sim_L
                 )
                 for br_ in beamreal
             ])
-            beam_mepa = jax.vmap(topo2mepa)(jnp.array(beam_2d))
+            beam_mepa = jax.vmap(topo2mepa)(beam_2d)
             if self.extra_opts.get("plot_sky_and_beam") and not plot_done:
                 nf = len(self.freq)
                 freq_idx_plot = int(self.extra_opts.get("freq_idx_plot", 0))
@@ -151,20 +191,18 @@ class CroSimulator(SimulatorBase):
                 )
                 plot_done = True
             vis = crojax.simulator.convolve(beam_mepa, sky_mepa, phases)
-            T = np.asarray(vis.real) / norm_factor + self.Tground * groundPowerReal
+            T = vis.real / norm_factor + self.Tground * groundPowerReal
             combo_results.append((T, None))
             if ci != cj:
-                beamimag_2d = np.stack([
-                    np.asarray(
-                        s2fft.sampling.reindex.flm_hp_to_2d_fast(
-                            jnp.asarray(bi_), sim_L
-                        )
+                beamimag_2d = jnp.stack([
+                    s2fft.sampling.reindex.flm_hp_to_2d_fast(
+                        jnp.asarray(bi_), sim_L
                     )
                     for bi_ in beamimag
                 ])
-                beamimag_mepa = jax.vmap(topo2mepa)(jnp.array(beamimag_2d))
+                beamimag_mepa = jax.vmap(topo2mepa)(beamimag_2d)
                 vis_imag = crojax.simulator.convolve(beamimag_mepa, sky_mepa, phases)
-                Timag = np.asarray(vis_imag.real) / norm_factor + self.Tground * groundPowerImag
+                Timag = vis_imag.real / norm_factor + self.Tground * groundPowerImag
                 combo_results[-1] = (T, Timag)
         wfall = []
         for ti in range(ntimes):
@@ -174,4 +212,4 @@ class CroSimulator(SimulatorBase):
                 if Timag is not None:
                     res.append(Timag[ti])
             wfall.append(res)
-        return np.array(wfall)
+        return jnp.asarray(wfall)
