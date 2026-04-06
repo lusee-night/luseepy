@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import sphericart.jax
 import copy
 import matplotlib.pyplot as plt
+from jax.scipy.special import sph_harm_y as jax_sph_harm_y
 from jax.tree_util import register_pytree_node_class
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import healpy as hp
@@ -21,8 +22,10 @@ from scipy.special import sph_harm_y
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import RegularGridInterpolator
 
+USE_SPHERICART = True
 
-def getLegendre(lmax, theta):
+
+def getLegendre_sphericart(lmax, theta):
     """
     Function that calculates Legendre polynomial functions up to specified degree
     
@@ -39,8 +42,35 @@ def getLegendre(lmax, theta):
     # The current pyshtools-based output matches spherical harmonics evaluated at
     # phi = 0 for m >= 0, arranged in [l, m] layout.
     m_idx, l_idx = _get_triu_indices(lmax)
-    values = _getLegendre_packed(lmax, theta)
+    values = _getLegendre_packed_sphericart(lmax, theta)
     return jnp.zeros((lmax + 1, lmax + 1), dtype=values.dtype).at[l_idx, m_idx].set(values)
+
+
+def getLegendre_jax_builtin(lmax, theta):
+    """
+    Function that calculates Legendre polynomial functions up to specified degree
+    
+    :param lmax: Maximum degree of Legendre functions
+    :type lmax: int
+    :param theta: Argument of Legendre function
+    :type theta: float
+    
+    :returns: 2D array of Legendre functions, array indices are l and m
+    :rtype: numpy array
+    
+    """
+    
+    # The current pyshtools-based output matches spherical harmonics evaluated at
+    # phi = 0 for m >= 0, arranged in [l, m] layout.
+    m_idx, l_idx = jnp.triu_indices(lmax + 1)
+    values = jax_sph_harm_y(
+        l_idx,
+        m_idx,
+        jnp.full_like(l_idx, theta, dtype=jnp.asarray(theta).dtype),
+        jnp.zeros_like(m_idx, dtype=jnp.asarray(theta).dtype),
+        n_max=lmax,
+    )
+    return jnp.zeros((lmax + 1, lmax + 1), dtype=values.dtype).at[l_idx, m_idx].set(values.real)
 
 
 @lru_cache(maxsize=None)
@@ -58,7 +88,7 @@ def _get_sphericart_indices_and_scale(lmax):
     return jnp.asarray(s_idx, dtype=jnp.int32), jnp.asarray(sign * factor)
 
 
-def _getLegendre_packed(lmax, theta):
+def _getLegendre_packed_sphericart(lmax, theta):
     theta = jnp.asarray(theta)
     s_idx, scale = _get_sphericart_indices_and_scale(lmax)
     xyz = jnp.array([[jnp.sin(theta), 0.0, jnp.cos(theta)]], dtype=theta.dtype)
@@ -67,7 +97,7 @@ def _getLegendre_packed(lmax, theta):
 
 
 @partial(jax.jit, static_argnums=(3,))
-def _grid2healpix_alm_fast_impl(theta, phi, img, lmax):
+def _grid2healpix_alm_fast_impl_sphericart(theta, phi, img, lmax):
     dtheta = theta[1] - theta[0]
     dA_theta = jnp.sin(theta) * dtheta
     nphi = phi.shape[0]
@@ -79,9 +109,37 @@ def _grid2healpix_alm_fast_impl(theta, phi, img, lmax):
         rimg = rimg[:, : lmax + 1]
 
     m_idx, l_idx = _get_triu_indices(lmax)
-    legendre_values = jax.vmap(lambda th: _getLegendre_packed(lmax, th))(theta)
+    legendre_values = jax.vmap(lambda th: _getLegendre_packed_sphericart(lmax, th))(theta)
     coeffs = rimg[:, m_idx] * legendre_values * dA_theta[:, None]
     return coeffs.sum(axis=0) * (2 * jnp.pi / nphi)
+
+
+@partial(jax.jit, static_argnums=(3,))
+def _grid2healpix_alm_fast_impl_jax_builtin(theta, phi, img, lmax):
+    dtheta = theta[1] - theta[0]
+    dA_theta = jnp.sin(theta) * dtheta
+    nphi = phi.shape[0]
+
+    rimg = jnp.fft.rfft(img, axis=1)
+    if rimg.shape[1] < lmax + 1:
+        rimg = jnp.pad(rimg, ((0, 0), (0, lmax + 1 - rimg.shape[1])))
+    else:
+        rimg = rimg[:, : lmax + 1]
+
+    legendre_values = jax.vmap(getLegendre_jax_builtin, in_axes=(None, 0))(lmax, theta)
+    m_idx, l_idx = jnp.triu_indices(lmax + 1)
+    coeffs = rimg[:, m_idx] * legendre_values[:, l_idx, m_idx] * dA_theta[:, None]
+    return coeffs.sum(axis=0) * (2 * jnp.pi / nphi)
+
+
+if USE_SPHERICART:
+    getLegendre = getLegendre_sphericart
+    _getLegendre_packed = _getLegendre_packed_sphericart
+    _grid2healpix_alm_fast_impl = _grid2healpix_alm_fast_impl_sphericart
+else:
+    getLegendre = getLegendre_jax_builtin
+    _getLegendre_packed = getLegendre_jax_builtin
+    _grid2healpix_alm_fast_impl = _grid2healpix_alm_fast_impl_jax_builtin
 
 
 @partial(jax.jit, static_argnums=(3,))
