@@ -8,6 +8,7 @@ from .Beam          import Beam, grid2healpix, grid2healpix_alm_fast
 from .BeamInterpolator import BeamInterpolator
 from .BeamGauss     import BeamGauss
 from .NpWrapper     import NpWrapper
+from .CachedBeam   import CachedBeam
 from .BeamCouplings import BeamCouplings
 from .DefaultSimulator import DefaultSimulator
 from .JaxSimulator import JaxSimulator

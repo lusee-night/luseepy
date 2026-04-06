@@ -7,6 +7,7 @@ os.environ["JAX_ENABLE_X64"] = "True"
 import jax
 import jax.numpy as jnp
 import pytest
+import lusee
 
 
 def _small_grad_setup(tmp_path):
@@ -187,57 +188,29 @@ def test_crosim_grad_wrt_sky_precomputed(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# ScaledBeam: dummy pytree beam for testing beam= kwarg
+# ScaledBeam: dummy CachedBeam subclass for testing beam= kwarg
 # ---------------------------------------------------------------------------
 
 @jax.tree_util.register_pytree_node_class
-class ScaledBeam:
-    """Beam = amplitude * precomputed efbeams.  Tutorial pytree."""
+class ScaledBeam(lusee.CachedBeam):
+    """Beam = amplitude * cached pattern.  Tutorial CachedBeam subclass."""
 
     def __init__(self, amplitude, base_efbeams):
+        super().__init__(base_efbeams)
         self.amplitude = jnp.asarray(float(amplitude))
-        self._base_efbeams = base_efbeams
 
-    @property
-    def efbeams(self):
+    def transform_beam(self, beamreal, groundpower):
         a = self.amplitude
-        result = []
-        for ci, cj, br, bi, gpr, gpi in self._base_efbeams:
-            br_s = a * jax.lax.stop_gradient(jnp.asarray(br))
-            gpr_s = 1.0 - a * (1.0 - jax.lax.stop_gradient(jnp.asarray(gpr)))
-            if bi is not None:
-                bi_s = a * jax.lax.stop_gradient(jnp.asarray(bi))
-                gpi_s = -a * jax.lax.stop_gradient(jnp.asarray(-gpi))
-            else:
-                bi_s = None
-                gpi_s = 0.0
-            result.append((ci, cj, br_s, bi_s, gpr_s, gpi_s))
-        return result
+        return a * beamreal, 1.0 - a * (1.0 - groundpower)
 
-    def tree_flatten(self):
-        arrays = [self.amplitude]
-        combo_meta = []
-        for ci, cj, br, bi, gpr, gpi in self._base_efbeams:
-            arrays.extend([jnp.asarray(br), jnp.asarray(gpr)])
-            has_imag = bi is not None
-            if has_imag:
-                arrays.extend([jnp.asarray(bi), jnp.asarray(gpi)])
-            combo_meta.append((ci, cj, has_imag))
-        return tuple(arrays), tuple(combo_meta)
+    def _param_leaves(self):
+        return (self.amplitude,)
 
     @classmethod
-    def tree_unflatten(cls, aux, children):
-        obj = object.__new__(cls)
-        obj.amplitude = children[0]
-        idx = 1
-        obj._base_efbeams = []
-        for ci, cj, has_imag in aux:
-            br, gpr = children[idx], children[idx + 1]; idx += 2
-            if has_imag:
-                bi, gpi = children[idx], children[idx + 1]; idx += 2
-            else:
-                bi, gpi = None, 0.0
-            obj._base_efbeams.append((ci, cj, br, bi, gpr, gpi))
+    def _from_param_leaves(cls, params, base_efbeams):
+        obj = cls.__new__(cls)
+        lusee.CachedBeam.__init__(obj, base_efbeams)
+        (obj.amplitude,) = params
         return obj
 
 
