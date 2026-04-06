@@ -12,6 +12,7 @@ import pickle
 import os
 import warnings
 from scipy.spatial.transform import Rotation as ScipyRotation
+import time
 
 
 class JaxSimulator(SimulatorBase):
@@ -45,14 +46,36 @@ class JaxSimulator(SimulatorBase):
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None,
                   lmax = 128, cross_power = None,
                   extra_opts = {}):
+        t_init0 = time.perf_counter()
         super().__init__(obs, beams, sky_model, Tground, combinations, freq)
         self.lmax = lmax
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
+        self._timing_enabled = bool(self.extra_opts.get("profile_timing", False))
+        t0 = time.perf_counter()
         self._setup_jax_rotate_ops()
+        self._log_timing("__init__._setup_jax_rotate_ops", t0)
+        t0 = time.perf_counter()
         self._prepare_beams_for_simulation(beams, combinations)
+        self._block_ready(self.efbeams)
+        self._log_timing("__init__._prepare_beams_for_simulation", t0)
+        t0 = time.perf_counter()
         self._prepare_output_tensors()
+        self._block_ready((self._output_beams, self._output_ground))
+        self._log_timing("__init__._prepare_output_tensors", t0)
+        t0 = time.perf_counter()
         self._setup_simulation_kernels()
+        self._log_timing("__init__._setup_simulation_kernels", t0)
+        self._log_timing("__init__.total", t_init0)
+
+    def _log_timing(self, label, t0):
+        if self._timing_enabled:
+            print(f"JaxSimulator timing {label}: {time.perf_counter() - t0:.3f} s")
+
+    def _block_ready(self, value):
+        if self._timing_enabled:
+            jax.block_until_ready(value)
+        return value
 
     def _prepare_beams_for_simulation(self, beams, combinations):
         if all(getattr(beam, "is_jax_pytree_beam", False) for beam in beams):
@@ -284,8 +307,10 @@ class JaxSimulator(SimulatorBase):
         """
         if times is None:
             times = self.obs.times
+        t_sim0 = time.perf_counter()
         if self.sky_model.frame=="galactic":
             do_rot = True
+            t0 = time.perf_counter()
             cache_fn = self._transform_cache_file(times)
             force_recompute = self._transform_cache_force_recompute()
             if force_recompute and (cache_fn is not None):
@@ -307,6 +332,7 @@ class JaxSimulator(SimulatorBase):
                 if cache_fn is not None:
                     print (f"Saving transforms to {cache_fn}...")
                     pickle.dump((lzl,bzl,lyl,byl),open(cache_fn,'bw'))
+            self._log_timing("simulate.transforms", t0)
 
         elif self.sky_model.frame=="MCMF":
             do_rot = False
@@ -314,22 +340,37 @@ class JaxSimulator(SimulatorBase):
             raise NotImplementedError
 
         Nt = len(times)
+        t0 = time.perf_counter()
         sky_base = jnp.asarray(self.sky_model.get_alm(self.freq_ndx_sky, self.freq))
+        self._block_ready(sky_base)
+        self._log_timing("simulate.sky_model.get_alm", t0)
 
         if do_rot:
+            t0 = time.perf_counter()
             alpha, beta, gamma = self._compute_zyz_angles(lzl, bzl, lyl, byl, Nt)
             alpha = jnp.asarray(alpha)
             beta = jnp.asarray(beta)
             gamma = jnp.asarray(gamma)
+            self._block_ready((alpha, beta, gamma))
+            self._log_timing("simulate.compute_zyz_angles", t0)
+            t0 = time.perf_counter()
             self.result = jax.vmap(
                 lambda a, b, g: self.simulate_at_single_time(sky_base, a, b, g)
             )(alpha, beta, gamma)
+            self._block_ready(self.result)
+            self._log_timing("simulate.vmap_rotate_and_contract", t0)
+            t0 = time.perf_counter()
             sky_t0 = self._rotate_sky_packed_batch_jax(sky_base, alpha[0], beta[0], gamma[0])
+            self._block_ready(sky_t0)
+            self._log_timing("simulate.rotate_sky_t0", t0)
         else:
             dummy = jnp.arange(Nt)
+            t0 = time.perf_counter()
             self.result = jax.vmap(
                 lambda _: self.simulate_at_single_time(sky_base)
             )(dummy)
+            self._block_ready(self.result)
+            self._log_timing("simulate.vmap_contract_no_rotation", t0)
             sky_t0 = sky_base
 
         if self.extra_opts.get("plot_sky_and_beam"):
@@ -355,4 +396,5 @@ class JaxSimulator(SimulatorBase):
                 title_prefix=f"JaxSimulator at {self.freq[freq_idx_plot]} MHz ",
             )
 
+        self._log_timing("simulate.total", t_sim0)
         return self.result

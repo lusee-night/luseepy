@@ -13,6 +13,7 @@ import os
 import sys
 import numpy as np
 import pytest
+import time
 
 os.environ["JAX_ENABLE_X64"] = "True"
 
@@ -83,13 +84,12 @@ def test_lunar_day_28_single_source():
         freq=freq,
         lmax=lmax,
         extra_opts={
-            "plot_sky_and_beam": True,
-            "freq_idx_plot": 5,
-            "plot_dir": str(_LUSEEPY_ROOT / "simulation" / "output" / "figures"),
-            "plot_filename": "sky_beam_healpix_default_single_pixel.png",
+            "plot_sky_and_beam": False,
         },
     )
+    t0 = time.perf_counter()
     def_sim.simulate(times=times)
+    def_time = time.perf_counter() - t0
 
     # Run JaxSimulator (topo frame)
     jax_sim = lusee.JaxSimulator(
@@ -102,7 +102,9 @@ def test_lunar_day_28_single_source():
             "plot_sky_and_beam": False,
         },
     )
+    t0 = time.perf_counter()
     jax_sim.simulate(times=times)
+    jax_time = time.perf_counter() - t0
 
     # Run CroSimulator (MEPA frame)
     if lusee.CroSimulator is None:
@@ -114,18 +116,19 @@ def test_lunar_day_28_single_source():
         freq=freq,
         lmax=lmax,
         extra_opts={
-            "plot_sky_and_beam": True,
-            "freq_idx_plot": 5,
-            "plot_dir": str(_LUSEEPY_ROOT / "simulation" / "output" / "figures"),
-            "plot_filename": "sky_beam_healpix_cro_single_pixel.png",
+            "plot_sky_and_beam": False,
         },
     )
+    t0 = time.perf_counter()
     cro_sim.simulate(times=times)
+    cro_time = time.perf_counter() - t0
 
-    out_dir = str(_LUSEEPY_ROOT / "simulation" / "output")
-    cro_sim.write_fits(os.path.join(out_dir, "sim_output_cro_singlepixel_28days.fits"))
-    def_sim.write_fits(os.path.join(out_dir, "sim_output_default_singlepixel_28days.fits"))
-    jax_sim.write_fits(os.path.join(out_dir, "sim_output_jax_singlepixel_28days.fits"))
+    print(
+        f"n_times={len(times)} "
+        f"default_sec={def_time:.3f} "
+        f"jaxsim_sec={jax_time:.3f} "
+        f"croissant_sec={cro_time:.3f}"
+    )
 
     assert cro_sim.result.shape == def_sim.result.shape
     assert jax_sim.result.shape == def_sim.result.shape
