@@ -149,3 +149,38 @@ def test_crosim_grad_wrt_sky(tmp_path):
     assert jnp.isfinite(grad_sky._T).all()
     assert jnp.linalg.norm(grad_sky._alm) > 0
     assert jnp.linalg.norm(grad_sky._T) > 0
+
+
+def test_crosim_grad_wrt_sky_precomputed(tmp_path):
+    """Differentiate via sky= kwarg (precomputed simulator, approach A).
+
+    Builds the simulator once, then differentiates only through simulate().
+    Faster per iteration than the through-constructor approach above.
+    """
+    import lusee
+
+    if lusee.CroSimulator is None:
+        pytest.skip("CroSimulator requires optional croissant and s2fft dependencies")
+
+    lusee, obs, times, freq, lmax, sky, beam, cache_prefix = _small_grad_setup(tmp_path)
+
+    sim = lusee.CroSimulator(
+        obs,
+        [beam],
+        sky,
+        Tground=0.0,
+        combinations=[(0, 0)],
+        freq=freq,
+        lmax=lmax,
+        extra_opts={"cache_transform": cache_prefix},
+    )
+
+    def loss_fn(sky):
+        result = sim.simulate(times=times, sky=sky)
+        return jnp.real(jnp.vdot(result, result))
+
+    grad_sky = jax.grad(loss_fn)(sky)
+
+    assert isinstance(grad_sky, lusee.sky.HarmonicPointSourceSky)
+    assert jnp.isfinite(grad_sky._T).all()
+    assert jnp.linalg.norm(grad_sky._T) > 0
