@@ -2,7 +2,7 @@
 # LuSEE Beam
 #
 
-from functools import partial
+from functools import partial, lru_cache
 import os
 
 os.environ["JAX_ENABLE_X64"] = "True"
@@ -11,9 +11,9 @@ import fitsio
 import numpy as np
 import jax
 import jax.numpy as jnp
+import sphericart.jax
 import copy
 import matplotlib.pyplot as plt
-from jax.scipy.special import sph_harm_y as jax_sph_harm_y
 from jax.tree_util import register_pytree_node_class
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import healpy as hp
@@ -38,15 +38,32 @@ def getLegendre(lmax, theta):
     
     # The current pyshtools-based output matches spherical harmonics evaluated at
     # phi = 0 for m >= 0, arranged in [l, m] layout.
-    m_idx, l_idx = jnp.triu_indices(lmax + 1)
-    values = jax_sph_harm_y(
-        l_idx,
-        m_idx,
-        jnp.full_like(l_idx, theta, dtype=jnp.asarray(theta).dtype),
-        jnp.zeros_like(m_idx, dtype=jnp.asarray(theta).dtype),
-        n_max=lmax,
-    )
-    return jnp.zeros((lmax + 1, lmax + 1), dtype=values.dtype).at[l_idx, m_idx].set(values.real)
+    m_idx, l_idx = _get_triu_indices(lmax)
+    values = _getLegendre_packed(lmax, theta)
+    return jnp.zeros((lmax + 1, lmax + 1), dtype=values.dtype).at[l_idx, m_idx].set(values)
+
+
+@lru_cache(maxsize=None)
+def _get_triu_indices(lmax):
+    m_idx, l_idx = np.triu_indices(lmax + 1)
+    return jnp.asarray(m_idx, dtype=jnp.int32), jnp.asarray(l_idx, dtype=jnp.int32)
+
+
+@lru_cache(maxsize=None)
+def _get_sphericart_indices_and_scale(lmax):
+    m_idx, l_idx = np.triu_indices(lmax + 1)
+    s_idx = np.array([l*l + l + m for m in range(lmax + 1) for l in range(m, lmax + 1)], dtype=np.int32)
+    factor = np.where(m_idx == 0, 1.0, np.sqrt(2.0))
+    sign = np.where((m_idx % 2) == 0, 1.0, -1.0)
+    return jnp.asarray(s_idx, dtype=jnp.int32), jnp.asarray(sign * factor)
+
+
+def _getLegendre_packed(lmax, theta):
+    theta = jnp.asarray(theta)
+    s_idx, scale = _get_sphericart_indices_and_scale(lmax)
+    xyz = jnp.array([[jnp.sin(theta), 0.0, jnp.cos(theta)]], dtype=theta.dtype)
+    values = sphericart.jax.spherical_harmonics(xyz, lmax)[0]
+    return values[s_idx] / scale
 
 
 @partial(jax.jit, static_argnums=(3,))
@@ -61,9 +78,9 @@ def _grid2healpix_alm_fast_impl(theta, phi, img, lmax):
     else:
         rimg = rimg[:, : lmax + 1]
 
-    legendre_values = jax.vmap(getLegendre, in_axes=(None, 0))(lmax, theta)
-    m_idx, l_idx = jnp.triu_indices(lmax + 1)
-    coeffs = rimg[:, m_idx] * legendre_values[:, l_idx, m_idx] * dA_theta[:, None]
+    m_idx, l_idx = _get_triu_indices(lmax)
+    legendre_values = jax.vmap(lambda th: _getLegendre_packed(lmax, th))(theta)
+    coeffs = rimg[:, m_idx] * legendre_values * dA_theta[:, None]
     return coeffs.sum(axis=0) * (2 * jnp.pi / nphi)
 
 
@@ -555,7 +572,7 @@ class Beam:
             P *= theta_tapr[None,:,None]
         take_zero = False
         
-        flist = range(self.Nfreq) if freq_ndx is None else jnp.atleast_1d(freq_ndx)
+        flist = range(self.Nfreq) if freq_ndx is None else jnp.asarray(np.atleast_1d(freq_ndx), dtype=jnp.int32)
         if cross is None:
             result =  [[grid2healpix(self.theta,self.phi[:-1], P_[i,:,:-1], ellmax, Nside) 
                     for i in flist] for P_ in P]
@@ -724,7 +741,7 @@ class Beam:
         :rtype: numpy array or tuple(numpy array, numpy array) or list
         """
 
-        flist = jnp.arange(self.Nfreq) if freq_ndx is None else jnp.atleast_1d(freq_ndx)
+        flist = jnp.arange(self.Nfreq, dtype=jnp.int32) if freq_ndx is None else jnp.asarray(np.atleast_1d(freq_ndx), dtype=jnp.int32)
         stokes_maps = self.power_stokes(cross=other)
         if return_I_stokes_only:
             stokes_maps = [stokes_maps[0]]
