@@ -1,0 +1,100 @@
+CPU-only JAX setup on this Linux VM
+===================================
+
+Result
+------
+`uv run pytest -q tests/test_simulator_smoke.py` now works in this repo.
+
+Verified on this machine using
+`pyproject.toml.linux_no_cuda`, which makes `uv` install `sphericart-jax`
+from the upstream git source instead of the broken PyPI wheel.
+
+
+Root causes
+-----------
+1. `sphericart-jax` on PyPI bundles both CPU and CUDA shared libraries.
+   On this VM, importing `sphericart.jax` causes its CUDA runtime probe to
+   segfault even though the machine has no usable CUDA device.
+
+2. A manual replacement of `sphericart-jax` is not enough if you run
+   `uv run pytest`, because `uv` re-syncs the environment and restores the
+   PyPI wheel unless the source override is encoded in the metadata that
+   `uv` is actually using.
+
+3. My local `.venv` had a separate contamination issue:
+   `s2fft_lib/_s2fft.cpython-313-...so` was present inside the Python 3.12
+   environment, which caused
+
+     ImportError: cannot import name '_s2fft' from 's2fft_lib'
+
+   Reinstalling `s2fft` fixed that.
+
+
+Linux no-CUDA override
+----------------------
+`pyproject.toml.linux_no_cuda` declares:
+
+- `sphericart>=1.0.9`
+- `sphericart-jax>=1.0.9`
+
+and uses a uv source override:
+
+```toml
+[tool.uv.sources]
+sphericart-jax = { git = "https://github.com/lab-cosmo/sphericart.git", tag = "v1.0.9", subdirectory = "sphericart-jax" }
+```
+
+This makes `uv sync` and `uv run ...` build `sphericart-jax` from source.
+On a machine with no `CUDA_HOME`, that build is CPU-only.
+
+The default `pyproject.toml` is left in its normal wheel-based form.
+
+
+Fresh-clone bootstrap
+---------------------
+Starting from a fresh clone of this repo:
+
+```bash
+cp pyproject.toml.linux_no_cuda pyproject.toml
+env UV_CACHE_DIR=/tmp/uv-cache uv sync
+env UV_CACHE_DIR=/tmp/uv-cache MPLCONFIGDIR=/tmp/mpl uv run pytest -q tests/test_simulator_smoke.py
+```
+
+That is sufficient for the Linux no-CUDA path.
+
+
+If an existing `.venv` is already broken
+----------------------------------------
+If `s2fft_lib` was built for the wrong Python version, fix it with:
+
+```bash
+env UV_CACHE_DIR=/tmp/uv-cache uv sync --reinstall-package s2fft
+```
+
+Then rerun:
+
+```bash
+env UV_CACHE_DIR=/tmp/uv-cache MPLCONFIGDIR=/tmp/mpl uv run pytest -q tests/test_simulator_smoke.py
+```
+
+
+What was verified
+-----------------
+1. In a clean clone, after copying `pyproject.toml.linux_no_cuda` over
+   `pyproject.toml`, `uv sync` built:
+
+   `sphericart-jax==1.0.9 (from git+https://github.com/lab-cosmo/sphericart.git@v1.0.9#subdirectory=sphericart-jax)`
+
+2. The installed sphericart JAX bindings contained only:
+
+   `.../site-packages/sphericart/jax/jax-0.9.2/lib/libsphericart_jax_cpu.so`
+
+   and no CUDA shared library.
+
+3. `uv run python -c "import sphericart.jax; print(sphericart.jax.has_sphericart_jax_cuda)"`
+   printed `False`.
+
+4. `uv run pytest -q tests/test_simulator_smoke.py` passed in the clean clone.
+
+5. After reinstalling `s2fft` in the existing repo env,
+   `uv run pytest -q tests/test_simulator_smoke.py` also passed here.
