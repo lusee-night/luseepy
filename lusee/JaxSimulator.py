@@ -11,8 +11,10 @@ import sys
 import pickle
 import os
 import warnings
+import platform
 from scipy.spatial.transform import Rotation as ScipyRotation
 import time
+import jaxlib
 
 
 class JaxSimulator(SimulatorBase):
@@ -38,9 +40,11 @@ class JaxSimulator(SimulatorBase):
     :param extra_opts: Extra options for simulation. Supports "dump_beams" (saves instrument beams to file),
         "cache_transform" (loads/saves beam transformations from file),
         "force_recompute_cache_transform" (ignores any existing cached transform file),
-        "time_batch_size" (int): mini-batch size for time-axis JAX mapping in the
+        "time_batch_size" (int|None): mini-batch size for time-axis JAX mapping in the
         rotating sky path, and "freq_idx_plot" (int): index of frequency at which
-        to plot sky and beam.
+        to plot sky and beam. If omitted, an automatic default is used; on
+        Linux x86_64 CPU with jax/jaxlib 0.9.2 batching is disabled as a
+        workaround for a known compiler crash in the batched ``lax.map`` path.
     :type extra_opts: dict
     """
 
@@ -54,6 +58,8 @@ class JaxSimulator(SimulatorBase):
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
         self._timing_enabled = bool(self.extra_opts.get("profile_timing", False))
+        self._debug_enabled = bool(self.extra_opts.get("debug_jax", False))
+        self._debug_hlo_chars = int(self.extra_opts.get("debug_hlo_chars", 2500))
         t0 = time.perf_counter()
         self._setup_jax_rotate_ops()
         self._log_timing("__init__._setup_jax_rotate_ops", t0)
@@ -68,19 +74,86 @@ class JaxSimulator(SimulatorBase):
         t0 = time.perf_counter()
         self._setup_simulation_kernels()
         self._log_timing("__init__._setup_simulation_kernels", t0)
+        if self._debug_enabled:
+            self._debug_print(
+                f"init summary: frame={self.sky_model.frame} lmax={self.lmax} "
+                f"nfreq={len(self.freq)} nfreq_sky={len(self.freq_ndx_sky)} "
+                f"nfreq_beam={len(self.freq_ndx_beam)} ncomb={len(self.combinations)}"
+            )
+            self._debug_array_summary("freq", self.freq)
+            self._debug_array_summary("freq_ndx_sky", self.freq_ndx_sky)
+            self._debug_array_summary("freq_ndx_beam", self.freq_ndx_beam)
+            self._debug_array_summary("_output_beams", self._output_beams)
+            self._debug_array_summary("_output_ground", self._output_ground)
         self._log_timing("__init__.total", t_init0)
 
     def _log_timing(self, label, t0):
         if self._timing_enabled:
-            print(f"JaxSimulator timing {label}: {time.perf_counter() - t0:.3f} s")
+            print(f"JaxSimulator timing {label}: {time.perf_counter() - t0:.3f} s", flush=True)
+
+    def _debug_print(self, message):
+        if self._debug_enabled:
+            print(f"JaxSimulator debug: {message}", flush=True)
+
+    def _debug_array_summary(self, label, value, max_items=6):
+        if not self._debug_enabled:
+            return
+        try:
+            arr = np.asarray(value)
+        except Exception as exc:
+            self._debug_print(f"{label}: unable to materialize summary ({exc!r})")
+            return
+
+        flat = arr.reshape(-1) if arr.shape else arr.reshape(1)
+        sample = flat[:max_items].tolist()
+        summary = f"{label}: shape={arr.shape} dtype={arr.dtype} size={arr.size}"
+        if np.issubdtype(arr.dtype, np.number) or np.issubdtype(arr.dtype, np.complexfloating):
+            sample_arr = flat[: min(max_items, flat.size)]
+            finite_count = int(np.isfinite(sample_arr).sum()) if sample_arr.size else 0
+            summary += f" finite_in_sample={finite_count}/{sample_arr.size}"
+        summary += f" sample={sample}"
+        self._debug_print(summary)
+
+    def _debug_lowered_text(self, label, fn, *args):
+        if not self._debug_enabled:
+            return
+        try:
+            lowered = fn.lower(*args)
+            text = lowered.as_text() if hasattr(lowered, "as_text") else None
+            self._debug_print(f"{label}: lowered_type={type(lowered).__name__}")
+            if text is not None:
+                snippet = text[: self._debug_hlo_chars]
+                self._debug_print(
+                    f"{label}: lowered_text_first_{len(snippet)}_chars=\n{snippet}"
+                )
+        except Exception as exc:
+            self._debug_print(f"{label}: lowering failed ({exc!r})")
 
     def _block_ready(self, value):
         if self._timing_enabled:
             jax.block_until_ready(value)
         return value
 
+    def _has_known_batched_lax_map_bug(self):
+        machine = platform.machine().lower()
+        return (
+            sys.platform.startswith("linux")
+            and machine in {"x86_64", "amd64"}
+            and jax.default_backend() == "cpu"
+            and getattr(jax, "__version__", "").startswith("0.9.2")
+            and getattr(jaxlib, "__version__", "").startswith("0.9.2")
+        )
+
     def _time_batch_size(self, ntimes):
-        batch_size = self.extra_opts.get("time_batch_size", 8)
+        if "time_batch_size" in self.extra_opts:
+            batch_size = self.extra_opts["time_batch_size"]
+        else:
+            batch_size = None if self._has_known_batched_lax_map_bug() else 8
+            if batch_size is None:
+                self._debug_print(
+                    "auto-disabled time batching due to linux/x86_64 cpu "
+                    "jax/jaxlib 0.9.2 batched lax.map compiler crash"
+                )
         if batch_size is None:
             return None
         batch_size = int(batch_size)
@@ -144,6 +217,9 @@ class JaxSimulator(SimulatorBase):
         M = 2 * L - 1
         alm_size = hp.sphtfunc.Alm.getsize(self.lmax)
         m_offset = L - 1
+        self._debug_print(
+            f"rotate op setup: L={L} M={M} alm_size={alm_size} m_offset={m_offset}"
+        )
 
         packed_idx = []
         ell_idx = []
@@ -319,6 +395,13 @@ class JaxSimulator(SimulatorBase):
         if times is None:
             times = self.obs.times
         t_sim0 = time.perf_counter()
+        if self._debug_enabled:
+            self._debug_print(
+                f"simulate start: ntimes={len(times)} frame={self.sky_model.frame} "
+                f"time_batch_size_opt={self.extra_opts.get('time_batch_size', '<auto>')}"
+            )
+            if len(times) > 0:
+                self._debug_print(f"simulate times: first={times[0]} last={times[-1]}")
         if self.sky_model.frame=="galactic":
             do_rot = True
             t0 = time.perf_counter()
@@ -355,6 +438,7 @@ class JaxSimulator(SimulatorBase):
         sky_base = jnp.asarray(self.sky_model.get_alm(self.freq_ndx_sky, self.freq))
         self._block_ready(sky_base)
         self._log_timing("simulate.sky_model.get_alm", t0)
+        self._debug_array_summary("sky_base", sky_base)
 
         if do_rot:
             t0 = time.perf_counter()
@@ -364,21 +448,70 @@ class JaxSimulator(SimulatorBase):
             gamma = jnp.asarray(gamma)
             self._block_ready((alpha, beta, gamma))
             self._log_timing("simulate.compute_zyz_angles", t0)
+            self._debug_array_summary("alpha", alpha)
+            self._debug_array_summary("beta", beta)
+            self._debug_array_summary("gamma", gamma)
             t0 = time.perf_counter()
             time_batch_size = self._time_batch_size(Nt)
-            self.result = jax.lax.map(
-                lambda angles: self.simulate_at_single_time(
-                    sky_base, angles[0], angles[1], angles[2]
-                ),
-                (alpha, beta, gamma),
-                batch_size=time_batch_size,
-            )
+            if self._debug_enabled and Nt > 0:
+                self._debug_lowered_text(
+                    "rotate_and_contract_single_time",
+                    self._rotate_and_contract_single_time_jax,
+                    sky_base,
+                    alpha[0],
+                    beta[0],
+                    gamma[0],
+                    self._output_beams,
+                    self._output_ground,
+                )
+                probe_t0 = time.perf_counter()
+                self._debug_print("probe 1/3: compile+run single rotated time")
+                probe_single = self.simulate_at_single_time(sky_base, alpha[0], beta[0], gamma[0])
+                jax.block_until_ready(probe_single)
+                self._debug_print(
+                    f"probe 1/3 complete in {time.perf_counter() - probe_t0:.3f} s"
+                )
+                self._debug_array_summary("probe_single", probe_single)
+                if Nt > 1:
+                    probe_t0 = time.perf_counter()
+                    nprobe = min(2, Nt)
+                    self._debug_print(
+                        f"probe 2/3: compile+run vmap over first {nprobe} rotated times"
+                    )
+                    probe_many = jax.vmap(
+                        lambda a, b, g: self.simulate_at_single_time(sky_base, a, b, g)
+                    )(alpha[:nprobe], beta[:nprobe], gamma[:nprobe])
+                    jax.block_until_ready(probe_many)
+                    self._debug_print(
+                        f"probe 2/3 complete in {time.perf_counter() - probe_t0:.3f} s"
+                    )
+                    self._debug_array_summary("probe_many", probe_many)
+                self._debug_print(
+                    f"probe 3/3: entering full lax.map ntimes={Nt} batch_size={time_batch_size}"
+                )
+            if time_batch_size is None:
+                self.result = jax.lax.map(
+                    lambda angles: self.simulate_at_single_time(
+                        sky_base, angles[0], angles[1], angles[2]
+                    ),
+                    (alpha, beta, gamma),
+                )
+            else:
+                self.result = jax.lax.map(
+                    lambda angles: self.simulate_at_single_time(
+                        sky_base, angles[0], angles[1], angles[2]
+                    ),
+                    (alpha, beta, gamma),
+                    batch_size=time_batch_size,
+                )
             self._block_ready(self.result)
             self._log_timing("simulate.map_rotate_and_contract", t0)
+            self._debug_array_summary("result_after_lax_map", self.result)
             t0 = time.perf_counter()
             sky_t0 = self._rotate_sky_packed_batch_jax(sky_base, alpha[0], beta[0], gamma[0])
             self._block_ready(sky_t0)
             self._log_timing("simulate.rotate_sky_t0", t0)
+            self._debug_array_summary("sky_t0", sky_t0)
         else:
             dummy = jnp.arange(Nt)
             t0 = time.perf_counter()
@@ -387,6 +520,7 @@ class JaxSimulator(SimulatorBase):
             )(dummy)
             self._block_ready(self.result)
             self._log_timing("simulate.vmap_contract_no_rotation", t0)
+            self._debug_array_summary("result_after_vmap", self.result)
             sky_t0 = sky_base
 
         if self.extra_opts.get("plot_sky_and_beam"):
