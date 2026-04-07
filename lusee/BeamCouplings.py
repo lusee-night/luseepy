@@ -59,12 +59,14 @@ class BeamCouplings:
         """
         
         cross_power = self.cross_powers.get((b1.id,b2.id))
+        freq_ndx_arr = np.asarray(freq_ndx, dtype=np.int32)
         if cross_power is None:
-            cross_power = np.zeros_like(freq_ndx)
+            cross_power = np.zeros_like(freq_ndx_arr, dtype=float)
         else:
-            cross_power = cross_power[freq_ndx]
+            # JAX arrays do not allow list-based advanced indexing; normalize the
+            # frequency selection once at the boundary so both NumPy and JAX work.
+            cross_power = cross_power[freq_ndx_arr]
         return cross_power
     
         
-
 
