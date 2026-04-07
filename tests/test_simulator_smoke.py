@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import os
+import tempfile
+from pathlib import Path
 
 os.environ["JAX_ENABLE_X64"] = "True"
 
@@ -82,3 +84,9 @@ def test_all_simulators_smoke(tmp_path):
     assert np.isfinite(cro_result).all()
 
     assert np.allclose(cro_result, default_result, rtol=5e-3, atol=5e-3)
+
+
+if __name__ == "__main__":
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_all_simulators_smoke(Path(tmpdir))
+    print("test_simulator_smoke: passed.")
