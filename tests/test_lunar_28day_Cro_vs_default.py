@@ -133,9 +133,14 @@ def test_lunar_day_28_single_source():
     assert cro_sim.result.shape == def_sim.result.shape
     assert jax_sim.result.shape == def_sim.result.shape
 
+    # to avoid OOM on Github, delete the memory
+
     np_cro_result = np.asarray(cro_sim.result)
+    del cro_sim
     np_def_result = np.asarray(def_sim.result)
+    del def_sim
     np_jax_result = np.asarray(jax_sim.result)
+    del jax_sim
 
     diff_norm = np.linalg.norm(np_jax_result - np_def_result)
     rel = diff_norm / np.linalg.norm(np_def_result)
