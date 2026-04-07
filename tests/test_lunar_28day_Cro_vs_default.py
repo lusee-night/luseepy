@@ -17,6 +17,8 @@ import time
 
 os.environ["JAX_ENABLE_X64"] = "True"
 
+import jax
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import healpy as hp
@@ -103,7 +105,8 @@ def test_lunar_day_28_single_source():
         },
     )
     t0 = time.perf_counter()
-    jax_sim.simulate(times=times)
+    jax_result = jax_sim.simulate(times=times)
+    jax.block_until_ready(jax_result)
     jax_time = time.perf_counter() - t0
 
     # Run CroSimulator (MEPA frame)
@@ -120,7 +123,8 @@ def test_lunar_day_28_single_source():
         },
     )
     t0 = time.perf_counter()
-    cro_sim.simulate(times=times)
+    cro_result = cro_sim.simulate(times=times)
+    jax.block_until_ready(cro_result)
     cro_time = time.perf_counter() - t0
 
     print(

@@ -38,7 +38,9 @@ class JaxSimulator(SimulatorBase):
     :param extra_opts: Extra options for simulation. Supports "dump_beams" (saves instrument beams to file),
         "cache_transform" (loads/saves beam transformations from file),
         "force_recompute_cache_transform" (ignores any existing cached transform file),
-        and "freq_idx_plot" (int): index of frequency at which to plot sky and beam.
+        "time_batch_size" (int): mini-batch size for time-axis JAX mapping in the
+        rotating sky path, and "freq_idx_plot" (int): index of frequency at which
+        to plot sky and beam.
     :type extra_opts: dict
     """
 
@@ -76,6 +78,15 @@ class JaxSimulator(SimulatorBase):
         if self._timing_enabled:
             jax.block_until_ready(value)
         return value
+
+    def _time_batch_size(self, ntimes):
+        batch_size = self.extra_opts.get("time_batch_size", 8)
+        if batch_size is None:
+            return None
+        batch_size = int(batch_size)
+        if batch_size < 1:
+            raise ValueError("extra_opts['time_batch_size'] must be >= 1 or None")
+        return min(batch_size, ntimes)
 
     def _prepare_beams_for_simulation(self, beams, combinations):
         if all(getattr(beam, "is_jax_pytree_beam", False) for beam in beams):
@@ -354,11 +365,16 @@ class JaxSimulator(SimulatorBase):
             self._block_ready((alpha, beta, gamma))
             self._log_timing("simulate.compute_zyz_angles", t0)
             t0 = time.perf_counter()
-            self.result = jax.vmap(
-                lambda a, b, g: self.simulate_at_single_time(sky_base, a, b, g)
-            )(alpha, beta, gamma)
+            time_batch_size = self._time_batch_size(Nt)
+            self.result = jax.lax.map(
+                lambda angles: self.simulate_at_single_time(
+                    sky_base, angles[0], angles[1], angles[2]
+                ),
+                (alpha, beta, gamma),
+                batch_size=time_batch_size,
+            )
             self._block_ready(self.result)
-            self._log_timing("simulate.vmap_rotate_and_contract", t0)
+            self._log_timing("simulate.map_rotate_and_contract", t0)
             t0 = time.perf_counter()
             sky_t0 = self._rotate_sky_packed_batch_jax(sky_base, alpha[0], beta[0], gamma[0])
             self._block_ready(sky_t0)
