@@ -11,10 +11,8 @@ import sys
 import pickle
 import os
 import warnings
-import platform
 from scipy.spatial.transform import Rotation as ScipyRotation
 import time
-import jaxlib
 
 
 class JaxSimulator(SimulatorBase):
@@ -40,11 +38,9 @@ class JaxSimulator(SimulatorBase):
     :param extra_opts: Extra options for simulation. Supports "dump_beams" (saves instrument beams to file),
         "cache_transform" (loads/saves beam transformations from file),
         "force_recompute_cache_transform" (ignores any existing cached transform file),
-        "time_batch_size" (int|None): mini-batch size for time-axis JAX mapping in the
+        "time_batch_size" (int): mini-batch size for time-axis JAX mapping in the
         rotating sky path, and "freq_idx_plot" (int): index of frequency at which
-        to plot sky and beam. If omitted, an automatic default is used; on
-        Linux x86_64 CPU with jax/jaxlib 0.9.2 batching is disabled as a
-        workaround for a known compiler crash in the batched ``lax.map`` path.
+        to plot sky and beam.
     :type extra_opts: dict
     """
 
@@ -134,26 +130,8 @@ class JaxSimulator(SimulatorBase):
             jax.block_until_ready(value)
         return value
 
-    def _has_known_batched_lax_map_bug(self):
-        machine = platform.machine().lower()
-        return (
-            sys.platform.startswith("linux")
-            and machine in {"x86_64", "amd64"}
-            and jax.default_backend() == "cpu"
-            and getattr(jax, "__version__", "").startswith("0.9.2")
-            and getattr(jaxlib, "__version__", "").startswith("0.9.2")
-        )
-
     def _time_batch_size(self, ntimes):
-        if "time_batch_size" in self.extra_opts:
-            batch_size = self.extra_opts["time_batch_size"]
-        else:
-            batch_size = None if self._has_known_batched_lax_map_bug() else 8
-            if batch_size is None:
-                self._debug_print(
-                    "auto-disabled time batching due to linux/x86_64 cpu "
-                    "jax/jaxlib 0.9.2 batched lax.map compiler crash"
-                )
+        batch_size = self.extra_opts.get("time_batch_size", 8)
         if batch_size is None:
             return None
         batch_size = int(batch_size)
@@ -398,7 +376,7 @@ class JaxSimulator(SimulatorBase):
         if self._debug_enabled:
             self._debug_print(
                 f"simulate start: ntimes={len(times)} frame={self.sky_model.frame} "
-                f"time_batch_size_opt={self.extra_opts.get('time_batch_size', '<auto>')}"
+                f"time_batch_size_opt={self.extra_opts.get('time_batch_size', 8)}"
             )
             if len(times) > 0:
                 self._debug_print(f"simulate times: first={times[0]} last={times[-1]}")
