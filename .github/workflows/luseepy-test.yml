@@ -18,11 +18,6 @@ jobs:
       LUSEE_DRIVE_DIR: Drive
       LUSEE_OUTPUT_DIR: ./output
       JAX_ENABLE_X64: "True"
-      JAX_PLATFORMS: cpu
-      JAX_LOG_COMPILES: "1"
-      PYTHONFAULTHANDLER: "1"
-      LUSEE_JAX_DEBUG: "1"
-      LUSEE_JAX_DEBUG_HLO_CHARS: "2500"
       MPLCONFIGDIR: /tmp/matplotlib
       UV_CACHE_DIR: /tmp/uv-cache
     steps:
@@ -34,51 +29,6 @@ jobs:
       - run: uv sync
       - run: wget "https://drive.google.com/uc?export=download&id=1PbU432IYAFSzOjWRrKMoGFR6F1M3dmaV" -O drive.tgz
       - run: tar zxvf drive.tgz
-      - name: Print debug environment
-        run: |
-          python --version
-          uv --version
-          uname -a
-          lscpu
-          free -h
-          grep -m1 '^flags' /proc/cpuinfo || true
-          env | sort | grep -E '^(JAX|XLA|OMP|OPENBLAS|MKL|PYTHONFAULTHANDLER|LUSEE_|MPLCONFIGDIR|UV_CACHE_DIR|PYTHONPATH)=' || true
-          uv run python - <<'PY'
-          import platform
-          import sys
-          from importlib import metadata
-
-          pkgs = [
-              "jax",
-              "jaxlib",
-              "numpy",
-              "scipy",
-              "s2fft",
-              "croissant-sim",
-              "healpy",
-              "astropy",
-              "fitsio",
-              "lunarsky",
-              "pytest",
-          ]
-          print(f"python={sys.version}")
-          print(f"platform={platform.platform()}")
-          for pkg in pkgs:
-              try:
-                  print(f"{pkg}={metadata.version(pkg)}")
-              except metadata.PackageNotFoundError:
-                  print(f"{pkg}=<missing>")
-          PY
-      - name: Run failing lunar 28-day test with debug logs
-        id: lunar_28day
-        continue-on-error: true
-        run: uv run pytest tests/test_lunar_28day_Cro_vs_default.py::test_lunar_day_28_single_source -vv -s
-      - name: Print post-test diagnostics
-        if: always()
-        run: |
-          echo "pytest outcome=${{ steps.lunar_28day.outcome }}"
-          echo "pytest conclusion=${{ steps.lunar_28day.conclusion }}"
-          find /tmp -maxdepth 2 \( -type d -o -type f \) | grep -E '/(jax|xla)' | sort || true
-      - name: Fail workflow if debug test failed
-        if: steps.lunar_28day.outcome != 'success'
-        run: exit 1
+      - run: uv run pytest tests/ -v
+      - run: cd simulation; ln -s ../Drive .; mkdir -p output; uv run python driver/run_sim.py config/example.yaml; ls -l output
+      - run: uv run python tests/SimReadTest.py simulation/output/sim_example.fits
