@@ -13,6 +13,7 @@ import os
 import warnings
 from scipy.spatial.transform import Rotation as ScipyRotation
 import time
+from s2fft.recursions.risbo_jax import compute_full
 
 
 class JaxSimulator(SimulatorBase):
@@ -131,7 +132,7 @@ class JaxSimulator(SimulatorBase):
         return value
 
     def _time_batch_size(self, ntimes):
-        batch_size = self.extra_opts.get("time_batch_size", 8)
+        batch_size = self.extra_opts.get("time_batch_size")
         if batch_size is None:
             return None
         batch_size = int(batch_size)
@@ -189,8 +190,6 @@ class JaxSimulator(SimulatorBase):
 
     def _setup_jax_rotate_ops(self):
         self._rotate_sky_packed_batch_jax = None
-        from s2fft.utils.rotation import compute_full
-
         L = self.lmax + 1
         M = 2 * L - 1
         alm_size = hp.sphtfunc.Alm.getsize(self.lmax)
@@ -202,9 +201,9 @@ class JaxSimulator(SimulatorBase):
         packed_idx = []
         ell_idx = []
         m_idx = []
-        packed_pos_idx = []
-        ell_pos_idx = []
-        m_pos_idx = []
+        packed_nonzero_idx = []
+        ell_nonzero_idx = []
+        m_nonzero_idx = []
         neg_sign = []
         for ell in range(L):
             for m in range(ell + 1):
@@ -213,61 +212,60 @@ class JaxSimulator(SimulatorBase):
                 ell_idx.append(ell)
                 m_idx.append(m)
                 if m > 0:
-                    packed_pos_idx.append(pidx)
-                    ell_pos_idx.append(ell)
-                    m_pos_idx.append(m)
+                    packed_nonzero_idx.append(pidx)
+                    ell_nonzero_idx.append(ell)
+                    m_nonzero_idx.append(m)
                     neg_sign.append(1.0 if (m % 2 == 0) else -1.0)
 
         packed_idx = jnp.asarray(np.array(packed_idx, dtype=np.int32))
         ell_idx = jnp.asarray(np.array(ell_idx, dtype=np.int32))
         m_idx = jnp.asarray(np.array(m_idx, dtype=np.int32))
-        if packed_pos_idx:
-            packed_pos_idx = jnp.asarray(np.array(packed_pos_idx, dtype=np.int32))
-            ell_pos_idx = jnp.asarray(np.array(ell_pos_idx, dtype=np.int32))
-            m_pos_idx = jnp.asarray(np.array(m_pos_idx, dtype=np.int32))
+        if packed_nonzero_idx:
+            packed_nonzero_idx = jnp.asarray(np.array(packed_nonzero_idx, dtype=np.int32))
+            ell_nonzero_idx = jnp.asarray(np.array(ell_nonzero_idx, dtype=np.int32))
+            m_nonzero_idx = jnp.asarray(np.array(m_nonzero_idx, dtype=np.int32))
             neg_sign = jnp.asarray(np.array(neg_sign))
         else:
-            packed_pos_idx = None
-            ell_pos_idx = None
-            m_pos_idx = None
+            packed_nonzero_idx = None
+            ell_nonzero_idx = None
+            m_nonzero_idx = None
             neg_sign = None
 
-        valid_m = np.zeros((L, M))
-        for ell in range(L):
-            valid_m[ell, m_offset - ell : m_offset + ell + 1] = 1.0
-        valid_m = jnp.asarray(valid_m)
         m_all = jnp.arange(-(L - 1), L)
 
-        def rotate_sky_packed_batch(sky_packed_batch, alpha, beta, gamma):
+        def hp_to_full_flm_batch(packed_batch):
+            flm = jnp.zeros((packed_batch.shape[0], L, M), dtype=packed_batch.dtype)
+            flm = flm.at[:, ell_idx, m_offset + m_idx].set(packed_batch[:, packed_idx])
+            if packed_nonzero_idx is not None:
+                vals_neg = neg_sign[None, :] * jnp.conj(packed_batch[:, packed_nonzero_idx])
+                flm = flm.at[:, ell_nonzero_idx, m_offset - m_nonzero_idx].set(vals_neg)
+            return flm
+
+        def full_flm_to_hp_batch(flm_batch):
+            packed = jnp.zeros((flm_batch.shape[0], alm_size), dtype=flm_batch.dtype)
+            packed = packed.at[:, packed_idx].set(flm_batch[:, ell_idx, m_offset + m_idx])
+            return packed
+
+        def rotate_sky_flm_batch(sky_flm_batch, alpha, beta, gamma):
             real_dtype = jnp.asarray(beta).dtype
-            dls = jnp.zeros((L, M, M), dtype=real_dtype)
+            flm_rot = jnp.zeros_like(sky_flm_batch)
             dl_iter = jnp.zeros((M, M), dtype=real_dtype)
-            for el in range(L):
-                dl_iter = compute_full(dl_iter, beta, L, el)
-                dls = dls.at[el].set(dl_iter)
-
-            flm = jnp.zeros((sky_packed_batch.shape[0], L, M), dtype=sky_packed_batch.dtype)
-            vals = sky_packed_batch[:, packed_idx]
-            flm = flm.at[:, ell_idx, m_offset + m_idx].set(vals)
-            if packed_pos_idx is not None:
-                vals_neg = neg_sign[None, :] * jnp.conj(sky_packed_batch[:, packed_pos_idx])
-                flm = flm.at[:, ell_pos_idx, m_offset - m_pos_idx].set(vals_neg)
-
             exp_alpha = jnp.exp(-1j * m_all * alpha)
             exp_gamma = jnp.exp(-1j * m_all * gamma)
-            valid = valid_m[None, :, :]
-            flm_weighted = flm * exp_gamma[None, None, :] * valid
-            flm_rot = jnp.einsum("lmn,fln->flm", dls, flm_weighted)
-            flm_rot = flm_rot * exp_alpha[None, None, :] * valid
+            for el in range(L):
+                dl_iter = compute_full(dl_iter, beta, L, el)
+                m = jnp.arange(-el, el + 1)
+                midx = m_offset + m
+                sky_block = sky_flm_batch[:, el, midx] * exp_gamma[midx][None, :]
+                dl_block = dl_iter[midx[:, None], midx[None, :]]
+                rot_block = jnp.einsum("mn,fn->fm", dl_block, sky_block, optimize=True)
+                rot_block = rot_block * exp_alpha[midx][None, :]
+                flm_rot = flm_rot.at[:, el, midx].set(rot_block)
+            return flm_rot
 
-            packed_rot = jnp.zeros((sky_packed_batch.shape[0], alm_size), dtype=sky_packed_batch.dtype)
-            packed_rot = packed_rot.at[:, packed_idx].set(flm_rot[:, ell_idx, m_offset + m_idx])
-            return packed_rot
-
-        self._rotate_sky_packed_batch_jax = jax.jit(rotate_sky_packed_batch)
-        self._rotate_many_times_jax = jax.jit(
-            jax.vmap(self._rotate_sky_packed_batch_jax, in_axes=(None, 0, 0, 0))
-        )
+        self._hp_to_full_flm_batch_jax = jax.jit(hp_to_full_flm_batch)
+        self._full_flm_to_hp_batch_jax = jax.jit(full_flm_to_hp_batch)
+        self._rotate_sky_flm_batch_jax = jax.jit(rotate_sky_flm_batch)
 
     def _convert_efbeams_to_jax(self):
         """Keep JaxSimulator internals jax-native while preserving external IO boundaries."""
@@ -297,24 +295,33 @@ class JaxSimulator(SimulatorBase):
                 output_ground.append(groundPowerImag)
         self._output_beams = jnp.asarray(jnp.stack(output_beams, axis=0))
         self._output_ground = jnp.asarray(jnp.stack(output_ground, axis=0))
+        noutput, nfreq, _ = self._output_beams.shape
+        beams_flat = self._output_beams.reshape(noutput * nfreq, self._output_beams.shape[-1])
+        self._output_beams_flm = self._hp_to_full_flm_batch_jax(beams_flat).reshape(
+            noutput, nfreq, self.lmax + 1, 2 * self.lmax + 1
+        )
 
     def _setup_simulation_kernels(self):
-        lmax = self.lmax
         Tground = float(self.Tground)
 
         @jax.jit
-        def contract_single_sky(sky_time, output_beams, output_ground):
-            prod = output_beams * jnp.conj(sky_time[None, :, :])
-            contracted = (
-                jnp.real(prod[..., : lmax + 1]).sum(axis=-1)
-                + 2 * jnp.real(prod[..., lmax + 1 :]).sum(axis=-1)
+        def contract_single_sky(sky_time_flm, output_beams_flm, output_ground):
+            contracted = jnp.real(
+                jnp.einsum(
+                    "bflm,flm->bf",
+                    output_beams_flm,
+                    jnp.conj(sky_time_flm),
+                    optimize=True,
+                )
             ) / (4 * jnp.pi)
             return contracted + Tground * output_ground
 
         @jax.jit
-        def rotate_and_contract_single_time(sky_base, alpha, beta, gamma, output_beams, output_ground):
-            rotated_sky = self._rotate_sky_packed_batch_jax(sky_base, alpha, beta, gamma)
-            return contract_single_sky(rotated_sky, output_beams, output_ground)
+        def rotate_and_contract_single_time(
+            sky_base_flm, alpha, beta, gamma, output_beams_flm, output_ground
+        ):
+            rotated_sky = self._rotate_sky_flm_batch_jax(sky_base_flm, alpha, beta, gamma)
+            return contract_single_sky(rotated_sky, output_beams_flm, output_ground)
 
         self._contract_single_sky_jax = contract_single_sky
         self._rotate_and_contract_single_time_jax = rotate_and_contract_single_time
@@ -348,7 +355,7 @@ class JaxSimulator(SimulatorBase):
         if alpha is None:
             return self._contract_single_sky_jax(
                 sky_base,
-                self._output_beams,
+                self._output_beams_flm,
                 self._output_ground,
             )
         return self._rotate_and_contract_single_time_jax(
@@ -356,7 +363,7 @@ class JaxSimulator(SimulatorBase):
             alpha,
             beta,
             gamma,
-            self._output_beams,
+            self._output_beams_flm,
             self._output_ground,
         )
 
@@ -376,7 +383,7 @@ class JaxSimulator(SimulatorBase):
         if self._debug_enabled:
             self._debug_print(
                 f"simulate start: ntimes={len(times)} frame={self.sky_model.frame} "
-                f"time_batch_size_opt={self.extra_opts.get('time_batch_size', 8)}"
+                f"time_batch_size_opt={self.extra_opts.get('time_batch_size')}"
             )
             if len(times) > 0:
                 self._debug_print(f"simulate times: first={times[0]} last={times[-1]}")
@@ -414,9 +421,11 @@ class JaxSimulator(SimulatorBase):
         Nt = len(times)
         t0 = time.perf_counter()
         sky_base = jnp.asarray(self.sky_model.get_alm(self.freq_ndx_sky, self.freq))
-        self._block_ready(sky_base)
+        sky_base_flm = self._hp_to_full_flm_batch_jax(sky_base)
+        self._block_ready(sky_base_flm)
         self._log_timing("simulate.sky_model.get_alm", t0)
         self._debug_array_summary("sky_base", sky_base)
+        self._debug_array_summary("sky_base_flm", sky_base_flm)
 
         if do_rot:
             t0 = time.perf_counter()
@@ -435,16 +444,18 @@ class JaxSimulator(SimulatorBase):
                 self._debug_lowered_text(
                     "rotate_and_contract_single_time",
                     self._rotate_and_contract_single_time_jax,
-                    sky_base,
+                    sky_base_flm,
                     alpha[0],
                     beta[0],
                     gamma[0],
-                    self._output_beams,
+                    self._output_beams_flm,
                     self._output_ground,
                 )
                 probe_t0 = time.perf_counter()
                 self._debug_print("probe 1/3: compile+run single rotated time")
-                probe_single = self.simulate_at_single_time(sky_base, alpha[0], beta[0], gamma[0])
+                probe_single = self.simulate_at_single_time(
+                    sky_base_flm, alpha[0], beta[0], gamma[0]
+                )
                 jax.block_until_ready(probe_single)
                 self._debug_print(
                     f"probe 1/3 complete in {time.perf_counter() - probe_t0:.3f} s"
@@ -457,7 +468,7 @@ class JaxSimulator(SimulatorBase):
                         f"probe 2/3: compile+run vmap over first {nprobe} rotated times"
                     )
                     probe_many = jax.vmap(
-                        lambda a, b, g: self.simulate_at_single_time(sky_base, a, b, g)
+                        lambda a, b, g: self.simulate_at_single_time(sky_base_flm, a, b, g)
                     )(alpha[:nprobe], beta[:nprobe], gamma[:nprobe])
                     jax.block_until_ready(probe_many)
                     self._debug_print(
@@ -470,14 +481,14 @@ class JaxSimulator(SimulatorBase):
             if time_batch_size is None:
                 self.result = jax.lax.map(
                     lambda angles: self.simulate_at_single_time(
-                        sky_base, angles[0], angles[1], angles[2]
+                        sky_base_flm, angles[0], angles[1], angles[2]
                     ),
                     (alpha, beta, gamma),
                 )
             else:
                 self.result = jax.lax.map(
                     lambda angles: self.simulate_at_single_time(
-                        sky_base, angles[0], angles[1], angles[2]
+                        sky_base_flm, angles[0], angles[1], angles[2]
                     ),
                     (alpha, beta, gamma),
                     batch_size=time_batch_size,
@@ -486,7 +497,9 @@ class JaxSimulator(SimulatorBase):
             self._log_timing("simulate.map_rotate_and_contract", t0)
             self._debug_array_summary("result_after_lax_map", self.result)
             t0 = time.perf_counter()
-            sky_t0 = self._rotate_sky_packed_batch_jax(sky_base, alpha[0], beta[0], gamma[0])
+            sky_t0 = self._rotate_sky_flm_batch_jax(
+                sky_base_flm, alpha[0], beta[0], gamma[0]
+            )
             self._block_ready(sky_t0)
             self._log_timing("simulate.rotate_sky_t0", t0)
             self._debug_array_summary("sky_t0", sky_t0)
@@ -494,12 +507,12 @@ class JaxSimulator(SimulatorBase):
             dummy = jnp.arange(Nt)
             t0 = time.perf_counter()
             self.result = jax.vmap(
-                lambda _: self.simulate_at_single_time(sky_base)
+                lambda _: self.simulate_at_single_time(sky_base_flm)
             )(dummy)
             self._block_ready(self.result)
             self._log_timing("simulate.vmap_contract_no_rotation", t0)
             self._debug_array_summary("result_after_vmap", self.result)
-            sky_t0 = sky_base
+            sky_t0 = sky_base_flm
 
         if self.extra_opts.get("plot_sky_and_beam"):
             nf = len(self.freq)
@@ -517,8 +530,9 @@ class JaxSimulator(SimulatorBase):
                 freq_idx_plot = clamped
             nside = getattr(self.sky_model, "Nside", 64)
             beamreal0 = self.efbeams[0][2]
+            sky_t0_packed = self._full_flm_to_hp_batch_jax(sky_t0)
             self._plot_sky_beam_healpix(
-                sky_t0[freq_idx_plot], beamreal0[freq_idx_plot], nside, self.lmax,
+                sky_t0_packed[freq_idx_plot], beamreal0[freq_idx_plot], nside, self.lmax,
                 save_dir=self.extra_opts.get("plot_dir", default_plot_sky_beam_dir()),
                 save_filename=self.extra_opts.get("plot_filename", "sky_beam_healpix_jaxsim.png"),
                 title_prefix=f"JaxSimulator at {self.freq[freq_idx_plot]} MHz ",
