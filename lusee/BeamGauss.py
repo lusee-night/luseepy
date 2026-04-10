@@ -3,6 +3,7 @@ import os
 os.environ["JAX_ENABLE_X64"] = "True"
 
 from .Beam import Beam
+from .frequencies import ALL_FREQUENCIES_MHZ
 import jax
 import jax.numpy as jnp
 
@@ -51,7 +52,7 @@ class BeamGauss(Beam):
     """
     def __init__ (self, alt_deg, az_deg=0, sigma_deg=20.0, one_over_freq_scaling=False, id = None):     
         self.version=2.1 #what should this be? 
-        # v1 so that self.freq=jnp.linspace as below
+        # v1 so that self.freq followed the simulator's 1-50 MHz grid
         # >v2 so that self.ground_fraction() can be calculated
         
         self.id = id
@@ -69,7 +70,7 @@ class BeamGauss(Beam):
         self.ZIm=jnp.zeros(self.Nfreq) #Need this for lusee.Simulator.write()
 
         
-        self.freq = jnp.linspace(self.freq_min, self.freq_max,self.Nfreq)
+        self.freq = ALL_FREQUENCIES_MHZ
         self.theta_deg = jnp.linspace(self.theta_min, self.theta_max,self.Ntheta)
         self.phi_deg = jnp.linspace(self.phi_min, self.phi_max,self.Nphi)
         self.theta = self.theta_deg*jnp.pi/180.
@@ -115,4 +116,3 @@ class BeamGauss(Beam):
             self.gain_conv=self.gain_conv/factor
 
         assert(jnp.all(jnp.abs(self.ground_fraction())<1e-3)) #confirm ground_fraction==zero
-

@@ -1,5 +1,7 @@
-from .Beam import Beam
 import numpy as np
+
+from .Beam import Beam
+from ..frequencies import ALL_FREQUENCIES_MHZ_NP
 
 def gauss_beam(theta,phi,sigma, theta_c,phi_c=0.):
     """
@@ -46,7 +48,7 @@ class BeamGauss(Beam):
     """
     def __init__ (self, alt_deg, az_deg=0, sigma_deg=20.0, one_over_freq_scaling=False, id = None):     
         self.version=2.1 #what should this be? 
-        # v1 so that self.freq=np.linspace as below
+        # v1 so that self.freq followed the simulator's 1-50 MHz grid
         # >v2 so that self.ground_fraction() can be calculated
         
         self.id = id
@@ -64,7 +66,7 @@ class BeamGauss(Beam):
         self.ZIm=np.zeros(self.Nfreq) #Need this for lusee.Simulator.write()
 
         
-        self.freq = np.linspace(self.freq_min, self.freq_max,self.Nfreq)
+        self.freq = ALL_FREQUENCIES_MHZ_NP
         self.theta_deg = np.linspace(self.theta_min, self.theta_max,self.Ntheta)
         self.phi_deg = np.linspace(self.phi_min, self.phi_max,self.Nphi)
         self.theta = self.theta_deg*np.pi/180.
@@ -114,6 +116,5 @@ class BeamGauss(Beam):
             self.gain_conv/=factor
 
         assert(np.all(np.abs(self.ground_fraction())<1e-3)) #confirm ground_fraction==zero
-
 
 

@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pathlib import Path
 from astropy.coordinates import SkyCoord, GeocentricMeanEcliptic
 from astropy import units as u
+from lusee.frequencies import canonical_frequencies, canonical_frequency_indices
 
 
 CASES = [
@@ -47,7 +48,7 @@ NSIDE        = 32
 LMAX         = 3 * NSIDE - 1
 SIGMA_DEG    = 20.0
 TGROUND      = 0.0
-FREQ         = np.arange(1, 51, 5, dtype=float)
+FREQ         = canonical_frequencies(canonical_frequency_indices(start_idx=0, stop_idx=50, step_idx=5))
 MIN_TRANSIT_AMP = 0.0025
 
 

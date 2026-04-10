@@ -41,9 +41,9 @@ observation:
   lmax: 32
   combinations: all
   freq:
-    start: 1
-    end: 6
-    step: 4
+    start_idx: 0
+    stop_idx: 5
+    step_idx: 4
 
 simulation:
   engine: croissant
@@ -51,6 +51,8 @@ simulation:
   # and uses the driver default name instead.
   output: sim_example.fits
   cache_transform: lunar_day.pickle
+  # JAX-only option. Ignored unless simulation.engine is jaxsim.
+  time_batch_size: 300
   plot_sky_and_beam: true
   # Must satisfy 0 <= freq_idx_plot < number of frequency bins (see observation.freq).
   freq_idx_plot: 0

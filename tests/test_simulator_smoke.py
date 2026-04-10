@@ -8,6 +8,7 @@ os.environ["JAX_ENABLE_X64"] = "True"
 
 import numpy as np
 import pytest
+from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
 
 
 def test_all_simulators_smoke(tmp_path):
@@ -23,7 +24,7 @@ def test_all_simulators_smoke(tmp_path):
     times = obs.times
     assert len(times) == 3
 
-    freq = np.array([10.0])
+    freq = canonical_frequencies(frequency_indices_from_values([10.0]))
     lmax = 8
     sky = lusee.sky.HarmonicPointSourceSky(lmax=lmax, l_deg=0.0, b_deg=0.0, freq=freq)
     beam = lusee.BeamGauss(

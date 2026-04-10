@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 
 from .MonoSkyModels import T_C, T_DarkAges, T_DarkAges_Scaled
+from .frequencies import ALL_FREQUENCIES_MHZ, canonicalize_frequencies
 
 @jax.tree_util.register_pytree_node_class
 class ConstSky:
@@ -45,7 +46,7 @@ class ConstSky:
             Tmap = jnp.where(theta>0.75*jnp.pi, 0.0, Tmap)
         self.mapalm = jnp.asarray(hp.map2alm(np.asarray(Tmap), lmax=lmax))
         self.frame = "MCMF"
-        self.freq = None if freq is None else jnp.asarray(freq)
+        self.freq = None if freq is None else canonicalize_frequencies(freq, as_jax=True)
 
     def tree_flatten(self):
         children = (self.mapalm, self._T)
@@ -110,9 +111,9 @@ class ConstSkyCane1979(ConstSky):
     :type freq: list
     """
     def __init__(self, Nside, lmax, freq=None):
-        self.freq = jnp.arange(1.0,50.1) if freq is None else freq
+        self.freq = ALL_FREQUENCIES_MHZ if freq is None else canonicalize_frequencies(freq, as_jax=True)
         T = T_C(self.freq).value
-        ConstSky.__init__(self, Nside, lmax, T, freq)
+        ConstSky.__init__(self, Nside, lmax, T, self.freq)
 
 class DarkAgesMonopole(ConstSky):
     """
@@ -135,12 +136,12 @@ class DarkAgesMonopole(ConstSky):
     """
     def __init__(self, Nside, lmax, scaled = True, nu_min = 16.4,
                      nu_rms = 14.0, A = 0.04, freq=None):
-        self.freq = jnp.arange(1.0,50.1) if freq is None else freq
+        self.freq = ALL_FREQUENCIES_MHZ if freq is None else canonicalize_frequencies(freq, as_jax=True)
         if scaled:
             T = T_DarkAges_Scaled(self.freq, nu_min, nu_rms, A)
         else:
             T = T_DarkAges(self.freq)
-        ConstSky.__init__(self, Nside, lmax, T, freq)  
+        ConstSky.__init__(self, Nside, lmax, T, self.freq)  
 
 @jax.tree_util.register_pytree_node_class
 class GalCenter (ConstSky):
@@ -167,7 +168,7 @@ class GalCenter (ConstSky):
         Tmap = jnp.exp(-(phi)**2/0.1-(theta-jnp.pi/2)**2/0.1)
         self.mapalm = jnp.asarray(hp.map2alm(np.asarray(Tmap), lmax = lmax))
         self.frame = "galactic"
-        self.freq = None if freq is None else jnp.asarray(freq)   
+        self.freq = None if freq is None else canonicalize_frequencies(freq, as_jax=True)
 
 
 @jax.tree_util.register_pytree_node_class
@@ -186,11 +187,13 @@ class HealpixSky:
     :type frame: str
     
     """
-    def __init__ (self, Nside, lmax, maps, freq=[25.0], frame="galactic"):
+    def __init__ (self, Nside, lmax, maps, freq=None, frame="galactic"):
         self.Nside = Nside
         self.Npix = Nside**2 * 12
         self.maps = jnp.asarray(maps)
-        self.freq = jnp.asarray(freq)
+        if freq is None:
+            freq = ALL_FREQUENCIES_MHZ[jnp.asarray([24], dtype=jnp.int32)]
+        self.freq = canonicalize_frequencies(freq, as_jax=True)
         assert (len(maps)==len(freq))
         self.mapalm = jnp.asarray([hp.map2alm(np.asarray(m),lmax = lmax) for m in self.maps])
         self.frame  = frame
@@ -251,7 +254,10 @@ class FitsSky (HealpixSky):
         fstart      = header['freq_start']
         fend        = header['freq_end']
         fstep       = header['freq_step']
-        freq   = jnp.arange(fstart, fend+1e-3*fstep, fstep)
+        freq = canonicalize_frequencies(
+            np.arange(fstart, fend + 1e-3 * fstep, fstep, dtype=float),
+            as_jax=True,
+        )
         super().__init__(Nside=hp.npix2nside(maps.shape[1]), lmax=lmax, maps=maps, freq=freq, frame="galactic")
         
 
@@ -269,10 +275,12 @@ class SingleSourceHealpixSky (HealpixSky):
     :param freq: List of frequencies at which to make sky maps.
     :type freq: list
     """
-    def __init__ (self, Nside=128, freq=[25.0], T=1.0, *,
+    def __init__ (self, Nside=128, freq=None, T=1.0, *,
                  ra_deg=None, dec_deg=None, l_deg=None, b_deg=None):
         # convert ra, dec to galactic coordinates and then to pixel number
-        self.freq = jnp.atleast_1d(jnp.asarray(freq))
+        if freq is None:
+            freq = ALL_FREQUENCIES_MHZ[jnp.asarray([24], dtype=jnp.int32)]
+        self.freq = canonicalize_frequencies(freq, as_jax=True)
         T = jnp.atleast_1d(jnp.asarray(T, dtype=float))
         if T.size == 1:
             T = jnp.broadcast_to(T, len(self.freq))
@@ -309,7 +317,13 @@ class HarmonicPointSourceSky:
 
     Example::
 
-        sky = HarmonicPointSourceSky(lmax=64, ra_deg=45.0, dec_deg=10.0, freq=[10.0])
+        from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
+        sky = HarmonicPointSourceSky(
+            lmax=64,
+            ra_deg=45.0,
+            dec_deg=10.0,
+            freq=canonical_frequencies(frequency_indices_from_values([10.0])),
+        )
         alms = sky.get_alm([0], freq=jnp.array([10.0]))
 
     :param lmax: Maximum spherical harmonic degree.
@@ -325,7 +339,7 @@ class HarmonicPointSourceSky:
     def __init__(self, lmax, freq, T=1.0, *,
                  ra_deg=None, dec_deg=None, l_deg=None, b_deg=None):
         self.lmax = lmax
-        self.freq = jnp.atleast_1d(jnp.asarray(freq))
+        self.freq = canonicalize_frequencies(freq, as_jax=True)
         T = jnp.atleast_1d(jnp.asarray(T, dtype=float))
         if T.size == 1:
             T = jnp.broadcast_to(T, len(self.freq))

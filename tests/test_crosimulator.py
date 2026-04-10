@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 import lusee
+from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
 
 
 def test_crosimulator_runs_and_returns_expected_shape():
@@ -10,7 +11,7 @@ def test_crosimulator_runs_and_returns_expected_shape():
 
     nside = 8
     lmax = 3 * nside - 1
-    freq = np.array([5.0, 10.0, 15.0], dtype=float)
+    freq = canonical_frequencies(frequency_indices_from_values([5.0, 10.0, 15.0]))
 
     # Deterministic full-sky galactic map at each frequency.
     npix = 12 * nside * nside

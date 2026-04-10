@@ -38,9 +38,9 @@ observation:
   lmax: 32
   combinations: all
   freq:
-    start: 1
-    end: 50.1
-    step: 1
+    start_idx: 0
+    stop_idx: 50
+    step_idx: 1
 
 simulation:
   output: output/hfss_lbl_3m_pdr.fits

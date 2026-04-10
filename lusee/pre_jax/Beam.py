@@ -12,6 +12,7 @@ from scipy.ndimage import gaussian_filter
 from scipy.interpolate import RegularGridInterpolator
 from pyshtools.legendre import legendre
 import os
+from ..frequencies import canonicalize_frequencies
 
 
 def getLegendre(lmax, theta):
@@ -250,7 +251,7 @@ class Beam:
             self.f_ground = fits['f_ground'].read()
         elif version==2:
             self.gain_conv = fits['gain_conv'].read()
-            self.freq = fits['freq'].read()
+            self.freq = canonicalize_frequencies(fits['freq'].read())
             
         self.freq_min = header['FREQ_MIN']
         self.freq_max = header['FREQ_MAX']
@@ -263,7 +264,9 @@ class Beam:
         self.Nphi = header['PHI_N']
         self.header = header
         if version==1:
-            self.freq = np.linspace(self.freq_min, self.freq_max,self.Nfreq)
+            self.freq = canonicalize_frequencies(
+                np.linspace(self.freq_min, self.freq_max, self.Nfreq)
+            )
         self.theta_deg = np.linspace(self.theta_min, self.theta_max,self.Ntheta)
         self.phi_deg = np.linspace(self.phi_min, self.phi_max,self.Nphi)
         self.theta = self.theta_deg/180*np.pi

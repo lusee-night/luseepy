@@ -15,6 +15,7 @@ import lusee.MonoSkyModels as monosky
 import lusee.SkyModels as sky
 import lusee.pre_jax.MonoSkyModels as pre_monosky
 import lusee.pre_jax.SkyModels as pre_sky
+from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
 
 
 RTOL = 1e-9
@@ -134,7 +135,7 @@ def test_monosky_models_match_pre_jax_reference():
 
 
 def test_skymodels_match_pre_jax_reference(tmp_path):
-    freq = np.array([10.0, 20.0])
+    freq = canonical_frequencies(frequency_indices_from_values([10.0, 20.0]))
     ndx = np.array([0, 1])
     nside = 8
     lmax = 6

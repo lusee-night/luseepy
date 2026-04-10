@@ -37,14 +37,16 @@ observation:
   lmax: 32
   combinations: all
   freq:
-    start: 1
-    end: 51
-    step: 1
+    start_idx: 0
+    stop_idx: 50
+    step_idx: 1
 
 simulation:
   engine: croissant 
   # output defaults to sim_{engine}_output.fits (this is specified in the driver/run_Cro_sim.py file)
   cache_transform: lunar_day.pickle  
+  # JAX-only option. Ignored unless simulation.engine is jaxsim.
+  time_batch_size: 300
   plot_sky_and_beam: True
   freq_idx_plot: 25
   plot_dir: simulation/output/figures

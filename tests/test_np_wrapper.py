@@ -7,6 +7,7 @@ import numpy as np
 from lusee.BeamGauss import BeamGauss
 from lusee.NpWrapper import NpWrapper
 from lusee.SkyModels import ConstSky, HarmonicPointSourceSky
+from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
 
 
 def test_np_wrapper_exposes_numpy_beam_fields_and_results():
@@ -34,10 +35,11 @@ def test_np_wrapper_unwraps_other_wrappers_for_method_calls():
 
 
 def test_np_wrapper_exposes_numpy_sky_results():
-    sky = NpWrapper(ConstSky(Nside=8, lmax=6, T=np.array([120.0, 140.0]), freq=np.array([10.0, 20.0])))
+    freq = canonical_frequencies(frequency_indices_from_values([10.0, 20.0]))
+    sky = NpWrapper(ConstSky(Nside=8, lmax=6, T=np.array([120.0, 140.0]), freq=freq))
     assert isinstance(sky.mapalm, np.ndarray)
     assert isinstance(sky.get_alm([0, 1]), np.ndarray)
 
-    point = NpWrapper(HarmonicPointSourceSky(lmax=6, freq=[10.0, 20.0], T=[2.0, 5.0], l_deg=0.0, b_deg=45.0))
+    point = NpWrapper(HarmonicPointSourceSky(lmax=6, freq=freq, T=[2.0, 5.0], l_deg=0.0, b_deg=45.0))
     assert isinstance(point._alm, np.ndarray)
     assert isinstance(point.get_alm([0, 1]), np.ndarray)

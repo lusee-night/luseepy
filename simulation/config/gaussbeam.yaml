@@ -75,9 +75,9 @@ observation:
   lmax: 32
   combinations: [ '00', '11', '22', '33', '44', '55', '66', '77', '12', '15', '16', '17']
   freq:
-    start: 1
-    end: 6
-    step: 4
+    start_idx: 0
+    stop_idx: 5
+    step_idx: 4
 
 simulation:
   engine: luseepy

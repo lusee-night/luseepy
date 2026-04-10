@@ -40,8 +40,10 @@ class JaxSimulator(SimulatorBase):
         "cache_transform" (loads/saves beam transformations from file),
         "force_recompute_cache_transform" (ignores any existing cached transform file),
         "time_batch_size" (int): mini-batch size for time-axis JAX mapping in the
-        rotating sky path, and "freq_idx_plot" (int): index of frequency at which
-        to plot sky and beam.
+        rotating sky path. If omitted, JaxSimulator chooses a chunk size that keeps
+        the vmapped rotation kernel on GPU while avoiding the full-time memory blowup
+        at large lmax. "freq_idx_plot" (int): index of frequency at which to plot
+        sky and beam.
     :type extra_opts: dict
     """
 
@@ -134,11 +136,14 @@ class JaxSimulator(SimulatorBase):
     def _time_batch_size(self, ntimes):
         batch_size = self.extra_opts.get("time_batch_size")
         if batch_size is None:
-            return None
+            return self._auto_time_batch_size(ntimes)
         batch_size = int(batch_size)
         if batch_size < 1:
             raise ValueError("extra_opts['time_batch_size'] must be >= 1 or None")
         return min(batch_size, ntimes)
+
+    def _auto_time_batch_size(self, ntimes):
+        return min(300, ntimes)
 
     def _prepare_beams_for_simulation(self, beams, combinations):
         if all(getattr(beam, "is_jax_pytree_beam", False) for beam in beams):
@@ -323,8 +328,19 @@ class JaxSimulator(SimulatorBase):
             rotated_sky = self._rotate_sky_flm_batch_jax(sky_base_flm, alpha, beta, gamma)
             return contract_single_sky(rotated_sky, output_beams_flm, output_ground)
 
+        @jax.jit
+        def rotate_and_contract_time_batch(
+            sky_base_flm, alpha_batch, beta_batch, gamma_batch, output_beams_flm, output_ground
+        ):
+            return jax.vmap(
+                lambda a, b, g: rotate_and_contract_single_time(
+                    sky_base_flm, a, b, g, output_beams_flm, output_ground
+                )
+            )(alpha_batch, beta_batch, gamma_batch)
+
         self._contract_single_sky_jax = contract_single_sky
         self._rotate_and_contract_single_time_jax = rotate_and_contract_single_time
+        self._rotate_and_contract_time_batch_jax = rotate_and_contract_time_batch
 
     def _compute_zyz_angles(self, lzl, bzl, lyl, byl, Nt):
         """Compute ZYZ Euler angles that match healpy XYZ rotation convention exactly."""
@@ -440,6 +456,7 @@ class JaxSimulator(SimulatorBase):
             self._debug_array_summary("gamma", gamma)
             t0 = time.perf_counter()
             time_batch_size = self._time_batch_size(Nt)
+            self._debug_print(f"simulate time_batch_size={time_batch_size}")
             if self._debug_enabled and Nt > 0:
                 self._debug_lowered_text(
                     "rotate_and_contract_single_time",
@@ -476,33 +493,44 @@ class JaxSimulator(SimulatorBase):
                     )
                     self._debug_array_summary("probe_many", probe_many)
                 self._debug_print(
-                    f"probe 3/3: entering full lax.map ntimes={Nt} batch_size={time_batch_size}"
+                    f"probe 3/3: entering chunked vmap ntimes={Nt} batch_size={time_batch_size}"
                 )
-            if time_batch_size is None:
-                self.result = jax.lax.map(
-                    lambda angles: self.simulate_at_single_time(
-                        sky_base_flm, angles[0], angles[1], angles[2]
-                    ),
-                    (alpha, beta, gamma),
+            if time_batch_size >= Nt:
+                self.result = self._rotate_and_contract_time_batch_jax(
+                    sky_base_flm,
+                    alpha,
+                    beta,
+                    gamma,
+                    self._output_beams_flm,
+                    self._output_ground,
                 )
             else:
-                self.result = jax.lax.map(
-                    lambda angles: self.simulate_at_single_time(
-                        sky_base_flm, angles[0], angles[1], angles[2]
-                    ),
-                    (alpha, beta, gamma),
-                    batch_size=time_batch_size,
-                )
+                pad = (-Nt) % time_batch_size
+                if pad:
+                    alpha_run = jnp.pad(alpha, (0, pad), mode="edge")
+                    beta_run = jnp.pad(beta, (0, pad), mode="edge")
+                    gamma_run = jnp.pad(gamma, (0, pad), mode="edge")
+                else:
+                    alpha_run = alpha
+                    beta_run = beta
+                    gamma_run = gamma
+                chunks = []
+                for start in range(0, alpha_run.shape[0], time_batch_size):
+                    chunks.append(
+                        self._rotate_and_contract_time_batch_jax(
+                            sky_base_flm,
+                            alpha_run[start : start + time_batch_size],
+                            beta_run[start : start + time_batch_size],
+                            gamma_run[start : start + time_batch_size],
+                            self._output_beams_flm,
+                            self._output_ground,
+                        )
+                    )
+                self.result = jnp.concatenate(chunks, axis=0)[:Nt]
             self._block_ready(self.result)
-            self._log_timing("simulate.map_rotate_and_contract", t0)
-            self._debug_array_summary("result_after_lax_map", self.result)
-            t0 = time.perf_counter()
-            sky_t0 = self._rotate_sky_flm_batch_jax(
-                sky_base_flm, alpha[0], beta[0], gamma[0]
-            )
-            self._block_ready(sky_t0)
-            self._log_timing("simulate.rotate_sky_t0", t0)
-            self._debug_array_summary("sky_t0", sky_t0)
+            self._log_timing("simulate.batch_rotate_and_contract", t0)
+            self._debug_array_summary("result_after_batch_vmap", self.result)
+            sky_t0 = None
         else:
             dummy = jnp.arange(Nt)
             t0 = time.perf_counter()
@@ -530,6 +558,16 @@ class JaxSimulator(SimulatorBase):
                 freq_idx_plot = clamped
             nside = getattr(self.sky_model, "Nside", 64)
             beamreal0 = self.efbeams[0][2]
+            if do_rot:
+                t0 = time.perf_counter()
+                sky_t0 = self._rotate_sky_flm_batch_jax(
+                    sky_base_flm, alpha[0], beta[0], gamma[0]
+                )
+                self._block_ready(sky_t0)
+                self._log_timing("simulate.rotate_sky_t0", t0)
+                self._debug_array_summary("sky_t0", sky_t0)
+            else:
+                sky_t0 = sky_base_flm
             sky_t0_packed = self._full_flm_to_hp_batch_jax(sky_t0)
             self._plot_sky_beam_healpix(
                 sky_t0_packed[freq_idx_plot], beamreal0[freq_idx_plot], nside, self.lmax,

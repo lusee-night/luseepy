@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 import os
 import lusee
+from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
 
 pytestmark = pytest.mark.integration
 
@@ -26,7 +27,7 @@ def test_sim_fits_beams(observation, fits_beam):
         beams.append(cB)
 
     lmax = 64
-    freq = [10, 12, 30]
+    freq = canonical_frequencies(frequency_indices_from_values([10.0, 12.0, 30.0]))
     sky = lusee.sky.ConstSky(Nside=32, lmax=lmax, freq=freq, T=200)
     S = lusee.DefaultSimulator(
         observation, beams, sky, freq=freq, lmax=lmax,
@@ -41,7 +42,7 @@ def test_sim_gauss_beam(observation):
     beams = [BG]
 
     lmax = 64
-    freq = [1, 5, 10]
+    freq = canonical_frequencies(frequency_indices_from_values([1.0, 5.0, 10.0]))
     sky = lusee.sky.ConstSky(Nside=32, lmax=lmax, freq=freq, T=200)
     S = lusee.DefaultSimulator(
         observation, beams, sky, freq=freq, lmax=lmax,

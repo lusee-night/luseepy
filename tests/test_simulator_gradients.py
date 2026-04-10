@@ -8,6 +8,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 import lusee
+from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
 
 
 def _small_grad_setup(tmp_path):
@@ -20,7 +21,7 @@ def _small_grad_setup(tmp_path):
         lun_long_deg=0.0,
     )
     times = obs.times
-    freq = jnp.array([10.0])
+    freq = canonical_frequencies(frequency_indices_from_values([10.0]), as_jax=True)
     lmax = 8
     sky = lusee.sky.HarmonicPointSourceSky(lmax=lmax, l_deg=0.0, b_deg=0.0, freq=freq)
     beam = lusee.BeamGauss(
