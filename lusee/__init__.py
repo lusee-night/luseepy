@@ -32,6 +32,14 @@ from . import SkyModels     as sky
 from . import MonoSkyModels as monosky 
 from .PCAanalyzer import PCAanalyzer, CompositePCAanalyzer
 from .Throughput import Throughput
+from .frequencies import (
+    ALL_FREQUENCIES_MHZ,
+    ALL_FREQUENCY_INDICES,
+    canonical_frequencies,
+    canonical_frequency_indices,
+    frequency_indices_from_config,
+    frequency_indices_from_values,
+)
 
 __version__ = '1.3'
 __comment__ = '1.3 dev'

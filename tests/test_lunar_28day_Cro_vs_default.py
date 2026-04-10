@@ -25,6 +25,7 @@ import healpy as hp
 from pathlib import Path
 from astropy.coordinates import SkyCoord, GeocentricMeanEcliptic
 from astropy import units as u
+from lusee.frequencies import canonical_frequencies, canonical_frequency_indices
 
 # luseepy package root (parent of tests/)
 _LUSEEPY_ROOT = Path(__file__).resolve().parent.parent
@@ -69,7 +70,7 @@ def test_lunar_day_28_single_source():
         sigma_deg=sigma_deg,
         one_over_freq_scaling=False,
     )
-    freq = beam.freq[::5]
+    freq = canonical_frequencies(canonical_frequency_indices(start_idx=0, stop_idx=50, step_idx=5))
 
     # Single-pixel sky (equatorial) wrapped to galactic
     sky = lusee.sky.SingleSourceHealpixSky(l_deg=l_deg, b_deg=b_deg, Nside=nside, freq=freq)

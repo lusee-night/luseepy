@@ -54,6 +54,8 @@ class SimDriver(dict):
         print(f"JAX x64 precision enabled: {enabled}")
 
     def _parse_base(self):
+        from lusee.frequencies import canonical_frequencies, frequency_indices_from_config
+
         self.lmax = self["observation"]["lmax"]
         self.root = self["paths"]["lusee_drive_dir"]
         self.outdir = self["paths"].get("output_dir", ".")
@@ -66,7 +68,8 @@ class SimDriver(dict):
         self.dt = od["dt"]
         if isinstance(self.dt, str):
             self.dt = eval(self.dt)
-        self.freq = np.arange(od["freq"]["start"], od["freq"]["end"], od["freq"]["step"])
+        self.freq_indices = frequency_indices_from_config(od["freq"])
+        self.freq = canonical_frequencies(self.freq_indices)
 
     def _parse_sky(self):
         lusee = self._lusee
@@ -181,6 +184,12 @@ class SimDriver(dict):
         }
         return aliases.get(e, e)
 
+    def _simulation_extra_opts(self, engine):
+        extra_opts = dict(self.get("simulation", {}))
+        if engine != "jaxsim":
+            extra_opts.pop("time_batch_size", None)
+        return extra_opts
+
     def run(self):
         lusee = self._lusee
         print("Starting simulation:")
@@ -204,6 +213,7 @@ class SimDriver(dict):
                     combs.append((i, j))
 
         engine = self._normalize_engine(self)
+        extra_opts = self._simulation_extra_opts(engine)
         if engine == "croissant":
             if lusee.CroSimulator is None:
                 raise RuntimeError(
@@ -220,7 +230,7 @@ class SimDriver(dict):
                 freq=self.freq,
                 lmax=self.lmax,
                 cross_power=self.couplings,
-                extra_opts=self["simulation"],
+                extra_opts=extra_opts,
             )
         elif engine == "default":
             print("  setting up Default (NumPy) Simulation object...")
@@ -233,7 +243,7 @@ class SimDriver(dict):
                 freq=self.freq,
                 lmax=self.lmax,
                 cross_power=self.couplings,
-                extra_opts=self["simulation"],
+                extra_opts=extra_opts,
             )
         elif engine == "jaxsim":
             print("  setting up JAX Simulation object...")
@@ -246,7 +256,7 @@ class SimDriver(dict):
                 freq=self.freq,
                 lmax=self.lmax,
                 cross_power=self.couplings,
-                extra_opts=self["simulation"],
+                extra_opts=extra_opts,
             )
         else:
             raise ValueError(

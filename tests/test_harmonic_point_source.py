@@ -3,6 +3,7 @@ import numpy as np
 import healpy as hp
 import pytest
 from lusee.SkyModels import HarmonicPointSourceSky
+from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
 
 
 def _pixel_point_source_alm(theta, phi, nside, lmax):
@@ -33,7 +34,12 @@ def test_beam_convolved_matches_pixel_version():
     theta = np.radians(90.0 - b_deg)
     phi = np.radians(l_deg)
 
-    sky = HarmonicPointSourceSky(lmax=lmax, freq=[10.0], l_deg=l_deg, b_deg=b_deg)
+    sky = HarmonicPointSourceSky(
+        lmax=lmax,
+        freq=canonical_frequencies(frequency_indices_from_values([10.0])),
+        l_deg=l_deg,
+        b_deg=b_deg,
+    )
     alm_h = sky.get_alm([0])[0]
     alm_p = _pixel_point_source_alm(theta, phi, nside=512, lmax=lmax)
 
@@ -50,27 +56,49 @@ def test_beam_convolved_matches_pixel_version():
 def test_a00_equals_Y00():
     """a_00 should be Y*_00 = 1/sqrt(4π) regardless of position."""
     for l_deg, b_deg in [(0, 90), (180, -45), (42, 7)]:
-        sky = HarmonicPointSourceSky(lmax=8, freq=[1.0], l_deg=l_deg, b_deg=b_deg)
+        sky = HarmonicPointSourceSky(
+            lmax=8,
+            freq=canonical_frequencies(frequency_indices_from_values([1.0])),
+            l_deg=l_deg,
+            b_deg=b_deg,
+        )
         a00 = sky.get_alm([0])[0][0]
         np.testing.assert_allclose(a00.real, 1 / np.sqrt(4 * np.pi), atol=1e-14)
 
 
 def test_equatorial_vs_galactic_frame():
-    sky_eq = HarmonicPointSourceSky(lmax=8, freq=[1.0], ra_deg=0, dec_deg=0)
-    sky_gal = HarmonicPointSourceSky(lmax=8, freq=[1.0], l_deg=0, b_deg=0)
+    freq = canonical_frequencies(frequency_indices_from_values([1.0]))
+    sky_eq = HarmonicPointSourceSky(lmax=8, freq=freq, ra_deg=0, dec_deg=0)
+    sky_gal = HarmonicPointSourceSky(lmax=8, freq=freq, l_deg=0, b_deg=0)
     assert sky_eq.frame == "equatorial"
     assert sky_gal.frame == "galactic"
 
 
 def test_rejects_ambiguous_coordinates():
     with pytest.raises(ValueError, match="either"):
-        HarmonicPointSourceSky(lmax=8, freq=[1.0], ra_deg=0, dec_deg=0, l_deg=0, b_deg=0)
+        HarmonicPointSourceSky(
+            lmax=8,
+            freq=canonical_frequencies(frequency_indices_from_values([1.0])),
+            ra_deg=0,
+            dec_deg=0,
+            l_deg=0,
+            b_deg=0,
+        )
     with pytest.raises(ValueError, match="either"):
-        HarmonicPointSourceSky(lmax=8, freq=[1.0])
+        HarmonicPointSourceSky(
+            lmax=8,
+            freq=canonical_frequencies(frequency_indices_from_values([1.0])),
+        )
 
 
 def test_frequency_scaling():
-    sky = HarmonicPointSourceSky(lmax=4, freq=[10.0, 20.0], T=[2.0, 5.0], l_deg=0, b_deg=45)
+    sky = HarmonicPointSourceSky(
+        lmax=4,
+        freq=canonical_frequencies(frequency_indices_from_values([10.0, 20.0])),
+        T=[2.0, 5.0],
+        l_deg=0,
+        b_deg=45,
+    )
     alms = sky.get_alm([0, 1])
     ratio = np.abs(alms[1][0]) / np.abs(alms[0][0])
     np.testing.assert_allclose(ratio, 2.5, atol=1e-14)

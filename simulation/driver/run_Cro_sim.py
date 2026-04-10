@@ -8,6 +8,7 @@ if __name__ == "__main__":
     import  os,sys
     import  yaml
     from    yaml.loader import SafeLoader
+    from    lusee.frequencies import canonical_frequencies, frequency_indices_from_config
 
 #######################
 class SimDriver(dict):
@@ -59,7 +60,8 @@ class SimDriver(dict):
         self.dt = od['dt']
         if type(self.dt)==str:
             self.dt = eval(od['dt'])
-        self.freq = np.arange(od['freq']['start'],od['freq']['end'],od['freq']['step'])
+        self.freq_indices = frequency_indices_from_config(od['freq'])
+        self.freq = canonical_frequencies(self.freq_indices)
 
     def _parse_sky(self):
         engine = self._normalize_engine(self)

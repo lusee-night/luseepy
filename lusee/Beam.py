@@ -21,8 +21,37 @@ import healpy as hp
 from scipy.special import sph_harm_y
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import RegularGridInterpolator
+from .frequencies import canonicalize_frequencies
 
-USE_SPHERICART = True
+
+def _resolve_sphericart_mode():
+    override = os.environ.get("LUSEE_SPHERICART_MODE")
+    if override is not None:
+        mode = override.strip().lower()
+        if mode in {"gpu", "cpu", "off"}:
+            return mode
+        raise ValueError(
+            "LUSEE_SPHERICART_MODE must be one of: gpu, cpu, off"
+        )
+
+    try:
+        backend = jax.default_backend()
+    except Exception:
+        backend = "cpu"
+
+    if backend == "gpu":
+        if bool(getattr(sphericart.jax, "has_sphericart_jax_cuda", False)):
+            return "gpu"
+        # Beam alm setup only runs during simulator/beam initialization. When
+        # the installed sphericart wheel lacks CUDA kernels, force this stage
+        # onto CPU rather than falling back to the much more memory-hungry JAX
+        # built-in spherical harmonics path on GPU.
+        return "cpu"
+
+    return "gpu"
+
+
+SPHERICART_MODE = _resolve_sphericart_mode()
 
 
 def getLegendre_sphericart(lmax, theta):
@@ -114,6 +143,24 @@ def _grid2healpix_alm_fast_impl_sphericart(theta, phi, img, lmax):
     return coeffs.sum(axis=0) * (2 * jnp.pi / nphi)
 
 
+@partial(jax.jit, static_argnums=(3,), backend="cpu")
+def _grid2healpix_alm_fast_impl_sphericart_cpu(theta, phi, img, lmax):
+    dtheta = theta[1] - theta[0]
+    dA_theta = jnp.sin(theta) * dtheta
+    nphi = phi.shape[0]
+
+    rimg = jnp.fft.rfft(img, axis=1)
+    if rimg.shape[1] < lmax + 1:
+        rimg = jnp.pad(rimg, ((0, 0), (0, lmax + 1 - rimg.shape[1])))
+    else:
+        rimg = rimg[:, : lmax + 1]
+
+    m_idx, l_idx = _get_triu_indices(lmax)
+    legendre_values = jax.vmap(lambda th: _getLegendre_packed_sphericart(lmax, th))(theta)
+    coeffs = rimg[:, m_idx] * legendre_values * dA_theta[:, None]
+    return coeffs.sum(axis=0) * (2 * jnp.pi / nphi)
+
+
 @partial(jax.jit, static_argnums=(3,))
 def _grid2healpix_alm_fast_impl_jax_builtin(theta, phi, img, lmax):
     dtheta = theta[1] - theta[0]
@@ -132,10 +179,14 @@ def _grid2healpix_alm_fast_impl_jax_builtin(theta, phi, img, lmax):
     return coeffs.sum(axis=0) * (2 * jnp.pi / nphi)
 
 
-if USE_SPHERICART:
+if SPHERICART_MODE == "gpu":
     getLegendre = getLegendre_sphericart
     _getLegendre_packed = _getLegendre_packed_sphericart
     _grid2healpix_alm_fast_impl = _grid2healpix_alm_fast_impl_sphericart
+elif SPHERICART_MODE == "cpu":
+    getLegendre = getLegendre_jax_builtin
+    _getLegendre_packed = getLegendre_jax_builtin
+    _grid2healpix_alm_fast_impl = _grid2healpix_alm_fast_impl_sphericart_cpu
 else:
     getLegendre = getLegendre_jax_builtin
     _getLegendre_packed = getLegendre_jax_builtin
@@ -352,7 +403,7 @@ class Beam:
             self.f_ground = jnp.asarray(fits['f_ground'].read())
         elif version==2:
             self.gain_conv = jnp.asarray(fits['gain_conv'].read())
-            self.freq = jnp.asarray(fits['freq'].read())
+            self.freq = canonicalize_frequencies(fits['freq'].read(), as_jax=True)
             
         self.freq_min = float(header['FREQ_MIN'])
         self.freq_max = float(header['FREQ_MAX'])
@@ -365,7 +416,10 @@ class Beam:
         self.Nphi = int(header['PHI_N'])
         self.header = header
         if version==1:
-            self.freq = jnp.linspace(self.freq_min, self.freq_max,self.Nfreq)
+            self.freq = canonicalize_frequencies(
+                np.linspace(self.freq_min, self.freq_max, self.Nfreq),
+                as_jax=True,
+            )
         self.theta_deg = jnp.linspace(self.theta_min, self.theta_max,self.Ntheta)
         self.phi_deg = jnp.linspace(self.phi_min, self.phi_max,self.Nphi)
         self.theta = self.theta_deg/180*jnp.pi

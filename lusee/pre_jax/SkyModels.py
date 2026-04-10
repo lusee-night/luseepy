@@ -2,6 +2,7 @@ import fitsio
 import healpy as hp
 import numpy as np
 from .MonoSkyModels import T_C, T_DarkAges, T_DarkAges_Scaled
+from ..frequencies import ALL_FREQUENCIES_MHZ_NP, canonicalize_frequencies
 
 class ConstSky:
     """
@@ -36,7 +37,7 @@ class ConstSky:
             Tmap[theta>0.75*np.pi] = 0  
         self.mapalm = hp.map2alm(Tmap, lmax=lmax)
         self.frame = "MCMF"
-        self.freq=freq
+        self.freq = None if freq is None else canonicalize_frequencies(freq)
 
     def T (self,ndx):
         """
@@ -77,9 +78,9 @@ class ConstSkyCane1979(ConstSky):
     :type freq: list
     """
     def __init__(self, Nside, lmax, freq=None):
-        self.freq = np.arange(1.0,50.1) if freq is None else freq
+        self.freq = ALL_FREQUENCIES_MHZ_NP if freq is None else canonicalize_frequencies(freq)
         T = T_C(self.freq).value
-        ConstSky.__init__(self, Nside, lmax, T, freq)
+        ConstSky.__init__(self, Nside, lmax, T, self.freq)
 
 class DarkAgesMonopole(ConstSky):
     """
@@ -102,12 +103,12 @@ class DarkAgesMonopole(ConstSky):
     """
     def __init__(self, Nside, lmax, scaled = True, nu_min = 16.4,
                      nu_rms = 14.0, A = 0.04, freq=None):
-        self.freq = np.arange(1.0,50.1) if freq is None else freq
+        self.freq = ALL_FREQUENCIES_MHZ_NP if freq is None else canonicalize_frequencies(freq)
         if scaled:
             T = T_DarkAges_Scaled(self.freq, nu_min, nu_rms, A)
         else:
             T = T_DarkAges(self.freq)
-        ConstSky.__init__(self, Nside, lmax, T, freq)  
+        ConstSky.__init__(self, Nside, lmax, T, self.freq)  
 
 class GalCenter (ConstSky):
     """
@@ -131,7 +132,7 @@ class GalCenter (ConstSky):
         Tmap = np.exp(-(phi)**2/0.1-(theta-np.pi/2)**2/0.1)
         self.mapalm = hp.map2alm(Tmap, lmax = lmax)
         self.frame = "galactic"
-        self.freq=freq   
+        self.freq = None if freq is None else canonicalize_frequencies(freq)
 
 
 class HealpixSky:
@@ -149,11 +150,13 @@ class HealpixSky:
     :type frame: str
     
     """
-    def __init__ (self, Nside, lmax, maps, freq=[25.0], frame="galactic"):
+    def __init__ (self, Nside, lmax, maps, freq=None, frame="galactic"):
         self.Nside = Nside
         self.Npix = Nside**2 * 12
         self.maps = maps
-        self.freq = freq
+        if freq is None:
+            freq = ALL_FREQUENCIES_MHZ_NP[[24]]
+        self.freq = canonicalize_frequencies(freq)
         assert (len(maps)==len(freq))
         self.mapalm = np.array([hp.map2alm(m,lmax = lmax) for m in maps])
         self.frame  = frame
@@ -191,7 +194,9 @@ class FitsSky (HealpixSky):
         fstart      = header['freq_start']
         fend        = header['freq_end']
         fstep       = header['freq_step']
-        freq   = np.arange(fstart, fend+1e-3*fstep, fstep)
+        freq = canonicalize_frequencies(
+            np.arange(fstart, fend + 1e-3 * fstep, fstep, dtype=float)
+        )
         super().__init__(Nside=hp.npix2nside(maps.shape[1]), lmax=lmax, maps=maps, freq=freq, frame="galactic")
         
 
@@ -208,10 +213,12 @@ class SingleSourceHealpixSky (HealpixSky):
     :param freq: List of frequencies at which to make sky maps.
     :type freq: list
     """
-    def __init__ (self, Nside=128, freq=[25.0], T=1.0, *,
+    def __init__ (self, Nside=128, freq=None, T=1.0, *,
                  ra_deg=None, dec_deg=None, l_deg=None, b_deg=None):
         # convert ra, dec to galactic coordinates and then to pixel number
-        self.freq = np.atleast_1d(freq)
+        if freq is None:
+            freq = ALL_FREQUENCIES_MHZ_NP[[24]]
+        self.freq = canonicalize_frequencies(freq)
         T = np.atleast_1d(np.asarray(T, dtype=float))
         if T.size == 1:
             T = np.broadcast_to(T, len(self.freq))
@@ -247,7 +254,13 @@ class HarmonicPointSourceSky:
 
     Example::
 
-        sky = HarmonicPointSourceSky(lmax=64, ra_deg=45.0, dec_deg=10.0, freq=[10.0])
+        from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
+        sky = HarmonicPointSourceSky(
+            lmax=64,
+            ra_deg=45.0,
+            dec_deg=10.0,
+            freq=canonical_frequencies(frequency_indices_from_values([10.0])),
+        )
         alms = sky.get_alm([0], freq=np.array([10.0]))
 
     :param lmax: Maximum spherical harmonic degree.
@@ -263,7 +276,7 @@ class HarmonicPointSourceSky:
     def __init__(self, lmax, freq, T=1.0, *,
                  ra_deg=None, dec_deg=None, l_deg=None, b_deg=None):
         self.lmax = lmax
-        self.freq = np.atleast_1d(freq)
+        self.freq = canonicalize_frequencies(freq)
         T = np.atleast_1d(np.asarray(T, dtype=float))
         if T.size == 1:
             T = np.broadcast_to(T, len(self.freq))

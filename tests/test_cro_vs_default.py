@@ -57,12 +57,14 @@ def load_config(config_path):
 
 def setup_simulation(cfg, lusee):
     """Build Observation, beams, sky from config (same as SimDriver)."""
+    from lusee.frequencies import canonical_frequencies, frequency_indices_from_config
+
     root = cfg["_root"]
     od = cfg["observation"]
     dt = od["dt"]
     if isinstance(dt, str):
         dt = eval(dt)
-    freq = np.arange(od["freq"]["start"], od["freq"]["end"], od["freq"]["step"])
+    freq = canonical_frequencies(frequency_indices_from_config(od["freq"]))
     lmax = od["lmax"]
 
     # Sky

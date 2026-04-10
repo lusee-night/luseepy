@@ -157,16 +157,14 @@ class SimulatorBase:
         freq_ndx_beam = []
         freq_ndx_sky = []
         for f in self.freq:
-            try:
-                ndx = list(beams[0].freq).index(f)
-            except ValueError:
+            ndx = self._find_frequency_index(beams[0].freq, f)
+            if ndx is None:
                 print ("Error:")
                 print (f"Frequency {f} does not exist in beams.")
                 sys.exit(1)
             freq_ndx_beam.append(ndx)
-            try:
-                ndx = list(sky_model.freq).index(f)
-            except ValueError:
+            ndx = self._find_frequency_index(sky_model.freq, f)
+            if ndx is None:
                 print ("Error:")
                 print (f"Frequency {f} does not exist in sky model.")
                 sys.exit(1)
@@ -175,6 +173,14 @@ class SimulatorBase:
         self.freq_ndx_beam = freq_ndx_beam
         self.freq_ndx_sky = freq_ndx_sky
         self.Nfreq = len(self.freq)
+
+    @staticmethod
+    def _find_frequency_index(freq_values, target, atol=1e-8, rtol=1e-8):
+        freq_arr = np.asarray(freq_values, dtype=float)
+        matches = np.nonzero(np.isclose(freq_arr, float(target), atol=atol, rtol=rtol))[0]
+        if matches.size == 0:
+            return None
+        return int(matches[0])
 
     def simulate(self, times=None):
         """

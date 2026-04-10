@@ -3,6 +3,7 @@
 import lusee
 import numpy as np
 import os
+from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
 
 O = lusee.Observation(
     "2025-02-01 13:00:00 to 2025-03-01 13:00:00",
@@ -25,7 +26,7 @@ for ofs, c in enumerate(["N", "E", "S", "W"]):
     beams.append(cB)
 
 lmax = 64
-freq = [10, 12, 30]
+freq = canonical_frequencies(frequency_indices_from_values([10.0, 12.0, 30.0]))
 sky = lusee.sky.ConstSky(Nside=32, lmax=lmax, freq=freq, T=200)
 S = lusee.DefaultSimulator(
     O,
@@ -56,7 +57,7 @@ BG = lusee.BeamGauss(
 beams = [BG]
 
 lmax = 64
-freq = [1, 5, 10]
+freq = canonical_frequencies(frequency_indices_from_values([1.0, 5.0, 10.0]))
 sky = lusee.sky.ConstSky(Nside=32, lmax=lmax, freq=freq, T=200)
 S = lusee.DefaultSimulator(
     O,
@@ -74,6 +75,5 @@ print("Are we close to 200K?")
 print("We get:", WF[0, 0, 0])
 assert np.allclose(WF[:, :2, :], 200, rtol=5e-4)
 print("  OK")
-
 
 
