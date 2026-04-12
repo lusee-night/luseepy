@@ -436,7 +436,7 @@ class JaxSimulator(SimulatorBase):
 
         Nt = len(times)
         t0 = time.perf_counter()
-        sky_base = jnp.asarray(self.sky_model.get_alm(self.freq_ndx_sky, self.freq))
+        sky_base = jnp.asarray(self.sky_model.get_alm(self.freq_ndx_sky))
         sky_base_flm = self._hp_to_full_flm_batch_jax(sky_base)
         self._block_ready(sky_base_flm)
         self._log_timing("simulate.sky_model.get_alm", t0)

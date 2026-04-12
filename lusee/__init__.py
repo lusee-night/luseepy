@@ -27,6 +27,7 @@ from .SkyModels     import GalCenter
 from .SkyModels     import HarmonicPointSourceSky
 
 from . import SkyModels     as sky
+from . import MapMaker      as mapmaker
 
 
 from . import MonoSkyModels as monosky 
