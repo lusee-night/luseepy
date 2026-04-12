@@ -233,8 +233,6 @@ class HealpixSky:
         :rtype: array
         """
         ndx = jnp.atleast_1d(jnp.asarray(ndx))
-        if freq is not None:
-            assert (jnp.all(self.freq[ndx]==jnp.atleast_1d(jnp.asarray(freq))))
         return self.mapalm[ndx]
 
 @jax.tree_util.register_pytree_node_class
@@ -400,6 +398,4 @@ class HarmonicPointSourceSky:
         :returns: List of healpy-format alm arrays.
         """
         ndx = jnp.atleast_1d(jnp.asarray(ndx))
-        if freq is not None:
-            assert jnp.all(self.freq[ndx] == jnp.atleast_1d(jnp.asarray(freq)))
         return self._alm[None,:]*self._T[ndx][:,None]
