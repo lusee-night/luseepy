@@ -141,7 +141,7 @@ The same base class works for richer parameterizations:
 | `beam=` kwarg (approach A)      | yes          | not yet      | not yet          |
 | Through-constructor grad (B)    | yes          | yes          | no               |
 | Engine                          | croissant    | s2fft/JAX    | healpy/numpy     |
-| Beam alm via sphericart         | no           | yes          | no               |
+| Beam alm via JAX recurrence     | no           | yes          | no               |
 
 ## Next step: mapmaking via CG
 
@@ -176,5 +176,5 @@ Both `A` and `AT` are JIT-able. The entire CG solve can run on GPU.
 ## Environment
 
 - Python 3.12, venv at `.venv/`
-- `pip install -e ".[croissant]"` then `pip install jax[cuda12] sphericart[jax]`
+- `pip install -e ".[croissant]"` then `pip install jax[cuda12]`
 - `JAX_ENABLE_X64=1` recommended for precision
