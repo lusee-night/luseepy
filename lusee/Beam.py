@@ -374,7 +374,6 @@ class Beam:
             getattr(self, "gain", None),
             getattr(self, "gain_conv", None),
             getattr(self, "f_ground", None),
-            self.freq,
         )
         aux_data = (
             self.id,
@@ -388,6 +387,7 @@ class Beam:
             self.phi_min,
             self.phi_max,
             self.Nphi,
+            tuple(np.asarray(self.freq).tolist()),  # static metadata, not traced
         )
         return children, aux_data
 
@@ -405,6 +405,7 @@ class Beam:
             phi_min,
             phi_max,
             Nphi,
+            freq_tuple,
         ) = aux_data
         (
             Etheta,
@@ -414,7 +415,6 @@ class Beam:
             gain,
             gain_conv,
             f_ground,
-            freq,
         ) = children
 
         beam = cls.__new__(cls)
@@ -427,7 +427,7 @@ class Beam:
         beam.gain = gain
         beam.gain_conv = gain_conv
         beam.f_ground = f_ground
-        beam.freq = freq
+        beam.freq = jnp.asarray(freq_tuple)
         beam.freq_min = freq_min
         beam.freq_max = freq_max
         beam.Nfreq = Nfreq
