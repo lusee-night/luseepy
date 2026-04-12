@@ -91,8 +91,8 @@ def solve(sim, data, sky_template, sigma,
     :param prior_mean: Prior mean mapalm array (same shape as
         sky_template.mapalm).  If provided, solves for the fluctuation
         around this mean and adds it back, so unobserved regions inpaint
-        with prior_mean instead of zero.  Use ``"monopole"`` to inpaint
-        with the a00 monopole from the data.
+        with prior_mean instead of zero.  Typically pass
+        ``sky_template.mapalm`` to inpaint with the input sky model.
     :param maxiter: Maximum CG iterations
     :param tol: CG convergence tolerance
     :returns: Recovered sky mapalm array (same shape as sky_template.mapalm)
@@ -114,12 +114,7 @@ def solve(sim, data, sky_template, sigma,
 
     # Handle prior mean: solve for fluctuations around m0
     if prior_mean is not None:
-        if isinstance(prior_mean, str) and prior_mean == "monopole":
-            # Extract monopole from sky_template
-            m0 = jnp.zeros_like(sky_template.mapalm)
-            m0 = m0.at[:, 0].set(sky_template.mapalm[:, 0])
-        else:
-            m0 = jnp.asarray(prior_mean)
+        m0 = jnp.asarray(prior_mean)
         data_residual = data.ravel() - A(m0)
     else:
         m0 = None
