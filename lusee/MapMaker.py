@@ -78,7 +78,7 @@ def build_instrument(beam_file, obs_range, freq, lmax,
 
 
 def solve(sim, data, sky_template, sigma,
-          signal_prior=None, prior_mean=None, maxiter=50, tol=1e-6):
+          signal_prior=None, maxiter=50, tol=1e-6):
     """Solve the normal equations via CG.
 
     :param sim: CroSimulator (Tground=0) from build_instrument
@@ -88,11 +88,6 @@ def solve(sim, data, sky_template, sigma,
     :param sigma: Noise standard deviation (scalar or per-sample array)
     :param signal_prior: S^{-1} array, same shape as sky_template.mapalm.
         If None, uses a small Tikhonov regularizer (1e-6).
-    :param prior_mean: Prior mean mapalm array (same shape as
-        sky_template.mapalm).  If provided, solves for the fluctuation
-        around this mean and adds it back, so unobserved regions inpaint
-        with prior_mean instead of zero.  Use ``"monopole"`` to inpaint
-        with the a00 monopole from the data.
     :param maxiter: Maximum CG iterations
     :param tol: CG convergence tolerance
     :returns: Recovered sky mapalm array (same shape as sky_template.mapalm)
@@ -112,19 +107,6 @@ def solve(sim, data, sky_template, sigma,
     else:
         S_inv = jnp.asarray(signal_prior)
 
-    # Handle prior mean: solve for fluctuations around m0
-    if prior_mean is not None:
-        if isinstance(prior_mean, str) and prior_mean == "monopole":
-            # Extract monopole from sky_template
-            m0 = jnp.zeros_like(sky_template.mapalm)
-            m0 = m0.at[:, 0].set(sky_template.mapalm[:, 0])
-        else:
-            m0 = jnp.asarray(prior_mean)
-        data_residual = data.ravel() - A(m0)
-    else:
-        m0 = None
-        data_residual = data.ravel()
-
     def cg_matvec(x):
         """(A^H N^{-1} A + S^{-1}) x."""
         fwd, vjp_fn = jax.vjp(A, x)
@@ -132,15 +114,11 @@ def solve(sim, data, sky_template, sigma,
 
     zero = jnp.zeros_like(sky_template.mapalm)
     _, vjp_rhs = jax.vjp(A, zero)
-    rhs = jnp.conj(vjp_rhs(N_inv * data_residual)[0])
+    rhs = jnp.conj(vjp_rhs(N_inv * data.ravel())[0])
 
     sky_hat, info = jax.scipy.sparse.linalg.cg(
         cg_matvec, rhs, x0=zero, maxiter=maxiter, tol=tol,
     )
-
-    if m0 is not None:
-        sky_hat = sky_hat + m0
-
     return sky_hat
 
 
