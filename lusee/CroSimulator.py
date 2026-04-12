@@ -159,7 +159,7 @@ class CroSimulator(SimulatorBase):
             rotation=eul_topo,
             dl_array=dl_topo,
         )
-        sky_gal = sky_model.get_alm(self.freq_ndx_sky, self.freq)
+        sky_gal = sky_model.get_alm(self.freq_ndx_sky)
         sky_2d = jnp.stack([
             s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(s_), sim_L)
             for s_ in sky_gal
