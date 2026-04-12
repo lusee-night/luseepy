@@ -77,8 +77,24 @@ def build_instrument(beam_file, obs_range, freq, lmax,
     return sim, beams, obs
 
 
+def _estimate_diagonal(matvec, shape, n_probes=3, key=None):
+    """Estimate the diagonal of a linear operator via stochastic probing.
+
+    Uses Hutchinson's estimator: diag(M) ≈ mean(z * M(z)) where z is
+    a random ±1 vector.
+    """
+    if key is None:
+        key = jax.random.PRNGKey(0)
+    diag_est = jnp.zeros(shape)
+    for i in range(n_probes):
+        z = 2.0 * jax.random.bernoulli(jax.random.fold_in(key, i), shape=shape).astype(float) - 1.0
+        Mz = matvec(z)
+        diag_est = diag_est + jnp.real(z * Mz)
+    return diag_est / n_probes
+
+
 def solve(sim, data, sky_template, sigma,
-          signal_prior=None, maxiter=50, tol=1e-6):
+          signal_prior=None, precondition=True, maxiter=50, tol=1e-6):
     """Solve the normal equations via CG.
 
     :param sim: CroSimulator (Tground=0) from build_instrument
@@ -88,6 +104,8 @@ def solve(sim, data, sky_template, sigma,
     :param sigma: Noise standard deviation (scalar or per-sample array)
     :param signal_prior: S^{-1} array, same shape as sky_template.mapalm.
         If None, uses a small Tikhonov regularizer (1e-6).
+    :param precondition: If True, estimate diagonal preconditioner from
+        the normal operator to improve CG convergence.
     :param maxiter: Maximum CG iterations
     :param tol: CG convergence tolerance
     :returns: Recovered sky mapalm array (same shape as sky_template.mapalm)
@@ -112,12 +130,20 @@ def solve(sim, data, sky_template, sigma,
         fwd, vjp_fn = jax.vjp(A, x)
         return jnp.conj(vjp_fn(N_inv * fwd)[0]) + S_inv * x
 
+    # Diagonal preconditioner: M^{-1} ≈ 1 / diag(A^H N^{-1} A + S^{-1})
+    if precondition:
+        diag = _estimate_diagonal(cg_matvec, sky_template.mapalm.shape)
+        diag = jnp.maximum(jnp.abs(diag), 1e-30)  # avoid division by zero
+        precond = lambda x: x / diag
+    else:
+        precond = None
+
     zero = jnp.zeros_like(sky_template.mapalm)
     _, vjp_rhs = jax.vjp(A, zero)
     rhs = jnp.conj(vjp_rhs(N_inv * data.ravel())[0])
 
     sky_hat, info = jax.scipy.sparse.linalg.cg(
-        cg_matvec, rhs, x0=zero, maxiter=maxiter, tol=tol,
+        cg_matvec, rhs, x0=zero, M=precond, maxiter=maxiter, tol=tol,
     )
     return sky_hat
 
