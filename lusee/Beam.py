@@ -11,10 +11,8 @@ import fitsio
 import numpy as np
 import jax
 import jax.numpy as jnp
-import sphericart.jax
 import copy
 import matplotlib.pyplot as plt
-from jax.scipy.special import sph_harm_y as jax_sph_harm_y
 from jax.tree_util import register_pytree_node_class
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import healpy as hp
@@ -24,84 +22,6 @@ from scipy.interpolate import RegularGridInterpolator
 from .frequencies import canonicalize_frequencies
 
 
-def _resolve_sphericart_mode():
-    override = os.environ.get("LUSEE_SPHERICART_MODE")
-    if override is not None:
-        mode = override.strip().lower()
-        if mode in {"gpu", "cpu", "off"}:
-            return mode
-        raise ValueError(
-            "LUSEE_SPHERICART_MODE must be one of: gpu, cpu, off"
-        )
-
-    try:
-        backend = jax.default_backend()
-    except Exception:
-        backend = "cpu"
-
-    if backend == "gpu":
-        if bool(getattr(sphericart.jax, "has_sphericart_jax_cuda", False)):
-            return "gpu"
-        # Beam alm setup only runs during simulator/beam initialization. When
-        # the installed sphericart wheel lacks CUDA kernels, force this stage
-        # onto CPU rather than falling back to the much more memory-hungry JAX
-        # built-in spherical harmonics path on GPU.
-        return "cpu"
-
-    return "gpu"
-
-
-SPHERICART_MODE = _resolve_sphericart_mode()
-
-
-def getLegendre_sphericart(lmax, theta):
-    """
-    Function that calculates Legendre polynomial functions up to specified degree
-    
-    :param lmax: Maximum degree of Legendre functions
-    :type lmax: int
-    :param theta: Argument of Legendre function
-    :type theta: float
-    
-    :returns: 2D array of Legendre functions, array indices are l and m
-    :rtype: numpy array
-    
-    """
-    
-    # The current pyshtools-based output matches spherical harmonics evaluated at
-    # phi = 0 for m >= 0, arranged in [l, m] layout.
-    m_idx, l_idx = _get_triu_indices(lmax)
-    values = _getLegendre_packed_sphericart(lmax, theta)
-    return jnp.zeros((lmax + 1, lmax + 1), dtype=values.dtype).at[l_idx, m_idx].set(values)
-
-
-def getLegendre_jax_builtin(lmax, theta):
-    """
-    Function that calculates Legendre polynomial functions up to specified degree
-    
-    :param lmax: Maximum degree of Legendre functions
-    :type lmax: int
-    :param theta: Argument of Legendre function
-    :type theta: float
-    
-    :returns: 2D array of Legendre functions, array indices are l and m
-    :rtype: numpy array
-    
-    """
-    
-    # The current pyshtools-based output matches spherical harmonics evaluated at
-    # phi = 0 for m >= 0, arranged in [l, m] layout.
-    m_idx, l_idx = jnp.triu_indices(lmax + 1)
-    values = jax_sph_harm_y(
-        l_idx,
-        m_idx,
-        jnp.full_like(l_idx, theta, dtype=jnp.asarray(theta).dtype),
-        jnp.zeros_like(m_idx, dtype=jnp.asarray(theta).dtype),
-        n_max=lmax,
-    )
-    return jnp.zeros((lmax + 1, lmax + 1), dtype=values.dtype).at[l_idx, m_idx].set(values.real)
-
-
 @lru_cache(maxsize=None)
 def _get_triu_indices(lmax):
     m_idx, l_idx = np.triu_indices(lmax + 1)
@@ -109,24 +29,91 @@ def _get_triu_indices(lmax):
 
 
 @lru_cache(maxsize=None)
-def _get_sphericart_indices_and_scale(lmax):
-    m_idx, l_idx = np.triu_indices(lmax + 1)
-    s_idx = np.array([l*l + l + m for m in range(lmax + 1) for l in range(m, lmax + 1)], dtype=np.int32)
-    factor = np.where(m_idx == 0, 1.0, np.sqrt(2.0))
-    sign = np.where((m_idx % 2) == 0, 1.0, -1.0)
-    return jnp.asarray(s_idx, dtype=jnp.int32), jnp.asarray(sign * factor)
+def _recurrence_coeffs(lmax):
+    """Precompute three-term recurrence coefficients for all (l, m) pairs.
+
+    Returns arrays of shape (lmax+1, lmax+1) indexed as [k, m] where l = m + k.
+    """
+    ms = np.arange(lmax + 1, dtype=np.float64)
+    ks = np.arange(lmax + 1, dtype=np.float64)
+    fl = ms[None, :] + ks[:, None]  # l = m + k, shape (lmax+1, lmax+1)
+    fm = ms[None, :]
+
+    # Sectoral coefficients: -sqrt((2m+1)/(2m)) for m >= 1
+    sect = np.zeros(lmax + 1)
+    sect[1:] = -np.sqrt((2.0 * ms[1:] + 1.0) / (2.0 * ms[1:]))
+
+    # Sub-diagonal coefficients: sqrt(2m+3)
+    sub_diag = np.sqrt(2.0 * ms + 3.0)
+
+    # Three-term recurrence (k >= 2): P_l^m = alpha * x * P_{l-1}^m - beta * P_{l-2}^m
+    denom_a = np.maximum((fl - fm) * (fl + fm), 1.0)
+    alpha = np.sqrt(np.maximum((2 * fl + 1) * (2 * fl - 1), 0.0) / denom_a)
+    numer_b = np.maximum((2 * fl + 1) * (fl + fm - 1) * (fl - fm - 1), 0.0)
+    denom_b = np.maximum((2 * fl - 3) * (fl - fm) * (fl + fm), 1.0)
+    beta = np.sqrt(numer_b / denom_b)
+
+    return (
+        jnp.asarray(sect),
+        jnp.asarray(sub_diag),
+        jnp.asarray(alpha),
+        jnp.asarray(beta),
+    )
 
 
-def _getLegendre_packed_sphericart(lmax, theta):
-    theta = jnp.asarray(theta)
-    s_idx, scale = _get_sphericart_indices_and_scale(lmax)
-    xyz = jnp.array([[jnp.sin(theta), 0.0, jnp.cos(theta)]], dtype=theta.dtype)
-    values = sphericart.jax.spherical_harmonics(xyz, lmax)[0]
-    return values[s_idx] / scale
+def _getLegendre_packed(lmax, theta):
+    """Compute fully-normalized associated Legendre functions P_l^m(cos theta)
+    for 0 <= m <= l <= lmax, packed in upper-triangular (m, l) order.
+
+    Uses a vectorized three-term recurrence: a single scan over l that processes
+    all m columns simultaneously.
+    """
+    x = jnp.cos(jnp.asarray(theta))
+    s = jnp.sin(jnp.asarray(theta))
+    sect, sub_diag, alpha, beta = _recurrence_coeffs(lmax)
+    ms = jnp.arange(lmax + 1)
+
+    # Step 1: Compute all sectoral values P_m^m via scan
+    def sectoral_step(pmm_prev, m):
+        pmm = jnp.where(m == 0,
+                        1.0 / jnp.sqrt(4.0 * jnp.pi),
+                        sect[m] * s * pmm_prev)
+        return pmm, pmm
+
+    _, sectoral = jax.lax.scan(sectoral_step, 0.0, ms)
+
+    # Step 2: Scan over k (where l = m + k) for all m simultaneously
+    # At each step k, we compute P_{m+k}^m for all m as a vector.
+    # k=0: P_m^m (seed), k=1: sub-diagonal, k>=2: three-term recurrence
+    def step(carry, k_data):
+        p_prev, p_prev2 = carry
+        k, alpha_k, beta_k = k_data
+
+        val_k0 = sectoral
+        val_k1 = sub_diag * x * sectoral
+        val_k2 = alpha_k * x * p_prev - beta_k * p_prev2
+
+        val = jnp.where(k == 0, val_k0, jnp.where(k == 1, val_k1, val_k2))
+        return (val, p_prev), val
+
+    ks = jnp.arange(lmax + 1)
+    init = (sectoral, jnp.zeros(lmax + 1, dtype=x.dtype))
+    _, columns = jax.lax.scan(step, init, (ks, alpha, beta))
+    # columns[k, m] = P_{m+k}^m
+
+    m_idx, l_idx = _get_triu_indices(lmax)
+    return columns[l_idx - m_idx, m_idx]
+
+
+def getLegendre(lmax, theta):
+    """Compute fully-normalized associated Legendre functions as a 2D array [l, m]."""
+    m_idx, l_idx = _get_triu_indices(lmax)
+    values = _getLegendre_packed(lmax, theta)
+    return jnp.zeros((lmax + 1, lmax + 1), dtype=values.dtype).at[l_idx, m_idx].set(values)
 
 
 @partial(jax.jit, static_argnums=(3,))
-def _grid2healpix_alm_fast_impl_sphericart(theta, phi, img, lmax):
+def _grid2healpix_alm_fast_impl(theta, phi, img, lmax):
     dtheta = theta[1] - theta[0]
     dA_theta = jnp.sin(theta) * dtheta
     nphi = phi.shape[0]
@@ -138,59 +125,9 @@ def _grid2healpix_alm_fast_impl_sphericart(theta, phi, img, lmax):
         rimg = rimg[:, : lmax + 1]
 
     m_idx, l_idx = _get_triu_indices(lmax)
-    legendre_values = jax.vmap(lambda th: _getLegendre_packed_sphericart(lmax, th))(theta)
+    legendre_values = jax.vmap(lambda th: _getLegendre_packed(lmax, th))(theta)
     coeffs = rimg[:, m_idx] * legendre_values * dA_theta[:, None]
     return coeffs.sum(axis=0) * (2 * jnp.pi / nphi)
-
-
-@partial(jax.jit, static_argnums=(3,), backend="cpu")
-def _grid2healpix_alm_fast_impl_sphericart_cpu(theta, phi, img, lmax):
-    dtheta = theta[1] - theta[0]
-    dA_theta = jnp.sin(theta) * dtheta
-    nphi = phi.shape[0]
-
-    rimg = jnp.fft.rfft(img, axis=1)
-    if rimg.shape[1] < lmax + 1:
-        rimg = jnp.pad(rimg, ((0, 0), (0, lmax + 1 - rimg.shape[1])))
-    else:
-        rimg = rimg[:, : lmax + 1]
-
-    m_idx, l_idx = _get_triu_indices(lmax)
-    legendre_values = jax.vmap(lambda th: _getLegendre_packed_sphericart(lmax, th))(theta)
-    coeffs = rimg[:, m_idx] * legendre_values * dA_theta[:, None]
-    return coeffs.sum(axis=0) * (2 * jnp.pi / nphi)
-
-
-@partial(jax.jit, static_argnums=(3,))
-def _grid2healpix_alm_fast_impl_jax_builtin(theta, phi, img, lmax):
-    dtheta = theta[1] - theta[0]
-    dA_theta = jnp.sin(theta) * dtheta
-    nphi = phi.shape[0]
-
-    rimg = jnp.fft.rfft(img, axis=1)
-    if rimg.shape[1] < lmax + 1:
-        rimg = jnp.pad(rimg, ((0, 0), (0, lmax + 1 - rimg.shape[1])))
-    else:
-        rimg = rimg[:, : lmax + 1]
-
-    legendre_values = jax.vmap(getLegendre_jax_builtin, in_axes=(None, 0))(lmax, theta)
-    m_idx, l_idx = jnp.triu_indices(lmax + 1)
-    coeffs = rimg[:, m_idx] * legendre_values[:, l_idx, m_idx] * dA_theta[:, None]
-    return coeffs.sum(axis=0) * (2 * jnp.pi / nphi)
-
-
-if SPHERICART_MODE == "gpu":
-    getLegendre = getLegendre_sphericart
-    _getLegendre_packed = _getLegendre_packed_sphericart
-    _grid2healpix_alm_fast_impl = _grid2healpix_alm_fast_impl_sphericart
-elif SPHERICART_MODE == "cpu":
-    getLegendre = getLegendre_jax_builtin
-    _getLegendre_packed = getLegendre_jax_builtin
-    _grid2healpix_alm_fast_impl = _grid2healpix_alm_fast_impl_sphericart_cpu
-else:
-    getLegendre = getLegendre_jax_builtin
-    _getLegendre_packed = getLegendre_jax_builtin
-    _grid2healpix_alm_fast_impl = _grid2healpix_alm_fast_impl_jax_builtin
 
 
 @partial(jax.jit, static_argnums=(3,))

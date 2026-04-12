@@ -25,7 +25,6 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y curl wget gfortran build-essential pkg-config cmake libopenblas-dev libfftw3-dev
       - run: curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh
       - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - run: cp pyproject.toml.linux_no_cuda pyproject.toml
       - run: uv sync
       - run: wget "https://drive.google.com/uc?export=download&id=1PbU432IYAFSzOjWRrKMoGFR6F1M3dmaV" -O drive.tgz
       - run: tar zxvf drive.tgz
