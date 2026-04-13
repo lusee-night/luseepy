@@ -25,7 +25,7 @@ from .frequencies import canonicalize_frequencies
 @lru_cache(maxsize=None)
 def _get_triu_indices(lmax):
     m_idx, l_idx = np.triu_indices(lmax + 1)
-    return jnp.asarray(m_idx, dtype=jnp.int32), jnp.asarray(l_idx, dtype=jnp.int32)
+    return np.asarray(m_idx, dtype=np.int32), np.asarray(l_idx, dtype=np.int32)
 
 
 @lru_cache(maxsize=None)
@@ -53,12 +53,7 @@ def _recurrence_coeffs(lmax):
     denom_b = np.maximum((2 * fl - 3) * (fl - fm) * (fl + fm), 1.0)
     beta = np.sqrt(numer_b / denom_b)
 
-    return (
-        jnp.asarray(sect),
-        jnp.asarray(sub_diag),
-        jnp.asarray(alpha),
-        jnp.asarray(beta),
-    )
+    return (sect, sub_diag, alpha, beta)
 
 
 def _getLegendre_packed(lmax, theta):
@@ -70,7 +65,11 @@ def _getLegendre_packed(lmax, theta):
     """
     x = jnp.cos(jnp.asarray(theta))
     s = jnp.sin(jnp.asarray(theta))
-    sect, sub_diag, alpha, beta = _recurrence_coeffs(lmax)
+    sect_np, sub_diag_np, alpha_np, beta_np = _recurrence_coeffs(lmax)
+    sect = jnp.asarray(sect_np)
+    sub_diag = jnp.asarray(sub_diag_np)
+    alpha = jnp.asarray(alpha_np)
+    beta = jnp.asarray(beta_np)
     ms = jnp.arange(lmax + 1)
 
     # Step 1: Compute all sectoral values P_m^m via scan
