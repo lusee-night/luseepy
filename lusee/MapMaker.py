@@ -3,12 +3,17 @@ Linear map-making via conjugate gradients with autodiff adjoints.
 
 Implements the Wiener filter from Camacho et al. 2026 (arXiv:2508.16773):
 
-    s_hat = (A^H N^{-1} A + S^{-1})^{-1} A^H N^{-1} d
+    s_hat = (A^T N^{-1} A + S^{-1})^{-1} A^T N^{-1} d
 
-where A is the beam-convolution forward model (CroSimulator with Tground=0),
-and the Hermitian adjoint A^H is obtained via conj(jax.vjp).
+The sky is real, so we parameterize it with real variables
+θ = [Re(a_{lm}); Im(a_{l,m>0})].  The forward model A maps θ to
+real data through complex beam convolution, and A^T is obtained
+directly from jax.vjp (no Wirtinger conjugation needed because θ
+is real).  This eliminates the Im(a_{l,0}) null space that would
+create condition numbers of ~10^12 with a complex parameterization.
 
-See docs/wirtinger_cg.md for why the conjugation is needed.
+See docs/wirtinger_cg.md for the complex-variable case (needed if
+the CG variable itself is complex, e.g. for complex sky models).
 """
 
 import os
@@ -77,37 +82,43 @@ def build_instrument(beam_file, obs_range, freq, lmax,
     return sim, beams, obs
 
 
-def _estimate_diagonal(matvec, shape, n_probes=3, key=None):
-    """Estimate the diagonal of a linear operator via stochastic probing.
 
-    Uses Hutchinson's estimator: diag(M) ≈ mean(z * M(z)) where z is
-    a random ±1 vector.
+def _real_alm_indices(lmax):
+    """Return (m0_indices, mpos_indices) for healpy alm packing.
+
+    m0_indices: alm indices with m=0 (real-only for a real sky)
+    mpos_indices: alm indices with m>0 (complex)
     """
-    if key is None:
-        key = jax.random.PRNGKey(0)
-    diag_est = jnp.zeros(shape)
-    for i in range(n_probes):
-        z = 2.0 * jax.random.bernoulli(jax.random.fold_in(key, i), shape=shape).astype(float) - 1.0
-        Mz = matvec(z)
-        diag_est = diag_est + jnp.real(z * Mz)
-    return diag_est / n_probes
+    m0 = np.array([hp.Alm.getidx(lmax, l, 0) for l in range(lmax + 1)])
+    nalm = (lmax + 1) * (lmax + 2) // 2
+    mpos = np.array([i for i in range(nalm) if i not in m0])
+    return m0, mpos
 
 
 def solve(sim, data, sky_template, sigma,
-          signal_prior=None, precondition=True, maxiter=50, tol=1e-6):
-    """Solve the normal equations via CG.
+          signal_prior=None, lmax=None, maxiter=500, tol=1e-12,
+          precondition=True, method='cg'):
+    """Solve the normal equations in a real parameterization.
+
+    The sky is real, so a_{l,0} are real and a_{l,m>0} are complex.
+    The solver operates on a real vector θ = [Re(a_{lm}); Im(a_{l,m>0})],
+    eliminating the Im(a_{l,0}) null space that would otherwise
+    create condition numbers of ~10^12.
 
     :param sim: CroSimulator (Tground=0) from build_instrument
     :param data: Waterfall data array (ntimes, nchannels, nfreq)
     :param sky_template: HealpixSky with the correct shape/freq/frame
-        (used for pytree metadata; values are ignored)
     :param sigma: Noise standard deviation (scalar or per-sample array)
     :param signal_prior: S^{-1} array, same shape as sky_template.mapalm.
         If None, uses a small Tikhonov regularizer (1e-6).
-    :param precondition: If True, estimate diagonal preconditioner from
-        the normal operator to improve CG convergence.
-    :param maxiter: Maximum CG iterations
-    :param tol: CG convergence tolerance
+    :param lmax: Maximum multipole. If None, inferred from shape.
+    :param maxiter: Maximum CG iterations (CG method only)
+    :param tol: CG convergence tolerance (CG method only)
+    :param precondition: If True, use diagonal S preconditioner (M = C_l)
+        to improve CG convergence for ill-conditioned systems.
+    :param method: 'cg' for conjugate gradients (default), 'direct' for
+        dense Cholesky (exact but O(n_theta^3), feasible for n_theta < ~5000).
+        The paper (Camacho et al. 2026) uses direct inversion.
     :returns: Recovered sky mapalm array (same shape as sky_template.mapalm)
     """
     _, aux = sky_template.tree_flatten()
@@ -115,37 +126,200 @@ def solve(sim, data, sky_template, sigma,
     def make_sky(mapalm):
         return HealpixSky.tree_unflatten(aux, (mapalm,))
 
-    def A(mapalm):
-        return sim.simulate(sky=make_sky(mapalm)).ravel()
-
-    N_inv = 1.0 / jnp.asarray(sigma)**2
+    sigma_arr = jnp.asarray(sigma)
+    N_inv = 1.0 / sigma_arr**2
+    if N_inv.ndim > 0:
+        N_inv = N_inv.ravel()  # match data.ravel() layout
 
     if signal_prior is None:
         S_inv = 1e-6
     else:
         S_inv = jnp.asarray(signal_prior)
 
-    def cg_matvec(x):
-        """(A^H N^{-1} A + S^{-1}) x."""
-        fwd, vjp_fn = jax.vjp(A, x)
-        return jnp.conj(vjp_fn(N_inv * fwd)[0]) + S_inv * x
+    if lmax is None:
+        nalm = sky_template.mapalm.shape[-1]
+        lmax = int((-3 + np.sqrt(9 + 8 * (nalm - 1))) / 2)
 
-    # Diagonal preconditioner: M^{-1} ≈ 1 / diag(A^H N^{-1} A + S^{-1})
-    if precondition:
-        diag = _estimate_diagonal(cg_matvec, sky_template.mapalm.shape)
-        diag = jnp.maximum(jnp.abs(diag), 1e-30)  # avoid division by zero
-        precond = lambda x: x / diag
+    nfreq = sky_template.mapalm.shape[0]
+    nalm = sky_template.mapalm.shape[-1]
+    m0_idx, mpos_idx = _real_alm_indices(lmax)
+    m0_idx = jnp.asarray(m0_idx)
+    mpos_idx = jnp.asarray(mpos_idx)
+    n_m0 = len(m0_idx)
+    n_mpos = len(mpos_idx)
+    # θ has shape (nfreq, nalm + n_mpos):
+    #   θ[:, :nalm]  = Re(alm) for all (l,m)
+    #   θ[:, nalm:]  = Im(alm) for m>0 only
+    n_theta = nalm + n_mpos
+
+    # S^{-1} in real parameterization.  For an isotropic field:
+    #   E[a_{l,0}^2] = C_l           → S^{-1} = 1/C_l  for Re(a_{l,0})
+    #   E[|a_{l,m>0}|^2] = C_l       → E[Re^2] = E[Im^2] = C_l/2
+    #                                 → S^{-1} = 2/C_l  for Re and Im of m>0
+    if isinstance(S_inv, (int, float)):
+        S_inv_real = S_inv
     else:
-        precond = None
+        S_inv_re = S_inv.at[:, mpos_idx].multiply(2.0)  # 2/C_l for m>0
+        S_inv_im = 2.0 * S_inv[:, mpos_idx]
+        S_inv_real = jnp.concatenate([S_inv_re, S_inv_im], axis=-1)
 
-    zero = jnp.zeros_like(sky_template.mapalm)
+    def theta_to_alm(theta):
+        """Map real parameter vector to complex alm."""
+        re = theta[:, :nalm]
+        im_mpos = theta[:, nalm:]
+        im_full = jnp.zeros((nfreq, nalm)).at[:, mpos_idx].set(
+            im_mpos, unique_indices=True)
+        return re + 1j * im_full
+
+    def A(theta):
+        """Forward model on real parameters."""
+        alm = theta_to_alm(theta)
+        return sim.simulate(sky=make_sky(alm)).ravel()
+
+    if method == 'direct':
+        return _solve_direct(A, theta_to_alm, N_inv, S_inv_real,
+                             data, nfreq, n_theta)
+
+    def cg_matvec(theta):
+        """(A^T A / σ² + S^{-1}) θ  — real symmetric operator."""
+        fwd, vjp_fn = jax.vjp(A, theta)
+        return vjp_fn(N_inv * fwd)[0] + S_inv_real * theta
+
+    # Diagonal preconditioner M = diag(C_l) in the real parameterization.
+    # S^{-1} spans ~5 orders of magnitude (low l to high l), so this
+    # dramatically improves conditioning.  Without it, CG can appear to
+    # converge (small residual) while the solution is still far from the
+    # true optimum — producing spurious negative holes.
+    if precondition and not isinstance(S_inv_real, (int, float)):
+        precond_diag = 1.0 / jnp.maximum(S_inv_real, 1e-30)
+        precond_fn = lambda x: x * precond_diag
+    else:
+        precond_fn = None
+
+    zero = jnp.zeros((nfreq, n_theta))
     _, vjp_rhs = jax.vjp(A, zero)
-    rhs = jnp.conj(vjp_rhs(N_inv * data.ravel())[0])
+    rhs = vjp_rhs(N_inv * data.ravel())[0]
 
-    sky_hat, info = jax.scipy.sparse.linalg.cg(
-        cg_matvec, rhs, x0=zero, M=precond, maxiter=maxiter, tol=tol,
+    theta_hat, info = jax.scipy.sparse.linalg.cg(
+        cg_matvec, rhs, x0=zero, M=precond_fn,
+        maxiter=maxiter, tol=tol,
     )
-    return sky_hat
+    return theta_to_alm(theta_hat)
+
+
+def _solve_direct(A, theta_to_alm, N_inv, S_inv_real, data, nfreq, n_theta):
+    """Exact solve via Jacobian + Cholesky (same as Camacho et al. 2026).
+
+    Builds the Jacobian column-by-column using the linearity of A,
+    forms the normal matrix H = J^T N^{-1} J + S^{-1}, and solves
+    via Cholesky decomposition.  All computation stays on GPU to
+    avoid per-column sync overhead.
+
+    Cost: O(n_theta) forward evaluations + O(n_theta^3) Cholesky.
+    Feasible for n_theta < ~5000 (lmax < ~50 single-frequency).
+    """
+    ndata = int(np.prod(data.shape))
+    zero = jnp.zeros((nfreq, n_theta))
+
+    # JIT-compile A so the Python overhead (loops in CroSimulator, sky
+    # construction) is paid once at trace time.  Subsequent calls dispatch
+    # a single compiled XLA kernel.
+    A_jit = jax.jit(A)
+    _ = A_jit(zero)  # trace + compile (slow)
+
+    # Build Jacobian column-by-column on GPU: J[:,i] = A(e_i) since A is linear.
+    # Everything stays GPU-resident — no per-column GPU→CPU sync.
+    cols = []
+    for i in range(n_theta):
+        e_i = zero.at[0, i].set(1.0)
+        cols.append(A_jit(e_i))
+    J = jnp.stack(cols, axis=-1)  # (ndata, n_theta)
+
+    # Normal equations on GPU: H θ = J^T N^{-1} d
+    d_flat = jnp.asarray(data).ravel()
+    if isinstance(N_inv, (int, float)):
+        JtNJ = N_inv * (J.T @ J)
+        rhs = N_inv * (J.T @ d_flat)
+    else:
+        N_inv_j = jnp.asarray(N_inv).ravel()
+        JtNJ = (J.T * N_inv_j) @ J
+        rhs = (J.T * N_inv_j) @ d_flat
+
+    if isinstance(S_inv_real, (int, float)):
+        H = JtNJ + S_inv_real * jnp.eye(n_theta)
+    else:
+        H = JtNJ + jnp.diag(jnp.asarray(S_inv_real).ravel())
+
+    # Cholesky solve on GPU
+    L = jnp.linalg.cholesky(H)
+    theta_flat = jax.scipy.linalg.cho_solve((L, True), rhs)
+    theta_hat = theta_flat.reshape(nfreq, n_theta)
+
+    return theta_to_alm(theta_hat)
+
+
+def compute_radiometric_noise(data, combinations=DEFAULT_COMBINATIONS,
+                              delta_f_hz=1e6, delta_t_sec=7200.0):
+    """Compute per-sample radiometric noise σ from the data.
+
+    Implements the radiometer equation (Camacho et al. 2026, Eq. 9):
+
+        σ²_ij = (T_ii T_jj + |V_ij|²) / (2 Δf Δt)
+
+    For auto-correlations (real): σ² = T_ii² / (Δf Δt).
+    For each Re/Im component of a cross-correlation:
+        σ² = (T_ii T_jj + |V_ij|²) / (4 Δf Δt).
+
+    The data itself is used to estimate the system temperatures T_ii(t).
+    This is a good approximation when SNR >> 1 (always true for
+    total-power radiometry at LuSEE frequencies).
+
+    :param data: Waterfall array (ntimes, nchannels, nfreq).
+        Channel order follows CroSimulator convention: auto-correlations
+        contribute 1 channel, cross-correlations contribute 2 (Re, Im).
+    :param combinations: List of (i, j) beam-pair tuples matching the
+        order used to build the simulator.
+    :param delta_f_hz: Effective channel bandwidth in Hz (default 1 MHz).
+    :param delta_t_sec: Integration time per sample in seconds (default 7200).
+    :returns: σ array with same shape as data.
+    """
+    data_np = np.asarray(data)
+    ntimes, nchannels, nfreq = data_np.shape
+    sigma = np.zeros_like(data_np, dtype=np.float64)
+
+    # First pass: record which channel holds each auto-correlation
+    auto_ch = {}
+    ch = 0
+    for i, j in combinations:
+        if i == j:
+            auto_ch[i] = ch
+            ch += 1
+        else:
+            ch += 2
+
+    # Second pass: compute noise per channel
+    ch = 0
+    for i, j in combinations:
+        if i == j:
+            # Auto-correlation: σ² = T_ii² / (Δf Δt)
+            T_ii = np.abs(data_np[:, ch, :])
+            sigma[:, ch, :] = T_ii / np.sqrt(delta_f_hz * delta_t_sec)
+            ch += 1
+        else:
+            # Cross-correlation: each Re/Im component has
+            # σ² = (T_ii T_jj + |V_ij|²) / (4 Δf Δt)
+            T_ii = np.abs(data_np[:, auto_ch[i], :])
+            T_jj = np.abs(data_np[:, auto_ch[j], :])
+            V_re = data_np[:, ch, :]
+            V_im = data_np[:, ch + 1, :]
+            V_sq = V_re**2 + V_im**2
+            var = (T_ii * T_jj + V_sq) / (4.0 * delta_f_hz * delta_t_sec)
+            sig = np.sqrt(np.maximum(var, 1e-30))
+            sigma[:, ch, :] = sig
+            sigma[:, ch + 1, :] = sig
+            ch += 2
+
+    return jnp.asarray(sigma)
 
 
 def compute_cl_prior(sky_model, lmax):
