@@ -13,7 +13,7 @@ is real).  This eliminates the Im(a_{l,0}) null space that would
 create condition numbers of ~10^12 with a complex parameterization.
 
 See docs/wirtinger_cg.md for the complex-variable case (needed if
-the CG variable itself is complex, e.g. for complex sky models).
+the CG variable itself is complex, e.g. for complex beam unknowns).
 """
 
 import os
