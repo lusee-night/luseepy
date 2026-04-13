@@ -35,6 +35,7 @@ sim, beams, obs = lusee.mapmaker.build_instrument(
     obs_range=OBS_RANGE,
     freq=FREQ,
     lmax=LMAX,
+    dt_sec=7200.0,  # paper: Δt = 7200 s (2-hour integration)
 )
 
 # ── 2. Load sky and simulate data ───────────────────────────────────
@@ -52,10 +53,16 @@ t0 = time.time()
 data_clean = sim.simulate(sky=sky)
 print(f"Simulated in {time.time() - t0:.1f}s, data shape = {data_clean.shape}")
 
-sigma = 1.0
+# Radiometric noise: σ²_ij(t) = (T_ii T_jj + |V_ij|²) / (2 Δf Δt)
+# Paper uses Δf = 1 MHz, Δt = 7200 s (2-hour integration)
+sigma = lusee.mapmaker.compute_radiometric_noise(
+    data_clean, delta_f_hz=1e6, delta_t_sec=7200.0,
+)
 noise = sigma * jax.random.normal(jax.random.PRNGKey(42), data_clean.shape)
 data = data_clean + noise
-print(f"Noise sigma = {sigma} K, SNR ~ {float(jnp.std(data_clean)) / sigma:.0f}")
+sigma_med = float(jnp.median(sigma))
+print(f"Radiometric noise: median σ = {sigma_med:.3f} K, "
+      f"SNR ~ {float(jnp.std(data_clean)) / sigma_med:.0f}")
 
 # ── 3. Solve ─────────────────────────────────────────────────────────
 
@@ -64,7 +71,7 @@ S_inv = lusee.mapmaker.compute_cl_prior(sky, LMAX)
 t0 = time.time()
 sky_hat = lusee.mapmaker.solve(
     sim, data, sky, sigma,
-    signal_prior=S_inv, maxiter=50, tol=1e-8,
+    signal_prior=S_inv, maxiter=500,
 )
 print(f"Solved in {time.time() - t0:.1f}s")
 

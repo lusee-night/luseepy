@@ -94,6 +94,17 @@ Per-timestep rotation of galactic sky alms into the observer frame using healpy 
 **`lusee.CroSimulator`** (`lusee/CroSimulator.py`)
 Alternative engine using the `croissant` library and JAX. Works in MEPA (Moon-centred Ephemeris Pole Axis) with `rot_alm_z` phase rotations rather than per-time full sky rotation. Optional install: `pip install ".[croissant]"`. `CroSimulator` is `None` if croissant is not installed.
 
+### Map-Making (`lusee/MapMaker.py`)
+
+Wiener filter sky reconstruction via CG with autodiff adjoints (Camacho et al. 2026). Key functions:
+
+- `build_instrument(beam_file, obs_range, freq, lmax)` — set up CroSimulator with rotated/tapered beams and Tground=0
+- `solve(sim, data, sky_template, sigma, signal_prior, method='cg')` — Wiener filter solve in a real parameterization θ = [Re(alm); Im(alm, m>0)]. Supports `method='cg'` (default, with diagonal C_l preconditioner) and `method='direct'` (dense Cholesky, same as the paper). The sky is real but beams are complex; JAX traces through the complex beam math and returns real gradients. No Wirtinger conjugation needed (θ is real).
+- `compute_cl_prior(sky_model, lmax)` — S^{-1} = 1/C_l from a sky model
+- `compute_radiometric_noise(data, combinations, delta_f_hz, delta_t_sec)` — per-sample σ from the radiometer equation (Eq. 9 of the paper): σ²_ij = (T_ii T_jj + |V_ij|²)/(2ΔfΔt)
+
+See `docs/wirtinger_cg.md` for the math (real vs complex parameterization, null-space analysis).
+
 ### Output: `lusee.Data` (`lusee/Data.py`)
 
 Reads simulator FITS output. Extends `Observation`. Indexed as `D[:, '01I', :]` (time slice, combination label, freq slice).
