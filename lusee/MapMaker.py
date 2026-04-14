@@ -371,6 +371,14 @@ def solve_svd_multifreq(sim, data, sky_template, sigma, freq_templates,
     span(freq_templates) ⊗ alm_space, dramatically reducing the number
     of unknowns when nfreq >> K.
 
+    For the LuSEE 5-50 MHz foreground, benchmarks (see notebooks/
+    mapmaker_svd_multifreq_demo.ipynb) found K=4 ULSA-SVD templates to
+    be the practical sweet spot: K=2 collapses, K=3 is the first usable
+    setting, K=4 adds +0.05 in mean rho(1..20) and a large +0.13 gain
+    at high-ell vs K=3, and K=5/6 plateau. The high-ell (ell 16..32)
+    advantage over independent per-band Wiener solves is +0.04 to +0.15
+    in rho at every frequency, at ~1/10th the wallclock cost.
+
     :param freq_templates: (nfreq, K) array of frequency mode amplitudes.
     :param signal_prior: S^{-1} of shape (K, nalm) -- prior on beta_k.
         If None, uses 1e-6 Tikhonov.
