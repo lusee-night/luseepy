@@ -177,8 +177,13 @@ def solve(sim, data, sky_template, sigma,
         return sim.simulate(sky=make_sky(alm)).ravel()
 
     if method == 'direct':
-        return _solve_direct(A, theta_to_alm, N_inv, S_inv_real,
-                             data, nfreq, n_theta)
+        if nfreq != 1:
+            raise NotImplementedError(
+                "method='direct' currently only supports single-frequency solves "
+                "(see _solve_direct_singlefreq). Use method='cg' for nfreq > 1."
+            )
+        return _solve_direct_singlefreq(A, theta_to_alm, N_inv, S_inv_real,
+                                        data, nfreq, n_theta)
 
     def cg_matvec(theta):
         """(A^T A / σ² + S^{-1}) θ  — real symmetric operator."""
@@ -207,8 +212,12 @@ def solve(sim, data, sky_template, sigma,
     return theta_to_alm(theta_hat)
 
 
-def _solve_direct(A, theta_to_alm, N_inv, S_inv_real, data, nfreq, n_theta):
+def _solve_direct_singlefreq(A, theta_to_alm, N_inv, S_inv_real, data, nfreq, n_theta):
     """Exact solve via Jacobian + Cholesky (same as Camacho et al. 2026).
+
+    Single-frequency only: the Jacobian loop below probes unit vectors at
+    ``zero.at[0, i].set(1.0)``, so only the nfreq=0 slice of theta is varied.
+    Multi-frequency would need ``nfreq * n_theta`` columns.
 
     Builds the Jacobian column-by-column using the linearity of A,
     forms the normal matrix H = J^T N^{-1} J + S^{-1}, and solves
