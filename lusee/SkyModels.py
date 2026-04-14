@@ -81,7 +81,8 @@ class ConstSky:
         :rtype: list
         """
         ndx = jnp.atleast_1d(jnp.asarray(ndx))
-        return jnp.full(ndx.shape, self._T) if type(self._T)==float else self._T[ndx]
+        T = jnp.asarray(self._T)
+        return jnp.full(ndx.shape, T) if T.ndim == 0 else T[ndx]
     
 
     def get_alm(self, ndx, freq=None):
@@ -93,8 +94,8 @@ class ConstSky:
         :param freq: Frequency list. Not currently implemented.
         :type freq: list
 
-        :returns: A_lm array
-        :rtype: array
+        :returns: a_lm array of shape ``(len(ndx), nalm)``
+        :rtype: jnp.ndarray
         """
         return self.mapalm[None,:]*self.T(ndx)[:,None]
 
@@ -175,6 +176,14 @@ class GalCenter (ConstSky):
 class HealpixSky:
     """
     Class that contains a sky as a healpix map. Alm representation is precomputed.
+
+    .. note::
+       ``mapalm`` is the canonical source of truth for this class (luseepy is
+       a harmonic shop). ``maps`` is kept for convenience after ``__init__``
+       but is NOT preserved across JAX pytree operations (``tree_flatten`` /
+       ``tree_unflatten`` only round-trips ``mapalm``), so ``maps`` may be
+       absent on instances reconstructed by JAX transforms.
+
     :param Nside: Size of Healpix map to create
     :type Nside: int
     :param lmax: Maximum l value for maps
@@ -229,8 +238,8 @@ class HealpixSky:
         :param freq: List of frequencies at which to make sky maps.
         :type freq: list
 
-        :returns: A_lm array
-        :rtype: array
+        :returns: a_lm array of shape ``(len(ndx), nalm)``
+        :rtype: jnp.ndarray
         """
         ndx = jnp.atleast_1d(jnp.asarray(ndx))
         return self.mapalm[ndx]
@@ -395,7 +404,8 @@ class HarmonicPointSourceSky:
 
         :param ndx: Frequency index or list of indices.
         :param freq: Frequency array (checked against self.freq if provided).
-        :returns: List of healpy-format alm arrays.
+        :returns: a_lm array of shape ``(len(ndx), nalm)``
+        :rtype: jnp.ndarray
         """
         ndx = jnp.atleast_1d(jnp.asarray(ndx))
         return self._alm[None,:]*self._T[ndx][:,None]
