@@ -95,6 +95,72 @@ def _real_alm_indices(lmax):
     return m0, mpos
 
 
+def build_operators(sim, data, sky_template, sigma, signal_prior=None, lmax=None):
+    """Build the forward model and normal-equation pieces in the real parameterization.
+
+    Returns a dict with keys: A, theta_to_alm, N_inv, S_inv_real, rhs, zero,
+    n_theta, nfreq, nalm, m0_idx, mpos_idx, lmax. Shared by solve() and
+    gradient-based samplers.
+    """
+    _, aux = sky_template.tree_flatten()
+
+    def make_sky(mapalm):
+        return HealpixSky.tree_unflatten(aux, (mapalm,))
+
+    sigma_arr = jnp.asarray(sigma)
+    N_inv = 1.0 / sigma_arr**2
+    if N_inv.ndim > 0:
+        N_inv = N_inv.ravel()
+
+    if signal_prior is None:
+        S_inv = 1e-6
+    else:
+        S_inv = jnp.asarray(signal_prior)
+
+    if lmax is None:
+        nalm = sky_template.mapalm.shape[-1]
+        lmax = int((-3 + np.sqrt(9 + 8 * (nalm - 1))) / 2)
+
+    nfreq = sky_template.mapalm.shape[0]
+    nalm = sky_template.mapalm.shape[-1]
+    m0_idx, mpos_idx = _real_alm_indices(lmax)
+    m0_idx = jnp.asarray(m0_idx)
+    mpos_idx = jnp.asarray(mpos_idx)
+    n_m0 = len(m0_idx)
+    n_mpos = len(mpos_idx)
+    n_theta = nalm + n_mpos
+
+    if isinstance(S_inv, (int, float)):
+        S_inv_real = S_inv
+    else:
+        S_inv_re = S_inv.at[:, mpos_idx].multiply(2.0)
+        S_inv_im = 2.0 * S_inv[:, mpos_idx]
+        S_inv_real = jnp.concatenate([S_inv_re, S_inv_im], axis=-1)
+
+    def theta_to_alm(theta):
+        re = theta[:, :nalm]
+        im_mpos = theta[:, nalm:]
+        im_full = jnp.zeros((nfreq, nalm)).at[:, mpos_idx].set(
+            im_mpos, unique_indices=True)
+        return re + 1j * im_full
+
+    def A(theta):
+        alm = theta_to_alm(theta)
+        return sim.simulate(sky=make_sky(alm)).ravel()
+
+    zero = jnp.zeros((nfreq, n_theta))
+    _, vjp_rhs = jax.vjp(A, zero)
+    rhs = vjp_rhs(N_inv * jnp.asarray(data).ravel())[0]
+
+    return dict(
+        A=A, theta_to_alm=theta_to_alm, make_sky=make_sky,
+        N_inv=N_inv, S_inv_real=S_inv_real, rhs=rhs, zero=zero,
+        n_theta=n_theta, nfreq=nfreq, nalm=nalm,
+        m0_idx=m0_idx, mpos_idx=mpos_idx, lmax=lmax,
+        data_flat=jnp.asarray(data).ravel(),
+    )
+
+
 def solve(sim, data, sky_template, sigma,
           signal_prior=None, lmax=None, maxiter=500, tol=1e-12,
           precondition=True, method='cg'):
@@ -265,6 +331,119 @@ def _solve_direct_singlefreq(A, theta_to_alm, N_inv, S_inv_real, data, nfreq, n_
     theta_hat = theta_flat.reshape(nfreq, n_theta)
 
     return theta_to_alm(theta_hat)
+
+
+def compute_ulsa_svd(ulsa_path, freq, K=3, lmax=None):
+    """Compute the first K SVD frequency templates of a ULSA cube.
+
+    Loads the ULSA FitsSky at the requested lmax, stacks maps into an
+    (nfreq, npix) matrix, and takes the leading K left-singular vectors
+    as frequency templates f_k(nu).
+
+    :returns: (freq_templates (nfreq, K), spatial_maps (K, npix),
+               singular_values (K,))
+    """
+    from .SkyModels import FitsSky
+    sky = FitsSky(ulsa_path, lmax=lmax if lmax is not None else 64)
+    # Select the frequencies we want
+    freq = np.asarray(freq, dtype=float)
+    sky_freq = np.asarray(sky.freq, dtype=float)
+    idx = np.array([int(np.argmin(np.abs(sky_freq - f))) for f in freq])
+    maps = np.asarray(sky.maps)[idx]  # (nfreq, npix)
+    U, S, Vt = np.linalg.svd(maps, full_matrices=False)
+    freq_templates = U[:, :K] * S[:K]  # absorb scale into templates
+    spatial_maps = Vt[:K]              # unit-norm spatial modes
+    return freq_templates, spatial_maps, S[:K]
+
+
+def solve_svd_multifreq(sim, data, sky_template, sigma, freq_templates,
+                        signal_prior=None, lmax=None,
+                        maxiter=500, tol=1e-12, precondition=True):
+    """Multi-frequency Wiener solve restricted to a frequency subspace.
+
+    The sky is parameterized as
+
+        a_{lm}(nu) = sum_{k=0}^{K-1} f_k(nu) * beta_k(l, m)
+
+    where f_k(nu) are the K ``freq_templates`` (e.g. from ULSA SVD) and
+    beta_k(l,m) are K single-frequency alm maps solved for jointly.
+    This enforces that the sky lives in the outer product
+    span(freq_templates) ⊗ alm_space, dramatically reducing the number
+    of unknowns when nfreq >> K.
+
+    :param freq_templates: (nfreq, K) array of frequency mode amplitudes.
+    :param signal_prior: S^{-1} of shape (K, nalm) -- prior on beta_k.
+        If None, uses 1e-6 Tikhonov.
+    :returns: beta_alm of shape (K, nalm) complex.
+    """
+    _, aux = sky_template.tree_flatten()
+
+    def make_sky(mapalm):
+        return HealpixSky.tree_unflatten(aux, (mapalm,))
+
+    sigma_arr = jnp.asarray(sigma)
+    N_inv = 1.0 / sigma_arr**2
+    if N_inv.ndim > 0:
+        N_inv = N_inv.ravel()
+
+    F = jnp.asarray(freq_templates)              # (nfreq, K)
+    nfreq_f, K = F.shape
+    nfreq = sky_template.mapalm.shape[0]
+    nalm = sky_template.mapalm.shape[-1]
+    assert nfreq_f == nfreq, "freq_templates nfreq must match sky_template"
+
+    if lmax is None:
+        lmax = int((-3 + np.sqrt(9 + 8 * (nalm - 1))) / 2)
+    m0_idx, mpos_idx = _real_alm_indices(lmax)
+    m0_idx = jnp.asarray(m0_idx)
+    mpos_idx = jnp.asarray(mpos_idx)
+    n_mpos = len(mpos_idx)
+    n_theta = nalm + n_mpos  # per SVD component
+
+    if signal_prior is None:
+        S_inv_real = 1e-6
+    else:
+        S_inv = jnp.asarray(signal_prior)        # (K, nalm)
+        S_inv_re = S_inv.at[:, mpos_idx].multiply(2.0)
+        S_inv_im = 2.0 * S_inv[:, mpos_idx]
+        S_inv_real = jnp.concatenate([S_inv_re, S_inv_im], axis=-1)  # (K, n_theta)
+
+    def theta_to_beta(theta):
+        """theta: (K, n_theta) -> beta_alm: (K, nalm) complex."""
+        re = theta[:, :nalm]
+        im_mpos = theta[:, nalm:]
+        im_full = jnp.zeros((K, nalm)).at[:, mpos_idx].set(
+            im_mpos, unique_indices=True)
+        return re + 1j * im_full
+
+    def A(theta):
+        beta_alm = theta_to_beta(theta)           # (K, nalm)
+        # broadcast: alm[f, :] = sum_k F[f,k] * beta[k, :]
+        alm = F @ beta_alm                        # (nfreq, nalm)
+        return sim.simulate(sky=make_sky(alm)).ravel()
+
+    def cg_matvec(theta):
+        fwd, vjp_fn = jax.vjp(A, theta)
+        out = vjp_fn(N_inv * fwd)[0]
+        if isinstance(S_inv_real, (int, float)):
+            return out + S_inv_real * theta
+        return out + S_inv_real * theta
+
+    if precondition and not isinstance(S_inv_real, (int, float)):
+        precond_diag = 1.0 / jnp.maximum(S_inv_real, 1e-30)
+        precond_fn = lambda x: x * precond_diag
+    else:
+        precond_fn = None
+
+    zero = jnp.zeros((K, n_theta))
+    _, vjp_rhs = jax.vjp(A, zero)
+    rhs = vjp_rhs(N_inv * jnp.asarray(data).ravel())[0]
+
+    theta_hat, info = jax.scipy.sparse.linalg.cg(
+        cg_matvec, rhs, x0=zero, M=precond_fn,
+        maxiter=maxiter, tol=tol,
+    )
+    return theta_to_beta(theta_hat)
 
 
 def compute_radiometric_noise(data, combinations=DEFAULT_COMBINATIONS,

@@ -28,6 +28,7 @@ from .SkyModels     import HarmonicPointSourceSky
 
 from . import SkyModels     as sky
 from . import MapMaker      as mapmaker
+from . import Sampler       as sampler
 
 
 from . import MonoSkyModels as monosky 
