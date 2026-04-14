@@ -121,6 +121,73 @@ def sample_posterior(sim, data, sky_template, sigma,
     return samples_alm
 
 
+def sample_constrained_realization(sim, data, sky_template, sigma,
+                                   signal_prior=None, lmax=None,
+                                   num_samples=10, seed=0,
+                                   maxiter=500, tol=1e-10,
+                                   precondition=True):
+    """Gaussian-exact posterior draws via constrained realizations.
+
+    For the Gaussian posterior p(theta | d) = N(mu, H^{-1}) with
+    H = A^T N^{-1} A + S^{-1}, each draw is obtained by solving
+
+        H theta = A^T N^{-1} (d + eta) + xi
+
+    where eta ~ N(0, N) and xi ~ N(0, S^{-1}). This is the Wandelt / Eriksen
+    "messenger-field-free" CR trick: one CG solve per sample, each
+    sample is independent and exact (up to CG tolerance). No burn-in,
+    no autocorrelation.
+
+    For a purely Gaussian target this strictly dominates NUTS.
+
+    :param num_samples: Number of independent draws.
+    :returns: samples_alm of shape (num_samples, nfreq, nalm) complex.
+    """
+    ops = build_operators(sim, data, sky_template, sigma,
+                          signal_prior=signal_prior, lmax=lmax)
+    A = ops["A"]; N_inv = ops["N_inv"]; S_inv_real = ops["S_inv_real"]
+    zero = ops["zero"]; n_theta = ops["n_theta"]; nfreq = ops["nfreq"]
+    theta_to_alm = ops["theta_to_alm"]
+    d = ops["data_flat"]
+
+    sigma_flat = 1.0 / jnp.sqrt(jnp.asarray(N_inv) + 1e-60)  # sqrt(N)
+    if isinstance(S_inv_real, (int, float)):
+        prior_sqrt = jnp.sqrt(S_inv_real) * jnp.ones_like(zero)
+    else:
+        prior_sqrt = jnp.sqrt(S_inv_real)
+
+    def cg_matvec(theta):
+        fwd, vjp_fn = jax.vjp(A, theta)
+        out = vjp_fn(N_inv * fwd)[0]
+        if isinstance(S_inv_real, (int, float)):
+            return out + S_inv_real * theta
+        return out + S_inv_real * theta
+
+    if precondition and not isinstance(S_inv_real, (int, float)):
+        precond_diag = 1.0 / jnp.maximum(S_inv_real, 1e-30)
+        M = lambda x: x * precond_diag
+    else:
+        M = None
+
+    key = jax.random.PRNGKey(seed)
+    samples = []
+    for _ in range(num_samples):
+        key, k1, k2 = jax.random.split(key, 3)
+        # eta ~ N(0, N): scaled by sigma per-sample
+        eta = sigma_flat * jax.random.normal(k1, d.shape)
+        # xi ~ N(0, S^{-1}): in our theta layout, std = sqrt(S^{-1}) component-wise
+        xi = prior_sqrt * jax.random.normal(k2, zero.shape)
+        # RHS = A^T N^{-1} (d + eta) + xi
+        _, vjp_rhs = jax.vjp(A, zero)
+        rhs = vjp_rhs(N_inv * (d + eta))[0] + xi
+        theta_s, _ = jax.scipy.sparse.linalg.cg(
+            cg_matvec, rhs, x0=zero, M=M, maxiter=maxiter, tol=tol)
+        samples.append(theta_s)
+
+    samples_theta = jnp.stack(samples, axis=0)
+    return jax.vmap(theta_to_alm)(samples_theta)
+
+
 def langevin_sample(sim, data, sky_template, sigma,
                     signal_prior=None, lmax=None,
                     num_samples=500, step_size=None,

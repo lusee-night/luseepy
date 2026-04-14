@@ -15,7 +15,7 @@ import healpy as hp
 
 import lusee
 from lusee import mapmaker as mm
-from lusee.Sampler import sample_posterior
+from lusee.Sampler import sample_posterior, sample_constrained_realization
 
 DRIVE = os.environ.get("LUSEE_DRIVE_DIR", "/fs/zack/LuSEE-Night/")
 BEAM_FILE = DRIVE + "Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
@@ -97,8 +97,21 @@ def bench_sampler(lmax=4):
     print(f"  <sample> - MAP relerr = {err:.3e}")
     rho_pmean = rho_metrics(sky.mapalm[0], post_mean, lmax)
     print(f"  posterior-mean rho(1..{lmax}) = {np.nanmean(rho_pmean[1:lmax+1]):.4f}")
-    return dict(t_map=t_map, t_nuts=t_nuts, accept=accept,
-                mean_vs_map=err, rho_map=rho_map, rho_pmean=rho_pmean)
+    # Constrained realization: Gaussian-exact
+    t0 = time.time()
+    cr_alm = sample_constrained_realization(
+        sim, data, sky, sigma, signal_prior=S_inv, lmax=lmax,
+        num_samples=20, seed=11, maxiter=1000, tol=1e-10,
+    )
+    t_cr = time.time() - t0
+    cr_np = np.asarray(cr_alm)[:, 0, :]
+    cr_mean = cr_np.mean(axis=0)
+    err_cr = np.linalg.norm(cr_mean - alm_map_np) / np.linalg.norm(alm_map_np)
+    print(f"  CR: {t_cr:.1f}s for 20 indep samples, <CR>-MAP relerr={err_cr:.2e}")
+
+    return dict(t_map=t_map, t_nuts=t_nuts, accept=accept, t_cr=t_cr,
+                mean_vs_map=err, mean_vs_map_cr=err_cr,
+                rho_map=rho_map, rho_pmean=rho_pmean)
 
 
 def bench_svd(lmax=6, K=3, freqs_mhz=(15.0, 20.0, 25.0, 30.0, 35.0, 40.0)):

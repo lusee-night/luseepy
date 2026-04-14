@@ -65,6 +65,48 @@ def test_nuts_matches_analytic_gaussian():
     assert rel_err.max() < 0.35, f"std relerr {rel_err.max():.2f}"
 
 
+def test_constrained_realization_matches_analytic_gaussian():
+    """CR sampler: each draw is independent + exact, so convergence is O(1/sqrt(N))."""
+    import jax.scipy.sparse.linalg as jsl
+
+    ops, true_mean, true_cov = _build_toy_ops(ndata=80, n_theta=12, seed=2)
+    # Hand-wired CR loop so we don't depend on a CroSimulator object
+    A = ops["A"]; N_inv = ops["N_inv"]; S_inv = ops["S_inv_real"]
+    zero = ops["zero"]; d = ops["data_flat"]
+    sigma_flat = 1.0 / jnp.sqrt(N_inv) * jnp.ones_like(d)
+    prior_sqrt = jnp.sqrt(S_inv)
+
+    def matvec(x):
+        fwd, vjp = jax.vjp(A, x)
+        return vjp(N_inv * fwd)[0] + S_inv * x
+
+    key = jax.random.PRNGKey(9)
+    N = 400
+    samples = []
+    for _ in range(N):
+        key, k1, k2 = jax.random.split(key, 3)
+        eta = sigma_flat * jax.random.normal(k1, d.shape)
+        xi = prior_sqrt * jax.random.normal(k2, zero.shape)
+        _, vjp = jax.vjp(A, zero)
+        rhs = vjp(N_inv * (d + eta))[0] + xi
+        x, _ = jsl.cg(matvec, rhs, x0=zero, maxiter=1000, tol=1e-12)
+        samples.append(x)
+    samp = np.asarray(jnp.stack(samples)).reshape(N, -1)
+
+    est_mean = samp.mean(axis=0)
+    est_std = samp.std(axis=0)
+    true_std = np.sqrt(np.diag(true_cov))
+
+    # CR draws are independent -> MC error = sigma/sqrt(N)
+    z_mean = np.abs(est_mean - true_mean) / (true_std / np.sqrt(N))
+    assert z_mean.max() < 4.0, f"CR mean off by {z_mean.max():.2f} sigma"
+
+    # Std: chi2 sampling -> relative error ~ sqrt(2/N)
+    rel_err = np.abs(est_std - true_std) / true_std
+    assert rel_err.max() < 0.15, f"CR std relerr {rel_err.max():.2f}"
+
+
 if __name__ == "__main__":
     test_nuts_matches_analytic_gaussian()
+    test_constrained_realization_matches_analytic_gaussian()
     print("OK")
