@@ -333,29 +333,6 @@ def _solve_direct_singlefreq(A, theta_to_alm, N_inv, S_inv_real, data, nfreq, n_
     return theta_to_alm(theta_hat)
 
 
-def compute_ulsa_svd(ulsa_path, freq, K=3, lmax=None):
-    """Compute the first K SVD frequency templates of a ULSA cube.
-
-    Loads the ULSA FitsSky at the requested lmax, stacks maps into an
-    (nfreq, npix) matrix, and takes the leading K left-singular vectors
-    as frequency templates f_k(nu).
-
-    :returns: (freq_templates (nfreq, K), spatial_maps (K, npix),
-               singular_values (K,))
-    """
-    from .SkyModels import FitsSky
-    sky = FitsSky(ulsa_path, lmax=lmax if lmax is not None else 64)
-    # Select the frequencies we want
-    freq = np.asarray(freq, dtype=float)
-    sky_freq = np.asarray(sky.freq, dtype=float)
-    idx = np.array([int(np.argmin(np.abs(sky_freq - f))) for f in freq])
-    maps = np.asarray(sky.maps)[idx]  # (nfreq, npix)
-    U, S, Vt = np.linalg.svd(maps, full_matrices=False)
-    freq_templates = U[:, :K] * S[:K]  # absorb scale into templates
-    spatial_maps = Vt[:K]              # unit-norm spatial modes
-    return freq_templates, spatial_maps, S[:K]
-
-
 def solve_svd_multifreq(sim, data, sky_template, sigma, freq_templates,
                         signal_prior=None, lmax=None,
                         maxiter=500, tol=1e-12, precondition=True):
