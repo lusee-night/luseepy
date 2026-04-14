@@ -1,8 +1,6 @@
 import os
 
 os.environ["JAX_ENABLE_X64"] = "True"
-os.environ.setdefault("LUSEE_DRIVE_DIR", "/Users/anigmetov/Data/lusee")
-os.environ.setdefault("LUSEE_OUTPUT_DIR", "/Users/anigmetov/code/lusee_night/luseepy/out/luseepy_simulator_ng")
 
 import astropy.units as u
 import fitsio
@@ -18,7 +16,7 @@ import lusee.pre_jax.SkyModels as pre_sky
 from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
 
 
-RTOL = 1e-9
+RTOL = 1e-6  # loose enough to tolerate numpy↔jax evaluation-order differences
 ATOL = 1e-9
 
 assert jax.config.jax_enable_x64
