@@ -28,7 +28,7 @@ for ofs, c in enumerate(["N", "E", "S", "W"]):
 lmax = 64
 freq = canonical_frequencies(frequency_indices_from_values([10.0, 12.0, 30.0]))
 sky = lusee.sky.ConstSky(Nside=32, lmax=lmax, freq=freq, T=200)
-S = lusee.DefaultSimulator(
+S = lusee.TopoNumpySimulator(
     O,
     beams,
     sky,
@@ -59,7 +59,7 @@ beams = [BG]
 lmax = 64
 freq = canonical_frequencies(frequency_indices_from_values([1.0, 5.0, 10.0]))
 sky = lusee.sky.ConstSky(Nside=32, lmax=lmax, freq=freq, T=200)
-S = lusee.DefaultSimulator(
+S = lusee.TopoNumpySimulator(
     O,
     beams,
     sky,

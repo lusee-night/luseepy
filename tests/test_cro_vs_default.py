@@ -170,7 +170,7 @@ def run_comparison(config_path=None):
     Nfreq = len(freq)
 
     # Run both simulators (observer frame so they match)
-    def_sim = lusee.DefaultSimulator(
+    def_sim = lusee.TopoNumpySimulator(
         setup["obs"], setup["beams"], setup["sky"],
         Tground=setup["Tground"], combinations=setup["combinations"],
         freq=setup["freq"], lmax=setup["lmax"],

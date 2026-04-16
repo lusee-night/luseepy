@@ -29,7 +29,7 @@ def test_sim_fits_beams(observation, fits_beam):
     lmax = 64
     freq = canonical_frequencies(frequency_indices_from_values([10.0, 12.0, 30.0]))
     sky = lusee.sky.ConstSky(Nside=32, lmax=lmax, freq=freq, T=200)
-    S = lusee.DefaultSimulator(
+    S = lusee.TopoNumpySimulator(
         observation, beams, sky, freq=freq, lmax=lmax,
         combinations=[(0, 0), (1, 1), (1, 3)], Tground=200.0,
     )
@@ -44,7 +44,7 @@ def test_sim_gauss_beam(observation):
     lmax = 64
     freq = canonical_frequencies(frequency_indices_from_values([1.0, 5.0, 10.0]))
     sky = lusee.sky.ConstSky(Nside=32, lmax=lmax, freq=freq, T=200)
-    S = lusee.DefaultSimulator(
+    S = lusee.TopoNumpySimulator(
         observation, beams, sky, freq=freq, lmax=lmax,
         combinations=[(0, 0)], Tground=0.0,
     )

@@ -40,7 +40,7 @@ def test_jaxsim_grad_wrt_beam(tmp_path):
     lusee, obs, times, freq, lmax, sky, beam, cache_prefix = _small_grad_setup(tmp_path)
 
     def loss_fn(beam):
-        sim = lusee.JaxSimulator(
+        sim = lusee.TopoJaxSimulator(
             obs,
             [beam],
             sky,
@@ -67,7 +67,7 @@ def test_jaxsim_grad_wrt_sky(tmp_path):
     lusee, obs, times, freq, lmax, sky, beam, cache_prefix = _small_grad_setup(tmp_path)
 
     def loss_fn(sky):
-        sim = lusee.JaxSimulator(
+        sim = lusee.TopoJaxSimulator(
             obs,
             [beam],
             sky,

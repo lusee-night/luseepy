@@ -7,7 +7,7 @@ from pathlib import Path
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import hydra
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 from sim_driver import SimDriver
 
@@ -65,8 +65,7 @@ def _apply_legacy_config_shim(argv):
 
 @hydra.main(version_base=None, config_path=_CONFIG_PATH, config_name="realistic_example")
 def run(cfg: DictConfig):
-    resolved = OmegaConf.to_container(cfg, resolve=True)
-    S = SimDriver(resolved)
+    S = SimDriver(cfg)
     S.run()
 
 

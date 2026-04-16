@@ -42,9 +42,9 @@ observation:
     step_idx: 1
 
 simulation:
-  engine: default
+  engine: topo-numpy
   output: sim_output.fits
   cache_transform: lunar_day.pickle  
-  # JAX-only option. Ignored unless simulation.engine is jaxsim.
+  # JAX-only option. Ignored unless simulation.engine is topo.
   time_batch_size: 300
   plot_sky_and_beam: True

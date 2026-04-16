@@ -12,7 +12,7 @@ import warnings
 
 
 
-class DefaultSimulator(SimulatorBase):
+class TopoNumpySimulator(SimulatorBase):
     """
     Default Simulator in luseepy 
     
@@ -147,4 +147,4 @@ class DefaultSimulator(SimulatorBase):
         return self.result
             
 
-NumpySimulator = DefaultSimulator
+NumpySimulator = TopoNumpySimulator

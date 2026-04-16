@@ -98,7 +98,7 @@ def test_transit_cases():
         beams = [beam]
 
         # --- DefaultSimulator ---
-        def_sim = lusee.DefaultSimulator(
+        def_sim = lusee.TopoNumpySimulator(
             obs, beams, sky,
             Tground=TGROUND,
             combinations=[(0, 0)],
