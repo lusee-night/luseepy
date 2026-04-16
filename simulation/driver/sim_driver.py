@@ -4,7 +4,6 @@ import os
 import numpy as np
 import jax
 
-import lusee
 
 class SimDriver(dict):
     def __init__(self, cfg):
@@ -12,6 +11,8 @@ class SimDriver(dict):
         # from simulator_ng
         self._resolve_simulation_paths()
         # from jaxify
+        # do not remove this import to module level
+        import lusee
         self._lusee = lusee
         self._parse_base()
         self._parse_sky()
