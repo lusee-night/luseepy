@@ -1,3 +1,3 @@
-from .NumpySimulator import DefaultSimulator
+from .NumpySimulator import TopoNumpySimulator
 
-__all__ = ["DefaultSimulator"]
+__all__ = ["TopoNumpySimulator"]

@@ -51,7 +51,7 @@ simulation:
   # and uses the driver default name instead.
   output: sim_example.fits
   cache_transform: lunar_day.pickle
-  # JAX-only option. Ignored unless simulation.engine is jaxsim.
+  # JAX-only option. Ignored unless simulation.engine is topo.
   time_batch_size: 300
   plot_sky_and_beam: true
   # Must satisfy 0 <= freq_idx_plot < number of frequency bins (see observation.freq).

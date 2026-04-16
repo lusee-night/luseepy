@@ -37,7 +37,7 @@ def test_all_simulators_smoke(tmp_path):
 
     cache_prefix = str(tmp_path / "sim_smoke_cache")
 
-    default_sim = lusee.DefaultSimulator(
+    default_sim = lusee.TopoNumpySimulator(
         obs,
         [lusee.NpWrapper(beam)],
         lusee.NpWrapper(sky),
@@ -51,7 +51,7 @@ def test_all_simulators_smoke(tmp_path):
     assert default_result.shape == (3, 1, 1)
     assert np.isfinite(default_result).all()
 
-    jax_sim = lusee.JaxSimulator(
+    jax_sim = lusee.TopoJaxSimulator(
         obs,
         [beam],
         sky,

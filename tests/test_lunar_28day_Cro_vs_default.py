@@ -80,7 +80,7 @@ def test_lunar_day_28_single_source():
     np_beams = [np_beam]
 
     # Run DefaultSimulator (topo frame)
-    def_sim = lusee.DefaultSimulator(
+    def_sim = lusee.TopoNumpySimulator(
         obs, np_beams, np_sky,
         Tground=Tground,
         combinations=[(0, 0)],
@@ -93,7 +93,7 @@ def test_lunar_day_28_single_source():
     def_time = time.perf_counter() - t0
 
     # Run JaxSimulator (topo frame)
-    jax_sim = lusee.JaxSimulator(
+    jax_sim = lusee.TopoJaxSimulator(
         obs, beams, sky,
         Tground=Tground,
         combinations=[(0, 0)],

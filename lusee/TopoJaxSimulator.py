@@ -16,7 +16,7 @@ import time
 from s2fft.recursions.risbo_jax import compute_full
 
 
-class JaxSimulator(SimulatorBase):
+class TopoJaxSimulator(SimulatorBase):
     """
     JAX-backed simulator in luseepy.
 

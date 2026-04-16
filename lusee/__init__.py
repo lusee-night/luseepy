@@ -10,8 +10,8 @@ from .BeamGauss     import BeamGauss
 from .NpWrapper     import NpWrapper
 from .CachedBeam   import CachedBeam
 from .BeamCouplings import BeamCouplings
-from .DefaultSimulator import DefaultSimulator
-from .JaxSimulator import JaxSimulator
+from .DefaultSimulator import TopoNumpySimulator
+from .TopoJaxSimulator import TopoJaxSimulator
 from .CalibratorSimulator import CalibratorSimulator
 from .NumpySimulator import NumpySimulator
 try:

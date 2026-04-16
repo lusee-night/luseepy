@@ -1,19 +1,32 @@
 #!/usr/bin/env python3
 import os
+from enum import StrEnum
 
 import numpy as np
 import jax
 
 
-class SimDriver(dict):
+class SimEngine(StrEnum):
+    TOPO_NP = "topo-numpy" # the original NumPy simulator of luseepy, uses TOPO frame
+    TOPO = "topo"          # Jax version of topo
+    CRO = "croissant"      # Croissant engine
+
+
+# for now, only the original simulator requires NumPy inputs
+def requires_numpy_wrapper(engine: SimEngine):
+    return engine is SimEngine.TOPO_NP
+
+
+class SimDriver:
     def __init__(self, cfg):
-        self.update(cfg)
+        self.cfg = cfg
         # from simulator_ng
         self._resolve_simulation_paths()
         # from jaxify
         # do not remove this import to module level
         import lusee
         self._lusee = lusee
+        self.engine = self.normalize_engine()
         self._parse_base()
         self._parse_sky()
         self._parse_beams()
@@ -24,15 +37,15 @@ class SimDriver(dict):
         Same behavior as ``run_Cro_sim.SimDriver`` so YAML can use e.g.
         ``simulation/plot_dir: simulation/output/figures``.
         """
-        sim = self.get("simulation")
-        if not isinstance(sim, dict):
+        sim = self.cfg.get("simulation")
+        if sim is None:
             return
         plot_dir = sim.get("plot_dir")
         if not plot_dir or os.path.isabs(plot_dir):
             return
         here = os.path.dirname(os.path.abspath(__file__))
         luseepy_root = os.path.abspath(os.path.join(here, "..", ".."))
-        self["simulation"]["plot_dir"] = os.path.normpath(
+        self.cfg["simulation"]["plot_dir"] = os.path.normpath(
             os.path.join(luseepy_root, plot_dir)
         )
 
@@ -49,15 +62,15 @@ class SimDriver(dict):
     def _parse_base(self):
         from lusee.frequencies import canonical_frequencies, frequency_indices_from_config
 
-        self.lmax = self["observation"]["lmax"]
-        self.root = self["paths"]["lusee_drive_dir"]
-        self.outdir = self["paths"].get("output_dir", ".")
+        self.lmax = self.cfg["observation"]["lmax"]
+        self.root = self.cfg["paths"]["lusee_drive_dir"]
+        self.outdir = self.cfg["paths"].get("output_dir", ".")
         if isinstance(self.root, str) and self.root.startswith("$"):
             self.root = os.environ[self.root[1:]]
         if isinstance(self.outdir, str) and self.outdir.startswith("$"):
             self.outdir = os.environ[self.outdir[1:]]
 
-        od = self["observation"]
+        od = self.cfg["observation"]
         self.dt = od["dt"]
         if isinstance(self.dt, str):
             self.dt = eval(self.dt)
@@ -66,10 +79,9 @@ class SimDriver(dict):
 
     def _parse_sky(self):
         lusee = self._lusee
-        engine = self._normalize_engine(self)
-        sky_type = self["sky"].get("type", "file")
+        sky_type = self.cfg["sky"].get("type", "file")
         if sky_type == "file":
-            fname = os.path.join(self.root, self["paths"]["sky_dir"], self["sky"]["file"])
+            fname = os.path.join(self.root, self.cfg["paths"]["sky_dir"], self.cfg["sky"]["file"])
             print("Loading sky: ", fname)
             self.sky = lusee.sky.FitsSky(fname, lmax=self.lmax)
         elif sky_type == "CMB":
@@ -79,7 +91,7 @@ class SimDriver(dict):
             print("Using Cane1979 sky")
             self.sky = lusee.sky.ConstSkyCane1979(self.lmax, lmax=self.lmax, freq=self.freq)
         elif sky_type == "DarkAges":
-            d = self["sky"]
+            d = self.cfg["sky"]
             scaled = d.get("scaled", True)
             nu_min = d.get("nu_min", 16.4)
             nu_rms = d.get("nu_rms", 14.0)
@@ -98,24 +110,23 @@ class SimDriver(dict):
             )
         else:
             raise ValueError(f"Unknown sky.type={sky_type!r}")
-        if engine == "default":
+        if requires_numpy_wrapper(self.engine):
             self.sky = lusee.NpWrapper(self.sky)
 
     def _parse_beams(self):
         lusee = self._lusee
-        broot = os.path.join(self.root, self["paths"]["beam_dir"])
+        broot = os.path.join(self.root, self.cfg["paths"]["beam_dir"])
         beams = []
-        bd = self["beams"]
-        bdc = self["beam_config"]
-        engine = self._normalize_engine(self)
+        bd = self.cfg["beams"]
+        bdc = self.cfg["beam_config"]
         couplings = bdc.get("couplings")
         beam_type = bdc.get("type", "fits")
         beam_smooth = bdc.get("beam_smooth")
-        taper = bdc.get("taper", self.get("simulation", {}).get("taper", 0.03))
+        taper = bdc.get("taper", self.cfg.get("simulation", {}).get("taper", 0.03))
 
         if beam_type == "Gaussian":
             print("Creating Gaussian beams!")
-            for b in self["observation"]["beams"]:
+            for b in self.cfg["observation"]["beams"]:
                 cbeam = bd[b]
                 print("Creating gaussian beam", b, ":")
                 B = lusee.BeamGauss(
@@ -128,11 +139,11 @@ class SimDriver(dict):
                 print("  rotating: ", angle)
                 B = B.rotate(angle)
                 B = B.taper_and_smooth(taper=taper, beam_smooth=beam_smooth)
-                if engine == "default":
+                if requires_numpy_wrapper(self.engine):
                     B = lusee.NpWrapper(B)
                 beams.append(B)
         elif beam_type == "fits":
-            for b in self["observation"]["beams"]:
+            for b in self.cfg["observation"]["beams"]:
                 print("Loading beam", b, ":")
                 cbeam = bd[b]
                 filename = cbeam.get("file")
@@ -147,7 +158,7 @@ class SimDriver(dict):
                 print("  rotating: ", angle)
                 B = B.rotate(angle)
                 B = B.taper_and_smooth(taper=taper, beam_smooth=beam_smooth)
-                if engine == "default":
+                if requires_numpy_wrapper(self.engine):
                     B = lusee.NpWrapper(B)
                 beams.append(B)
         else:
@@ -162,31 +173,24 @@ class SimDriver(dict):
         else:
             self.couplings = None
 
-    @staticmethod
-    def _normalize_engine(cfg):
-        engine = cfg.get("simulation", {}).get("engine", "default")
-        e = str(engine).strip().lower()
-        aliases = {
-            "default": "default",
-            "luseepy": "default",
-            "numpy": "default",
-            "jaxsim": "jaxsim",
-            "jax": "jaxsim",
-            "lusee": "jaxsim",
-            "croissant": "croissant",
-        }
-        return aliases.get(e, e)
+    def normalize_engine(self):
+        engine = self.cfg.get("simulation", {}).get("engine", SimEngine.TOPO.value)
+        try:
+            return SimEngine(engine)
+        except ValueError as val_err:
+            valid_values = ", ".join(e.value for e in SimEngine)
+            raise ValueError(f"Engine must be one of {valid_values}, got: {engine!r}") from val_err
 
-    def _simulation_extra_opts(self, engine):
-        extra_opts = dict(self.get("simulation", {}))
-        if engine != "jaxsim":
+    def _simulation_extra_opts(self):
+        extra_opts = dict(self.cfg.get("simulation", {}))
+        if self.engine != SimEngine.TOPO:
             extra_opts.pop("time_batch_size", None)
         return extra_opts
 
     def run(self):
         lusee = self._lusee
         print("Starting simulation:")
-        od = self["observation"]
+        od = self.cfg["observation"]
         O = lusee.Observation(
             od["lunar_day"],
             deltaT_sec=self.dt,
@@ -205,9 +209,8 @@ class SimDriver(dict):
                 for j in range(i, self.Nbeams):
                     combs.append((i, j))
 
-        engine = self._normalize_engine(self)
-        extra_opts = self._simulation_extra_opts(engine)
-        if engine == "croissant":
+        extra_opts = self._simulation_extra_opts()
+        if self.engine is SimEngine.CRO:
             if lusee.CroSimulator is None:
                 raise RuntimeError(
                     "CroSimulator requires optional dependency 'croissant' (and s2fft). "
@@ -225,9 +228,9 @@ class SimDriver(dict):
                 cross_power=self.couplings,
                 extra_opts=extra_opts,
             )
-        elif engine == "default":
+        elif self.engine is SimEngine.TOPO_NP:
             print("  setting up Default (NumPy) Simulation object...")
-            S = lusee.DefaultSimulator(
+            S = lusee.TopoNumpySimulator(
                 O,
                 self.beams,
                 self.sky,
@@ -238,9 +241,9 @@ class SimDriver(dict):
                 cross_power=self.couplings,
                 extra_opts=extra_opts,
             )
-        elif engine == "jaxsim":
+        elif self.engine is SimEngine.TOPO:
             print("  setting up JAX Simulation object...")
-            S = lusee.JaxSimulator(
+            S = lusee.TopoJaxSimulator(
                 O,
                 self.beams,
                 self.sky,
@@ -252,11 +255,7 @@ class SimDriver(dict):
                 extra_opts=extra_opts,
             )
         else:
-            raise ValueError(
-                "engine must be one of {default, luseepy, jaxsim, croissant} "
-                "(legacy aliases: numpy, jax, lusee), "
-                f"got: {engine}"
-            )
+            raise ValueError(f"Unknown engine: {self.engine}")
 
         print(
             f"  Simulating {len(O.times)} timesteps (from observation) x {len(combs)} "
@@ -265,7 +264,7 @@ class SimDriver(dict):
         print("  Simulating...")
         S.simulate(times=O.times)
 
-        out_base = self["simulation"].get("output", f"sim_{engine}_output.fits")
+        out_base = self.cfg["simulation"].get("output", f"sim_{self.engine}_output.fits")
         fname = os.path.join(self.outdir, out_base)
         print("Writing to", fname)
         S.write_fits(fname)
