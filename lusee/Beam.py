@@ -5,8 +5,6 @@
 from functools import partial, lru_cache
 import os
 
-os.environ["JAX_ENABLE_X64"] = "True"
-
 import fitsio
 import numpy as np
 import jax
@@ -218,7 +216,8 @@ def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
         alm = grid2healpix_alm_fast(theta,phi,img,lmax)
     else:
         alm = grid2healpix_alm_reference(theta,phi,img,lmax)
-    return hp.sphtfunc.alm2map(alm,Nside)
+    # Older healpy releases mis-handle JAX arrays here, so cross the boundary explicitly.
+    return hp.sphtfunc.alm2map(np.asarray(alm),Nside)
 
 
 

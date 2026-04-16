@@ -1,7 +1,3 @@
-import os
-
-os.environ["JAX_ENABLE_X64"] = "True"
-
 from .Beam import Beam
 from .frequencies import ALL_FREQUENCIES_MHZ
 import jax

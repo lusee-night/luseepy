@@ -2,7 +2,9 @@
 import os
 
 import numpy as np
+import jax
 
+import lusee
 
 class SimDriver(dict):
     def __init__(self, cfg):
@@ -10,8 +12,6 @@ class SimDriver(dict):
         # from simulator_ng
         self._resolve_simulation_paths()
         # from jaxify
-        self._configure_jax_precision()
-        import lusee
         self._lusee = lusee
         self._parse_base()
         self._parse_sky()
@@ -43,15 +43,7 @@ class SimDriver(dict):
             return value.strip().lower() in {"1", "true", "yes", "y", "on"}
         return bool(value)
 
-    def _configure_jax_precision(self):
-        sim_cfg = self.get("simulation", {})
-        if "jax_enable_x64" not in sim_cfg:
-            return
-        enabled = self._to_bool(sim_cfg.get("jax_enable_x64", False))
-        os.environ["JAX_ENABLE_X64"] = "1" if enabled else "0"
         import jax
-        jax.config.update("jax_enable_x64", enabled)
-        print(f"JAX x64 precision enabled: {enabled}")
 
     def _parse_base(self):
         from lusee.frequencies import canonical_frequencies, frequency_indices_from_config
