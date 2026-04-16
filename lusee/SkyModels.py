@@ -1,7 +1,3 @@
-import os
-
-os.environ["JAX_ENABLE_X64"] = "True"
-
 import fitsio
 import healpy as hp
 import numpy as np
