@@ -11,7 +11,7 @@ import sys
 import os
 import jax.numpy as jnp
 import croissant as cro
-import croissant.jax as crojax
+from croissant.multipair import multi_convolve
 import jax
 from lunarsky import LunarTopo
 import s2fft
@@ -19,9 +19,10 @@ import s2fft
 """
 CroSimulator: same inputs as DefaultSimulator (beam, sky, obs, etc.) but uses
 the Croissant engine for the actual simulation (MEPA frame, rot_alm_z phases,
-crojax.simulator.convolve). Freq, time range, and antenna location come from
-the observation object (config). Croissant currently supports single
-polarization / single dipole per beam; one beam combination at a time
+croissant.multipair.multi_convolve over beam combinations). Freq, time range,
+and antenna location come from the observation object (config). Croissant
+handles single polarization / single dipole per beam; effective beams are
+still one combination each, batched at the convolution step.
 """
 
 
@@ -34,9 +35,10 @@ class CroSimulator(SimulatorBase):
       object (set from config). [luseepy.observation class]
     - Lunar topo frame is built from obs class (obstime=first time, location=obs.loc).
     - Beam and sky are transformed to MEPA; time evolution uses
-      crojax.simulator.rot_alm_z (moon sidereal rotation).
-    - Croissant handles single polarization / single dipole per beam; each
-      combination is convolved separately to match DefaultSimulator output shape.
+      croissant.simulator.rot_alm_z (moon sidereal rotation).
+    - Croissant handles single polarization / single dipole per beam; real-part
+      beams for all combinations are convolved in one multipair batch; cross
+      imaginary beams are batched separately when present.
     - Sky gal→MEPA once (epoch-aware), beam topo(t0)→MEPA once, rot_alm_z(dt) for time evolution, then convolve.
     - Output layout is (N_times, N_combos, N_freq).
 
@@ -150,7 +152,7 @@ class CroSimulator(SimulatorBase):
             efbeams = self.efbeams
         topo = LunarTopo(obstime=times[0], location=self.obs.loc)
         sim_L = self.lmax + 1
-        eul_topo, dl_topo = crojax.rotations.generate_euler_dl(
+        eul_topo, dl_topo = cro.rotations.generate_euler_dl(
             self.lmax, topo, "mepa"
         )
         topo2mepa = partial(
@@ -172,8 +174,12 @@ class CroSimulator(SimulatorBase):
         # croissant>=5.1.x handles LunarTopo (NEU) to ENU convention
         # internally in rotations.get_rot_mat/generate_euler_dl.
         # Do not apply an additional manual m-dependent phase here.
-        combo_results = []
-        plot_done = False
+        # multipair.multi_convolve is raw convolve vmap — no extra normalization.
+        # We keep dividing by 4π only (not multipair.compute_visibilities).
+        beam_mepas = []
+        ground_reals = []
+        beamimag_mepas = []
+        ground_imags = []
         for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in efbeams:
             beam_2d = jnp.stack([
                 s2fft.sampling.reindex.flm_hp_to_2d_fast(
@@ -182,33 +188,8 @@ class CroSimulator(SimulatorBase):
                 for br_ in beamreal
             ])
             beam_mepa = jax.vmap(topo2mepa)(beam_2d)
-            if self.extra_opts.get("plot_sky_and_beam") and not plot_done:
-                nf = len(self.freq)
-                freq_idx_plot = int(self.extra_opts.get("freq_idx_plot", 0))
-                if nf == 0:
-                    raise ValueError("Cannot plot: no frequencies in self.freq")
-                if not (0 <= freq_idx_plot < nf):
-                    clamped = max(0, min(freq_idx_plot, nf - 1))
-                    warnings.warn(
-                        f"freq_idx_plot={freq_idx_plot} is out of bounds for "
-                        f"len(freq)={nf}; using {clamped}.",
-                        UserWarning,
-                        stacklevel=2,
-                    )
-                    freq_idx_plot = clamped
-                nside = getattr(self.sky_model, "Nside", 64)
-                sky_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(sky_mepa[freq_idx_plot]), self.lmax+1)
-                beam_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(np.asarray(beam_mepa[freq_idx_plot]), self.lmax+1)
-                self._plot_sky_beam_healpix(
-                    sky_packed, beam_packed, nside, self.lmax,
-                    save_dir=self.extra_opts.get("plot_dir", default_plot_sky_beam_dir()),
-                    save_filename=self.extra_opts.get("plot_filename", "sky_beam_healpix_cro.png"),
-                    title_prefix=f"Croissant at {self.freq[freq_idx_plot]} MHz ",
-                )
-                plot_done = True
-            vis = crojax.simulator.convolve(beam_mepa, sky_mepa, phases)
-            T = vis.real / norm_factor + self.Tground * groundPowerReal
-            combo_results.append((T, None))
+            beam_mepas.append(beam_mepa)
+            ground_reals.append(jnp.asarray(groundPowerReal))
             if ci != cj:
                 beamimag_2d = jnp.stack([
                     s2fft.sampling.reindex.flm_hp_to_2d_fast(
@@ -217,9 +198,70 @@ class CroSimulator(SimulatorBase):
                     for bi_ in beamimag
                 ])
                 beamimag_mepa = jax.vmap(topo2mepa)(beamimag_2d)
-                vis_imag = crojax.simulator.convolve(beamimag_mepa, sky_mepa, phases)
-                Timag = vis_imag.real / norm_factor + self.Tground * groundPowerImag
-                combo_results[-1] = (T, Timag)
+                beamimag_mepas.append(beamimag_mepa)
+                ground_imags.append(jnp.asarray(groundPowerImag))
+
+        if self.extra_opts.get("plot_sky_and_beam") and beam_mepas:
+            nf = len(self.freq)
+            freq_idx_plot = int(self.extra_opts.get("freq_idx_plot", 0))
+            if nf == 0:
+                raise ValueError("Cannot plot: no frequencies in self.freq")
+            if not (0 <= freq_idx_plot < nf):
+                clamped = max(0, min(freq_idx_plot, nf - 1))
+                warnings.warn(
+                    f"freq_idx_plot={freq_idx_plot} is out of bounds for "
+                    f"len(freq)={nf}; using {clamped}.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                freq_idx_plot = clamped
+            nside = getattr(self.sky_model, "Nside", 64)
+            sky_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(
+                np.asarray(sky_mepa[freq_idx_plot]), self.lmax + 1
+            )
+            beam_packed = s2fft.sampling.reindex.flm_2d_to_hp_fast(
+                np.asarray(beam_mepas[0][freq_idx_plot]), self.lmax + 1
+            )
+            self._plot_sky_beam_healpix(
+                sky_packed,
+                beam_packed,
+                nside,
+                self.lmax,
+                save_dir=self.extra_opts.get("plot_dir", default_plot_sky_beam_dir()),
+                save_filename=self.extra_opts.get(
+                    "plot_filename", "sky_beam_healpix_cro.png"
+                ),
+                title_prefix=f"Croissant at {self.freq[freq_idx_plot]} MHz ",
+            )
+
+        beam_stack = jnp.stack(beam_mepas, axis=0)
+        vis_all = multi_convolve(beam_stack, sky_mepa, phases)
+        ground_real_stack = jnp.stack(ground_reals, axis=0)
+        T_all = (
+            vis_all.real / norm_factor
+            + self.Tground * ground_real_stack[:, jnp.newaxis, :]
+        )
+
+        if beamimag_mepas:
+            imag_stack = jnp.stack(beamimag_mepas, axis=0)
+            vis_imag_all = multi_convolve(imag_stack, sky_mepa, phases)
+            ground_imag_stack = jnp.stack(ground_imags, axis=0)
+            Timag_all = (
+                vis_imag_all.real / norm_factor
+                + self.Tground * ground_imag_stack[:, jnp.newaxis, :]
+            )
+        else:
+            Timag_all = None
+
+        combo_results = []
+        imag_cursor = 0
+        for k, (ci, cj, _, _, _, _) in enumerate(efbeams):
+            T = T_all[k]
+            if ci == cj:
+                combo_results.append((T, None))
+            else:
+                combo_results.append((T, Timag_all[imag_cursor]))
+                imag_cursor += 1
         wfall = []
         for ti in range(ntimes):
             res = []
