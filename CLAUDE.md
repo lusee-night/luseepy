@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `luseepy` is a Python package for simulating LuSEE-Night radio telescope observations on the lunar far side. It simulates instrument beams, sky models, and produces mock observation data (waterfall arrays) stored as FITS files.
 
+For the end-to-end math trace of the simulator (sky harmonics, beam harmonics, the `mean_alm` inner product, ground coupling, T→V conversion), see `mathematical_description.tex` at the repo root (also mirrored in `docs/`). Consult it before answering questions about the physics or algebraic structure of the pipeline.
+
 ## Environment Setup
 
 Required environment variables:
@@ -13,37 +15,40 @@ Required environment variables:
 - `LUSEE_OUTPUT_DIR` — output directory for simulation results
 - `LUSEEPY_PATH` — path to the luseepy checkout (optional)
 
-Docker-based development (see `docker/README.md`) or local install:
+Dependencies are managed with `uv`. Python 3.12 is pinned in `pyproject.toml`.
+
 ```bash
-pip install .                          # core install
-pip install ".[croissant]"             # with optional CroSimulator support
+uv sync                                # core install (includes croissant, hydra, jax, s2fft)
+uv sync --extra cuda12                 # add GPU JAX (Linux)
+uv sync --extra cuda13
 ```
+
+`croissant-sim` is a core dependency, so `CroSimulator` is always available.
 
 ## Running Tests
 
+Tests are pytest-based; `[tool.pytest.ini_options]` in `pyproject.toml` sets `testpaths = ["tests"]` and defines an `integration` marker for tests that require `LUSEE_DRIVE_DIR`.
+
 ```bash
-# Unit tests (can run without LUSEE_DRIVE_DIR for most)
-python tests/LunarCalendarTest.py -v
-python tests/CoordTest.py
-
-# Integration tests (require LUSEE_DRIVE_DIR with beam/sky data)
-python tests/SimTest.py
-python tests/SimReadTest.py <path-to-fits>
-
-# Compare CroSimulator vs DefaultSimulator (requires croissant + LUSEE_DRIVE_DIR)
-cd simulation && python driver/test_cro_vs_default.py config/sim_choice_realistic.yaml
+uv run pytest                          # all tests
+uv run pytest -m "not integration"     # skip tests needing LUSEE_DRIVE_DIR
+uv run pytest tests/test_sim.py -v
 ```
 
 CI runs tests via `.github/workflows/luseepy-test.yml`. It uses `LUSEE_DRIVE_DIR=Drive` (a local tarball extracted during CI).
 
 ## Running a Simulation
 
+The driver uses Hydra. `simulation/driver/run_sim.py` is a thin wrapper around `simulation/driver/sim_driver.SimDriver` (via `run_sim_universal.run`).
+
 ```bash
 cd simulation
-python driver/run_sim.py config/realistic_example.yaml
+python driver/run_sim.py --config-name=example                      # Hydra style
+python driver/run_sim.py config/example.yaml                        # legacy path (auto-shimmed)
+python driver/run_sim.py --config-name=example observation.lmax=64  # Hydra overrides
 ```
 
-The driver reads a YAML config and writes a FITS file. See `simulation/config/realistic_example.yaml` for the config schema.
+See `simulation/config/example.yaml` (starter) and `simulation/config/sim_choice_realistic.yaml` (full Croissant + plotting).
 
 ## Architecture
 
@@ -92,7 +97,13 @@ Abstract base. `prepare_beams()` pre-computes beam alm products for all antenna 
 Per-timestep rotation of galactic sky alms into the observer frame using healpy rotators. Uses `mean_alm()` for the beam–sky integral.
 
 **`lusee.CroSimulator`** (`lusee/CroSimulator.py`)
-Alternative engine using the `croissant` library and JAX. Works in MEPA (Moon-centred Ephemeris Pole Axis) with `rot_alm_z` phase rotations rather than per-time full sky rotation. Optional install: `pip install ".[croissant]"`. `CroSimulator` is `None` if croissant is not installed.
+Alternative engine using the `croissant` library and JAX. Works in MEPA (Moon-centred Ephemeris Pole Axis) with `rot_alm_z` phase rotations rather than per-time full sky rotation.
+
+**`lusee.JaxSimulator`** (`lusee/JaxSimulator.py`)
+JAX-backed simulator using `s2fft` Wigner recursions for the per-time sky rotation. Supports an `extra_opts["time_batch_size"]` to control the mini-batch size of the vmapped rotation kernel (helps keep GPU memory bounded at large `lmax`). Selected via `simulation.engine: jaxsim` in the YAML config.
+
+**`lusee.NumpySimulator`** (`lusee/NumpySimulator.py`)
+Numpy reference implementation used for cross-checking against the JAX path (see `tests/test_np_wrapper.py`, `lusee/NpWrapper.py`).
 
 ### Map-Making (`lusee/MapMaker.py`)
 
@@ -109,9 +120,11 @@ See `docs/wirtinger_cg.md` for the math (real vs complex parameterization, null-
 
 Reads simulator FITS output. Extends `Observation`. Indexed as `D[:, '01I', :]` (time slice, combination label, freq slice).
 
-### Simulation Driver (`simulation/driver/run_sim.py`)
+### Simulation Driver (`simulation/driver/`)
 
-`SimDriver` class reads YAML config, instantiates the appropriate objects, calls `simulator.simulate()`, and writes FITS. Supports `engine: default` (and `engine: croissant` in development). Config fields: `paths`, `sky`, `beam_config`, `beams`, `observation`, `simulation`.
+`sim_driver.SimDriver` reads a Hydra-resolved config dict, instantiates the appropriate objects, calls `simulator.simulate()`, and writes FITS. `run_sim.py` / `run_sim_universal.py` are the Hydra entry points; `run_sim_universal._apply_legacy_config_shim` rewrites a bare-path config argument (e.g. `config/example.yaml`) into Hydra's `--config-path=... --config-name=...` form. Supported engines via `simulation.engine`: `default`, `croissant`, `jaxsim`. Config fields: `paths`, `sky`, `beam_config`, `beams`, `observation`, `simulation`.
+
+Other drivers in `simulation/driver/`: `run_Cro_sim.py`, `run_calibrator_sim.py` (+ `calibrator_sim_driver.py`), `run_batch.py`.
 
 ## Coordinate Conventions
 
@@ -122,5 +135,5 @@ Reads simulator FITS output. Extends `Observation`. Indexed as `D[:, '01I', :]` 
 ## Version Conventions
 
 - Version in `lusee/__init__.py` as `__version__` and `__comment__` (dev suffix for unreleased)
-- New release: clean version → tag → new docker image → bump to `x.y dev`
+- New release: clean version → tag → bump to `x.y dev`
 - API-breaking changes → increment major integer; small fixes → increment by 0.01
