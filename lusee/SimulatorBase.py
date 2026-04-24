@@ -95,7 +95,13 @@ def rot2eul(R):
 
 
 def rot2eul_np(R):
-    return np.asarray(rot2eul(R))
+    """Numpy counterpart of ``rot2eul`` — stays numpy under a ``jax.jit``
+    trace, unlike the jnp version which would lift its ops to tracers."""
+    R = np.asarray(R)
+    beta = -np.arcsin(R[2, 0])
+    alpha = np.arctan2(R[2, 1] / np.cos(beta), R[2, 2] / np.cos(beta))
+    gamma = np.arctan2(R[1, 0] / np.cos(beta), R[0, 0] / np.cos(beta))
+    return np.array((alpha, beta, gamma))
 
 def eul2rot(theta) :
     """

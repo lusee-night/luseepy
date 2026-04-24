@@ -67,6 +67,10 @@ def test_all_simulators_smoke(tmp_path):
 
     assert np.allclose(jax_result, default_result, rtol=1e-9, atol=1e-9)
 
+    # sky= kwarg with the same pytree must reproduce the cached-sky output.
+    jax_result_sky_kwarg = np.asarray(jax_sim.simulate(times=times, sky=sky))
+    assert np.array_equal(jax_result, jax_result_sky_kwarg)
+
     if lusee.CroSimulator is None:
         pytest.skip("CroSimulator requires optional croissant and s2fft dependencies")
 

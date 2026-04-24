@@ -89,6 +89,43 @@ def test_jaxsim_grad_wrt_sky(tmp_path):
     assert jnp.linalg.norm(grad_sky._T) > 0
 
 
+def test_jaxsim_grad_wrt_sky_precomputed(tmp_path):
+    """Differentiate via sky= kwarg (precomputed JaxSimulator).
+
+    Builds the simulator once, then differentiates only through simulate().
+    Mirrors test_crosim_grad_wrt_sky_precomputed to verify the JaxSimulator
+    drop-in path used by examples/optax_maxlike.py.
+    """
+    lusee, obs, times, freq, lmax, sky, beam, cache_prefix = _small_grad_setup(tmp_path)
+
+    sim = lusee.JaxSimulator(
+        obs,
+        [beam],
+        sky,
+        Tground=0.0,
+        combinations=[(0, 0)],
+        freq=freq,
+        lmax=lmax,
+        extra_opts={"cache_transform": cache_prefix},
+    )
+
+    # sky= must reproduce the cached-sky output bit-for-bit when the same
+    # pytree is supplied.
+    wf_default = sim.simulate(times=times)
+    wf_sky_kwarg = sim.simulate(times=times, sky=sky)
+    assert jnp.allclose(wf_default, wf_sky_kwarg, atol=1e-12)
+
+    def loss_fn(sky):
+        result = sim.simulate(times=times, sky=sky)
+        return jnp.real(jnp.vdot(result, result))
+
+    grad_sky = jax.grad(loss_fn)(sky)
+
+    assert isinstance(grad_sky, lusee.sky.HarmonicPointSourceSky)
+    assert jnp.isfinite(grad_sky._T).all()
+    assert jnp.linalg.norm(grad_sky._T) > 0
+
+
 def test_crosim_grad_wrt_beam(tmp_path):
     """Differentiate a small CroSimulator loss with respect to a Gaussian beam."""
     import lusee

@@ -1,7 +1,7 @@
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
-from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, rot2eul
+from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, rot2eul_np
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -288,22 +288,32 @@ class JaxSimulator(SimulatorBase):
             )
         self.efbeams = efbeams_jax
 
-    def _prepare_output_tensors(self):
-        """Flatten (combo, real/imag) outputs into a single axis for vectorized contraction."""
+    def _efbeams_to_output_tensors(self, efbeams):
+        """Stack an efbeams list into (output_beams, output_beams_flm, output_ground).
+
+        Pure w.r.t. self except for reading self.lmax and self._hp_to_full_flm_batch_jax,
+        so it can be invoked on a user-supplied beam pytree at simulate() time."""
         output_beams = []
         output_ground = []
-        for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in self.efbeams:
+        for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in efbeams:
             output_beams.append(beamreal)
             output_ground.append(groundPowerReal)
             if ci != cj:
                 output_beams.append(beamimag)
                 output_ground.append(groundPowerImag)
-        self._output_beams = jnp.asarray(jnp.stack(output_beams, axis=0))
-        self._output_ground = jnp.asarray(jnp.stack(output_ground, axis=0))
-        noutput, nfreq, _ = self._output_beams.shape
-        beams_flat = self._output_beams.reshape(noutput * nfreq, self._output_beams.shape[-1])
-        self._output_beams_flm = self._hp_to_full_flm_batch_jax(beams_flat).reshape(
+        output_beams = jnp.asarray(jnp.stack(output_beams, axis=0))
+        output_ground = jnp.asarray(jnp.stack(output_ground, axis=0))
+        noutput, nfreq, _ = output_beams.shape
+        beams_flat = output_beams.reshape(noutput * nfreq, output_beams.shape[-1])
+        output_beams_flm = self._hp_to_full_flm_batch_jax(beams_flat).reshape(
             noutput, nfreq, self.lmax + 1, 2 * self.lmax + 1
+        )
+        return output_beams, output_beams_flm, output_ground
+
+    def _prepare_output_tensors(self):
+        """Flatten (combo, real/imag) outputs into a single axis for vectorized contraction."""
+        self._output_beams, self._output_beams_flm, self._output_ground = (
+            self._efbeams_to_output_tensors(self.efbeams)
         )
 
     def _setup_simulation_kernels(self):
@@ -354,7 +364,7 @@ class JaxSimulator(SimulatorBase):
             xhat = np.cross(yhat, zhat)
             assert (np.abs(np.dot(zhat, yhat)) < 1e-10)
             R = np.array([xhat, yhat, zhat]).T
-            a, b, g = rot2eul(R)
+            a, b, g = rot2eul_np(R)
             rot = hp.rotator.Rotator(
                 rot=(float(g), float(-b), float(a)),
                 deg=False,
@@ -383,27 +393,43 @@ class JaxSimulator(SimulatorBase):
             self._output_ground,
         )
 
-    def simulate (self,times=None):
+    def simulate (self,times=None, *, sky=None, beam=None):
         """
         Main simulation function. Produces mock observation of sky model from self.sky_model with beams from self.beams
 
         :param times: List of times, defaults to lusee.observation.times if empty
         :type times: list
+        :param sky: Optional pytree sky with ``.get_alm(ndx)`` and ``.frame``.
+            When provided, its leaves replace self.sky_model in the traced
+            computation so ``jax.grad`` flows through it. Must share
+            self.sky_model's frequency grid (self.freq_ndx_sky is reused).
+        :param beam: Optional pytree with a ``.efbeams`` attribute matching
+            self.efbeams layout (list of ``(i, j, beamreal, beamimag,
+            groundPowerReal, groundPowerImag)`` tuples). Its leaves replace the
+            cached output beam tensors for this call.
 
         :returns: Waterfall style observation data for input times and self.freq
         :rtype: numpy array
         """
         if times is None:
             times = self.obs.times
+        sky_model = sky if sky is not None else self.sky_model
+        if beam is None:
+            output_beams_flm = self._output_beams_flm
+            output_ground = self._output_ground
+        else:
+            _, output_beams_flm, output_ground = self._efbeams_to_output_tensors(
+                beam.efbeams
+            )
         t_sim0 = time.perf_counter()
         if self._debug_enabled:
             self._debug_print(
-                f"simulate start: ntimes={len(times)} frame={self.sky_model.frame} "
+                f"simulate start: ntimes={len(times)} frame={sky_model.frame} "
                 f"time_batch_size_opt={self.extra_opts.get('time_batch_size')}"
             )
             if len(times) > 0:
                 self._debug_print(f"simulate times: first={times[0]} last={times[-1]}")
-        if self.sky_model.frame=="galactic":
+        if sky_model.frame=="galactic":
             do_rot = True
             t0 = time.perf_counter()
             cache_fn = self._transform_cache_file(times)
@@ -429,14 +455,14 @@ class JaxSimulator(SimulatorBase):
                     pickle.dump((lzl,bzl,lyl,byl),open(cache_fn,'bw'))
             self._log_timing("simulate.transforms", t0)
 
-        elif self.sky_model.frame=="MCMF":
+        elif sky_model.frame=="MCMF":
             do_rot = False
         else:
             raise NotImplementedError
 
         Nt = len(times)
         t0 = time.perf_counter()
-        sky_base = jnp.asarray(self.sky_model.get_alm(self.freq_ndx_sky))
+        sky_base = jnp.asarray(sky_model.get_alm(self.freq_ndx_sky))
         sky_base_flm = self._hp_to_full_flm_batch_jax(sky_base)
         self._block_ready(sky_base_flm)
         self._log_timing("simulate.sky_model.get_alm", t0)
@@ -465,13 +491,14 @@ class JaxSimulator(SimulatorBase):
                     alpha[0],
                     beta[0],
                     gamma[0],
-                    self._output_beams_flm,
-                    self._output_ground,
+                    output_beams_flm,
+                    output_ground,
                 )
                 probe_t0 = time.perf_counter()
                 self._debug_print("probe 1/3: compile+run single rotated time")
-                probe_single = self.simulate_at_single_time(
-                    sky_base_flm, alpha[0], beta[0], gamma[0]
+                probe_single = self._rotate_and_contract_single_time_jax(
+                    sky_base_flm, alpha[0], beta[0], gamma[0],
+                    output_beams_flm, output_ground,
                 )
                 jax.block_until_ready(probe_single)
                 self._debug_print(
@@ -485,7 +512,9 @@ class JaxSimulator(SimulatorBase):
                         f"probe 2/3: compile+run vmap over first {nprobe} rotated times"
                     )
                     probe_many = jax.vmap(
-                        lambda a, b, g: self.simulate_at_single_time(sky_base_flm, a, b, g)
+                        lambda a, b, g: self._rotate_and_contract_single_time_jax(
+                            sky_base_flm, a, b, g, output_beams_flm, output_ground
+                        )
                     )(alpha[:nprobe], beta[:nprobe], gamma[:nprobe])
                     jax.block_until_ready(probe_many)
                     self._debug_print(
@@ -501,8 +530,8 @@ class JaxSimulator(SimulatorBase):
                     alpha,
                     beta,
                     gamma,
-                    self._output_beams_flm,
-                    self._output_ground,
+                    output_beams_flm,
+                    output_ground,
                 )
             else:
                 pad = (-Nt) % time_batch_size
@@ -522,8 +551,8 @@ class JaxSimulator(SimulatorBase):
                             alpha_run[start : start + time_batch_size],
                             beta_run[start : start + time_batch_size],
                             gamma_run[start : start + time_batch_size],
-                            self._output_beams_flm,
-                            self._output_ground,
+                            output_beams_flm,
+                            output_ground,
                         )
                     )
                 self.result = jnp.concatenate(chunks, axis=0)[:Nt]
@@ -535,7 +564,9 @@ class JaxSimulator(SimulatorBase):
             dummy = jnp.arange(Nt)
             t0 = time.perf_counter()
             self.result = jax.vmap(
-                lambda _: self.simulate_at_single_time(sky_base_flm)
+                lambda _: self._contract_single_sky_jax(
+                    sky_base_flm, output_beams_flm, output_ground
+                )
             )(dummy)
             self._block_ready(self.result)
             self._log_timing("simulate.vmap_contract_no_rotation", t0)
