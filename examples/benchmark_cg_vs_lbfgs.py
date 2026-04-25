@@ -9,11 +9,21 @@ are directly comparable.
 Procedure
 ---------
 1. ``run_cg(n_iters=N)`` — run ``lusee.mapmaker.solve(method='cg')`` for
-   ``N`` iterations (default 4000). Records final loss as ``L_target``.
-2. ``run_lbfgs(target_loss=L_target, whiten=False)`` — optax LBFGS until the
-   loss reaches ``L_target`` (or ``max_iters`` cap).
-3. ``run_lbfgs(target_loss=L_target, whiten=True)`` — same with the
+   ``N`` iterations (default 4000). Records its mean ρ(1..10) per frequency
+   as the LBFGS target.
+2. ``run_lbfgs(target_rho_per_freq, whiten=False)`` — optax LBFGS until the
+   recovered sky's mean ρ(1..10) at every frequency is ≥ CG's value
+   (or ``max_iters`` cap).
+3. ``run_lbfgs(target_rho_per_freq, whiten=True)`` — same with the
    change-of-variable preconditioner θ' = θ·√(S^{-1}).
+
+Why ρ, not loss
+---------------
+The loss has a Gaussian prior that shrinks the recovered alm. Two solutions
+can share the same loss while differing in pattern fidelity (one with
+smaller-magnitude but better-aligned alm; the other louder but noisier).
+ρ_ℓ is amplitude-blind, so it isolates pattern fidelity. Mean ρ(1..10) is
+the standard low-ℓ reconstruction-quality metric (cf. Camacho+ 2026 Fig 5).
 
 Output structure
 ----------------
@@ -28,6 +38,8 @@ CLI
 ---
     python examples/benchmark_cg_vs_lbfgs.py --sim jax  --lmax 32
     python examples/benchmark_cg_vs_lbfgs.py --sim cro  --lmax 32 --cg_iters 4000
+    # explicit ρ targets, skipping CG
+    python examples/benchmark_cg_vs_lbfgs.py --skip_cg --target_rho 0.95,0.93,0.91
 """
 
 import os
@@ -79,8 +91,16 @@ Result = namedtuple("Result", [
     "n_iters",        # iterations actually run
     "loss_history",   # np.ndarray (single-element [final] for CG)
     "final_loss",     # float
+    "rho_per_freq",   # np.ndarray (nfreq,) — mean ρ(1..10) per frequency at the end
+    "rho_check_iters",  # np.ndarray of iter indices where ρ was computed (None for CG)
+    "rho_history",    # np.ndarray (nchecks, nfreq) — ρ values at those iters (None for CG)
     "sky_alm",        # complex (nfreq, nalm) recovered alm
 ])
+
+
+# Multipole range used for the mean-ρ stopping criterion (Camacho+ 2026 Fig 5).
+RHO_LMIN = 1
+RHO_LMAX = 10
 
 
 # ── Setup helper (called independently inside each runner) ───────────
@@ -185,6 +205,20 @@ def _evaluate_loss(lusee, sim, data, sigma, cl_inv, sky_alm, sky_truth, lmax):
     return chi2 + prior
 
 
+def _mean_rho_per_freq(sky_alm, sky_truth, lmin=RHO_LMIN, lmax=RHO_LMAX):
+    """Mean ρ_ℓ over ℓ ∈ [lmin, lmax] for each frequency. Returns shape (nfreq,)."""
+    nfreq = sky_alm.shape[0]
+    rhos = np.empty(nfreq, dtype=np.float64)
+    for fi in range(nfreq):
+        true_alm = np.asarray(sky_truth.mapalm[fi])
+        rec_alm = np.asarray(sky_alm[fi])
+        cl_t = hp.alm2cl(true_alm)
+        cl_r = hp.alm2cl(rec_alm)
+        rho_l = hp.alm2cl(true_alm, rec_alm) / np.sqrt(cl_t * cl_r + 1e-30)
+        rhos[fi] = float(np.nanmean(rho_l[lmin:lmax + 1]))
+    return rhos
+
+
 # ── Per-method reconstruction plots (drop into out_dir) ──────────────
 
 def _save_recon_plots(sky_truth, sky_alm, out_dir, lmax):
@@ -274,11 +308,15 @@ def run_cg(*, lmax, n_iters, engine, out_dir):
     total_s = first_iter_s + main_s
     median_iter_s = main_s / max(n_iters, 1)
 
+    sky_alm_np = np.asarray(sky_alm)
     final_loss = _evaluate_loss(lusee, sim, data, sigma, cl_inv,
-                                np.asarray(sky_alm), sky_truth, lmax)
+                                sky_alm_np, sky_truth, lmax)
+    rho_per_freq = _mean_rho_per_freq(sky_alm_np, sky_truth)
+    rho_str = "  ".join(f"{f:.0f}MHz:{r:.4f}" for f, r in zip(FREQ, rho_per_freq))
     print(f"  setup={setup_s:.1f}s  first_iter={first_iter_s:.2f}s  "
           f"main={main_s:.2f}s  per_iter≈{median_iter_s*1e3:.1f}ms  "
           f"final_loss={final_loss:.6e}")
+    print(f"  mean ρ({RHO_LMIN}..{RHO_LMAX})  →  {rho_str}")
 
     _save_recon_plots(sky_truth, sky_alm, out_dir, lmax)
 
@@ -286,6 +324,8 @@ def run_cg(*, lmax, n_iters, engine, out_dir):
         method="cg", engine=engine, lmax=lmax, n_iters=n_iters,
         setup_s=setup_s, first_iter_s=first_iter_s, total_s=total_s,
         median_iter_s=median_iter_s, final_loss=final_loss,
+        rho_per_freq=rho_per_freq.tolist(),
+        rho_lmin=RHO_LMIN, rho_lmax=RHO_LMAX,
     )
     with open(os.path.join(out_dir, "meta.json"), "w") as fh:
         json.dump(meta, fh, indent=2)
@@ -295,20 +335,32 @@ def run_cg(*, lmax, n_iters, engine, out_dir):
         setup_s=setup_s, first_iter_s=first_iter_s, total_s=total_s,
         median_iter_s=median_iter_s, iter_times=None, n_iters=n_iters,
         loss_history=np.array([final_loss]),
-        final_loss=final_loss, sky_alm=np.asarray(sky_alm),
+        final_loss=final_loss,
+        rho_per_freq=rho_per_freq,
+        rho_check_iters=None, rho_history=None,
+        sky_alm=sky_alm_np,
     )
 
 
 # ── Runner 2/3: optax LBFGS (vanilla / whitened) ─────────────────────
 
-def run_lbfgs(*, lmax, target_loss, max_iters, memory, whiten, engine, out_dir):
-    """Run optax.lbfgs until loss <= target_loss (or max_iters reached)."""
+def run_lbfgs(*, lmax, target_rho_per_freq, max_iters, memory, whiten,
+              engine, out_dir, rho_check_every=10):
+    """Run optax.lbfgs until mean ρ(RHO_LMIN..RHO_LMAX) ≥ target at every
+    frequency (or ``max_iters`` reached).
+
+    ρ is computed every ``rho_check_every`` iterations: assemble the
+    physical (dewhitened) sky alm on GPU, transfer to CPU, run a few cheap
+    ``hp.alm2cl`` calls. At lmax≈32 this overhead is negligible per check."""
     import lusee
     os.makedirs(out_dir, exist_ok=True)
     label = "lbfgs_whiten" if whiten else "lbfgs"
+    target_str = "  ".join(f"{f:.0f}MHz:{r:.4f}"
+                            for f, r in zip(FREQ, target_rho_per_freq))
     print(f"\n=== {label} ===\n  engine={engine}  lmax={lmax}  "
-          f"max_iters={max_iters}  target_loss={target_loss:.6e}  "
-          f"whiten={whiten}  out={out_dir}")
+          f"max_iters={max_iters}  whiten={whiten}  "
+          f"check_every={rho_check_every}  out={out_dir}\n"
+          f"  target ρ({RHO_LMIN}..{RHO_LMAX}): {target_str}")
 
     t0 = time.time()
     sim, sky_truth, data, sigma, cl_inv = _build_setup(lusee, lmax, engine)
@@ -357,54 +409,77 @@ def run_lbfgs(*, lmax, target_loss, max_iters, memory, whiten, engine, out_dir):
 
     setup_s = time.time() - t0
 
+    target_rho_arr = np.asarray(target_rho_per_freq, dtype=np.float64)
+
+    def _current_sky_alm():
+        params_phys = lusee.sky.RealAlmSky(
+            re=params.re * sqrt_S_re, im_mpos=params.im_mpos * sqrt_S_im,
+            lmax=params.lmax, Nside=params.Nside, frame=params.frame,
+        )
+        return np.asarray(params_phys.mapalm)
+
     losses = np.empty(max_iters, dtype=np.float64)
     iter_times = np.empty(max_iters, dtype=np.float64)
+    rho_check_iters = []
+    rho_history = []  # list of length-nfreq arrays
     t_loop = time.time()
     t_prev = t_loop
     n_iters = 0
+    reached = False
     for it in range(max_iters):
         params, opt_state, val = step(params, opt_state)
         jax.block_until_ready(params.re)
         t_now = time.time()
-        loss_value = float(val)
-        losses[it] = loss_value
+        losses[it] = float(val)
         iter_times[it] = t_now - t_prev
         t_prev = t_now
         n_iters = it + 1
-        if loss_value <= target_loss:
-            break
+
+        is_check_iter = ((it + 1) % rho_check_every == 0) or (it == max_iters - 1)
+        if is_check_iter:
+            rhos = _mean_rho_per_freq(_current_sky_alm(), sky_truth)
+            rho_check_iters.append(it + 1)
+            rho_history.append(rhos)
+            if np.all(rhos >= target_rho_arr):
+                reached = True
+                break
     total_s = time.time() - t_loop
 
     losses = losses[:n_iters]
     iter_times = iter_times[:n_iters]
+    rho_check_iters = np.asarray(rho_check_iters, dtype=np.int64)
+    rho_history = np.asarray(rho_history, dtype=np.float64)
 
-    # Dewhiten params for plotting + the saved final loss.
-    params_phys = lusee.sky.RealAlmSky(
-        re=params.re * sqrt_S_re, im_mpos=params.im_mpos * sqrt_S_im,
-        lmax=params.lmax, Nside=params.Nside, frame=params.frame,
-    )
-    sky_alm = np.asarray(params_phys.mapalm)
+    sky_alm = _current_sky_alm()
 
     first_iter_s = float(iter_times[0])
-    median_iter_s = float(np.median(iter_times[1:])) if n_iters > 1 else first_iter_s
+    median_iter_s = (float(np.median(iter_times[1:])) if n_iters > 1
+                    else first_iter_s)
     final_loss = float(losses[-1])
-    reached = final_loss <= target_loss
+    final_rho = rho_history[-1] if len(rho_history) else _mean_rho_per_freq(
+        sky_alm, sky_truth)
+    rho_str = "  ".join(f"{f:.0f}MHz:{r:.4f}" for f, r in zip(FREQ, final_rho))
 
     print(f"  setup={setup_s:.1f}s  first_iter={first_iter_s:.2f}s  "
           f"total={total_s:.2f}s  per_iter≈{median_iter_s*1e3:.1f}ms  "
           f"n_iters={n_iters}  final_loss={final_loss:.6e}  "
           f"{'(reached target)' if reached else '(target NOT reached)'}")
+    print(f"  mean ρ({RHO_LMIN}..{RHO_LMAX})  →  {rho_str}")
 
     _save_recon_plots(sky_truth, sky_alm, out_dir, lmax)
     np.save(os.path.join(out_dir, "loss_history.npy"), losses)
     np.save(os.path.join(out_dir, "iter_times.npy"), iter_times)
+    np.save(os.path.join(out_dir, "rho_check_iters.npy"), rho_check_iters)
+    np.save(os.path.join(out_dir, "rho_history.npy"), rho_history)
 
     meta = dict(
         method=label, engine=engine, lmax=lmax,
         max_iters=max_iters, n_iters=n_iters, memory=memory, whiten=whiten,
-        target_loss=target_loss, target_reached=reached,
+        target_rho_per_freq=target_rho_arr.tolist(), target_reached=reached,
+        rho_lmin=RHO_LMIN, rho_lmax=RHO_LMAX, rho_check_every=rho_check_every,
         setup_s=setup_s, first_iter_s=first_iter_s, total_s=total_s,
         median_iter_s=median_iter_s, final_loss=final_loss,
+        final_rho_per_freq=final_rho.tolist(),
     )
     with open(os.path.join(out_dir, "meta.json"), "w") as fh:
         json.dump(meta, fh, indent=2)
@@ -413,7 +488,10 @@ def run_lbfgs(*, lmax, target_loss, max_iters, memory, whiten, engine, out_dir):
         method=label, out_dir=out_dir,
         setup_s=setup_s, first_iter_s=first_iter_s, total_s=total_s,
         median_iter_s=median_iter_s, iter_times=iter_times, n_iters=n_iters,
-        loss_history=losses, final_loss=final_loss, sky_alm=sky_alm,
+        loss_history=losses, final_loss=final_loss,
+        rho_per_freq=final_rho,
+        rho_check_iters=rho_check_iters, rho_history=rho_history,
+        sky_alm=sky_alm,
     )
 
 
@@ -422,15 +500,20 @@ def run_lbfgs(*, lmax, target_loss, max_iters, memory, whiten, engine, out_dir):
 def print_summary(results):
     methods = [r.method for r in results]
     rows = [
-        ("Total time (s)",         lambda r: f"{r.total_s:.2f}"),
-        ("# iters",                lambda r: f"{r.n_iters}"),
-        ("First iter / compile (s)", lambda r: f"{r.first_iter_s:.3f}"),
-        ("Per-iter after jit (s)", lambda r: f"{r.median_iter_s:.4f}"),
-        ("Setup (s)",              lambda r: f"{r.setup_s:.1f}"),
-        ("Final loss",             lambda r: f"{r.final_loss:.4e}"),
+        ("Total time (s)",            lambda r: f"{r.total_s:.2f}"),
+        ("# iters",                   lambda r: f"{r.n_iters}"),
+        ("First iter / compile (s)",  lambda r: f"{r.first_iter_s:.3f}"),
+        ("Per-iter after jit (s)",    lambda r: f"{r.median_iter_s:.4f}"),
+        ("Setup (s)",                 lambda r: f"{r.setup_s:.1f}"),
+        ("Final loss",                lambda r: f"{r.final_loss:.4e}"),
     ]
+    for fi, f in enumerate(FREQ):
+        rows.append((
+            f"mean ρ({RHO_LMIN}..{RHO_LMAX}) @ {f:.0f} MHz",
+            (lambda fi=fi: lambda r: f"{r.rho_per_freq[fi]:.4f}")(),
+        ))
     col = 18
-    header = f"{'metric':28s} | " + " | ".join(f"{m:>{col}s}" for m in methods)
+    header = f"{'metric':32s} | " + " | ".join(f"{m:>{col}s}" for m in methods)
     print()
     print("=" * len(header))
     print("Benchmark summary")
@@ -438,9 +521,13 @@ def print_summary(results):
     print(header)
     print("-" * len(header))
     for label, fn in rows:
-        row = f"{label:28s} | " + " | ".join(f"{fn(r):>{col}s}" for r in results)
+        row = f"{label:32s} | " + " | ".join(f"{fn(r):>{col}s}" for r in results)
         print(row)
     print("=" * len(header))
+
+
+_LBFGS_COLOR = {"lbfgs": "C1", "lbfgs_whiten": "C2"}
+_LBFGS_LABEL = {"lbfgs": "LBFGS", "lbfgs_whiten": "LBFGS + whiten"}
 
 
 def plot_loss_curves(results, out_path):
@@ -450,20 +537,48 @@ def plot_loss_curves(results, out_path):
         ax.axhline(cg.final_loss, color="C0", ls="--", lw=1.5,
                    label=f"CG final ({cg.n_iters} iters, {cg.total_s:.0f}s)")
     for r in results:
-        if r.method == "lbfgs":
+        if r.method in _LBFGS_COLOR:
             ax.semilogy(np.arange(1, len(r.loss_history) + 1),
-                        r.loss_history, color="C1", lw=1.5,
-                        label=f"LBFGS ({r.n_iters} iters, {r.total_s:.0f}s)")
-        elif r.method == "lbfgs_whiten":
-            ax.semilogy(np.arange(1, len(r.loss_history) + 1),
-                        r.loss_history, color="C2", lw=1.5,
-                        label=f"LBFGS + whiten ({r.n_iters} iters, {r.total_s:.0f}s)")
+                        r.loss_history, color=_LBFGS_COLOR[r.method], lw=1.5,
+                        label=f"{_LBFGS_LABEL[r.method]} "
+                              f"({r.n_iters} iters, {r.total_s:.0f}s)")
     ax.set_yscale("log")
     ax.set_xlabel("iteration")
     ax.set_ylabel(r"loss = $\chi^2 + \theta^{T} S_{\rm real}^{-1} \theta$")
-    ax.set_title("CG vs LBFGS vs LBFGS+whitening")
+    ax.set_title("CG vs LBFGS vs LBFGS+whitening (loss)")
     ax.legend()
     ax.grid(True, which="both", ls=":", alpha=0.4)
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+
+
+def plot_rho_curves(results, out_path):
+    """One subplot per frequency, showing CG-final dashed lines + LBFGS rho trajectories."""
+    nfreq = len(FREQ)
+    fig, axes = plt.subplots(1, nfreq, figsize=(5.5 * nfreq, 4.5),
+                              sharey=True)
+    if nfreq == 1:
+        axes = [axes]
+    cg = next((r for r in results if r.method == "cg"), None)
+    for fi, (ax, f) in enumerate(zip(axes, FREQ)):
+        if cg is not None:
+            ax.axhline(cg.rho_per_freq[fi], color="C0", ls="--", lw=1.5,
+                       label=f"CG final ({cg.n_iters} iters, {cg.total_s:.0f}s)")
+        for r in results:
+            if r.method in _LBFGS_COLOR and r.rho_history is not None and len(r.rho_history):
+                ax.plot(r.rho_check_iters, r.rho_history[:, fi],
+                        color=_LBFGS_COLOR[r.method], marker="o", ms=3, lw=1.2,
+                        label=f"{_LBFGS_LABEL[r.method]} "
+                              f"({r.n_iters} iters, {r.total_s:.0f}s)")
+        ax.set_xlabel("iteration")
+        if fi == 0:
+            ax.set_ylabel(rf"mean $\rho({RHO_LMIN}..{RHO_LMAX})$")
+        ax.set_title(f"{f:.0f} MHz")
+        ax.set_ylim(-0.05, 1.05)
+        ax.grid(True, which="both", ls=":", alpha=0.4)
+        ax.legend(loc="lower right", fontsize=8)
+    fig.suptitle(r"Reconstruction fidelity $\rho_\ell$ vs iteration")
     plt.tight_layout()
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
@@ -479,20 +594,35 @@ def parse_args():
     p.add_argument("--cg_iters", type=int, default=4000,
                    help="Fixed number of CG iterations (defines target loss).")
     p.add_argument("--max_lbfgs_iters", type=int, default=80000,
-                   help="Cap on LBFGS iters; loop exits early on target-loss.")
+                   help="Cap on LBFGS iters; loop exits early on target-ρ.")
     p.add_argument("--memory", type=int, default=20,
                    help="LBFGS history length.")
+    p.add_argument("--rho_check_every", type=int, default=10,
+                   help="Compute mean ρ every N LBFGS iterations.")
     p.add_argument("--out", default=None,
                    help="Output root; default: examples/benchmark_<sim>_lmax<L>/")
     p.add_argument("--skip_cg", action="store_true",
-                   help="Skip CG; require --target_loss instead.")
+                   help="Skip CG; requires --target_rho.")
     p.add_argument("--skip_lbfgs", action="store_true",
                    help="Skip vanilla LBFGS.")
     p.add_argument("--skip_lbfgs_whiten", action="store_true",
                    help="Skip whitened LBFGS.")
-    p.add_argument("--target_loss", type=float, default=None,
-                   help="Override CG target (useful when --skip_cg).")
+    p.add_argument("--target_rho", default=None,
+                   help="Override CG-derived target. Either a single float "
+                        "(applied to all frequencies) or a comma-separated "
+                        "list with one entry per frequency.")
     return p.parse_args()
+
+
+def _parse_target_rho(s, nfreq):
+    """Accept '0.95' or '0.95,0.93,0.91'."""
+    parts = [float(x) for x in s.split(",")]
+    if len(parts) == 1:
+        parts = parts * nfreq
+    if len(parts) != nfreq:
+        raise SystemExit(
+            f"--target_rho must have 1 or {nfreq} comma-separated values, got {len(parts)}")
+    return np.asarray(parts, dtype=np.float64)
 
 
 def main():
@@ -512,41 +642,47 @@ def main():
             engine=args.sim, out_dir=os.path.join(out_root, "cg"),
         ))
 
-    if args.target_loss is not None:
-        target = args.target_loss
+    if args.target_rho is not None:
+        target_rho = _parse_target_rho(args.target_rho, len(FREQ))
     elif results:
-        target = results[0].final_loss
+        target_rho = results[0].rho_per_freq
     else:
-        raise SystemExit("Need either CG run or --target_loss to set the target.")
+        raise SystemExit("Need either CG run or --target_rho to set the target.")
 
     if not args.skip_lbfgs:
         results.append(run_lbfgs(
-            lmax=args.lmax, target_loss=target,
+            lmax=args.lmax, target_rho_per_freq=target_rho,
             max_iters=args.max_lbfgs_iters, memory=args.memory,
             whiten=False, engine=args.sim,
+            rho_check_every=args.rho_check_every,
             out_dir=os.path.join(out_root, "lbfgs"),
         ))
 
     if not args.skip_lbfgs_whiten:
         results.append(run_lbfgs(
-            lmax=args.lmax, target_loss=target,
+            lmax=args.lmax, target_rho_per_freq=target_rho,
             max_iters=args.max_lbfgs_iters, memory=args.memory,
             whiten=True, engine=args.sim,
+            rho_check_every=args.rho_check_every,
             out_dir=os.path.join(out_root, "lbfgs_whiten"),
         ))
 
     print_summary(results)
     plot_loss_curves(results, os.path.join(out_root, "loss_curves.png"))
+    plot_rho_curves(results, os.path.join(out_root, "rho_curves.png"))
 
     summary = {r.method: dict(
         out_dir=r.out_dir, setup_s=r.setup_s, first_iter_s=r.first_iter_s,
         total_s=r.total_s, median_iter_s=r.median_iter_s,
         n_iters=r.n_iters, final_loss=r.final_loss,
+        rho_per_freq=r.rho_per_freq.tolist(),
     ) for r in results}
     with open(os.path.join(out_root, "summary.json"), "w") as fh:
         json.dump({
             "sim": args.sim, "lmax": args.lmax, "freq": FREQ.tolist(),
-            "target_loss": target, "results": summary,
+            "target_rho_per_freq": target_rho.tolist(),
+            "rho_lmin": RHO_LMIN, "rho_lmax": RHO_LMAX,
+            "results": summary,
         }, fh, indent=2)
 
     print(f"\nAll outputs in: {out_root}")
