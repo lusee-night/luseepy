@@ -14,8 +14,8 @@ from .frequencies import ALL_FREQUENCIES_MHZ, canonicalize_frequencies
 @jax.tree_util.register_pytree_node_class
 class ConstSky:
     """
-    Class that initializes a healpix sky map with a frequency dependent monopole signal given by one of the available Constant Sky models: 
-    1) the Cane (1979) radio background model, or 
+    Class that initializes a healpix sky map with a frequency dependent monopole signal given by one of the available Constant Sky models:
+    1) the Cane (1979) radio background model, or
     2) the Dark Ages monopole model
 
     :param Nside: Size of Healpix map to create
@@ -82,7 +82,7 @@ class ConstSky:
         """
         ndx = jnp.atleast_1d(jnp.asarray(ndx))
         return jnp.full(ndx.shape, self._T) if type(self._T)==float else self._T[ndx]
-    
+
 
     def get_alm(self, ndx, freq=None):
         """
@@ -123,7 +123,7 @@ class DarkAgesMonopole(ConstSky):
     :type Nside: int
     :param lmax: Maximum l value for maps
     :type lmax: int
-    :param scaled: Whether to generate maps from frequency scaled model (True), or temperature list model (False) 
+    :param scaled: Whether to generate maps from frequency scaled model (True), or temperature list model (False)
     :type scaled: bool
     :param nu_min: Frequency of the minimum of the Dark Ages trough
     :type nu_min: float
@@ -141,7 +141,7 @@ class DarkAgesMonopole(ConstSky):
             T = T_DarkAges_Scaled(self.freq, nu_min, nu_rms, A)
         else:
             T = T_DarkAges(self.freq)
-        ConstSky.__init__(self, Nside, lmax, T, self.freq)  
+        ConstSky.__init__(self, Nside, lmax, T, self.freq)
 
 @jax.tree_util.register_pytree_node_class
 class GalCenter (ConstSky):
@@ -182,10 +182,10 @@ class HealpixSky:
     :param maps: List of healpix maps to use as sky model, one for each frequency in freq list
     :type maps: list of arrays
     :param freq: List of frequencies at which to make sky maps.
-    :type freq: list    
+    :type freq: list
     :param frame: Coordinate frame of the sky maps (default: "galactic", also accepts "equatorial" and "ecliptic")
     :type frame: str
-    
+
     """
     def __init__ (self, Nside, lmax, maps, freq=None, frame="galactic"):
         self.Nside = Nside
@@ -215,7 +215,10 @@ class HealpixSky:
         sky.Nside = Nside
         sky.Npix = Nside**2 * 12
         sky.maps = None
-        sky.freq = jnp.asarray(freq)
+        # numpy (not jnp) — freq lives in aux_data as a static tuple.
+        # Using jnp.asarray here would lift it to a tracer under jit and
+        # break the next tree_flatten (np.asarray(tracer).tolist() fails).
+        sky.freq = np.asarray(freq)
         sky.mapalm = mapalm
         sky.frame = frame
         return sky
@@ -234,6 +237,105 @@ class HealpixSky:
         """
         ndx = jnp.atleast_1d(jnp.asarray(ndx))
         return self.mapalm[ndx]
+
+
+def _real_alm_indices(lmax):
+    """healpy alm indices split by m: (m==0, m>0)."""
+    m0 = np.array([hp.Alm.getidx(lmax, l, 0) for l in range(lmax + 1)])
+    nalm = (lmax + 1) * (lmax + 2) // 2
+    mpos = np.array([i for i in range(nalm) if i not in m0])
+    return m0, mpos
+
+
+@jax.tree_util.register_pytree_node_class
+class RealAlmSky:
+    """Sky parameterised by real degrees of freedom only.
+
+    Leaves:
+      re       : (nfreq, nalm) real   — Re(a_{l,m}) for all m
+      im_mpos  : (nfreq, n_mpos) real — Im(a_{l,m}) for m > 0 only
+
+    Im(a_{l,0}) is not a parameter: it is zero for a real sky by construction.
+    The ``.mapalm`` property reassembles the complex healpy-packed alm that
+    simulators expect, so this class is a drop-in for HealpixSky wherever a
+    simulator accesses ``sky.frame``, ``sky.get_alm(ndx)``, or ``sky.mapalm``.
+
+    Use ``prior_inv_diag(cl_inv_full)`` to get the real-coord 1/C_l diagonal
+    with the factor of 2 baked in on m>0 entries (see Camacho et al. 2026 +
+    MapMaker's real-θ parameterisation).
+    """
+
+    frame = "galactic"
+
+    def __init__(self, re, im_mpos, lmax, Nside=None, frame="galactic"):
+        self.re = re
+        self.im_mpos = im_mpos
+        self.lmax = lmax
+        self.Nside = Nside
+        self.frame = frame
+
+    @classmethod
+    def from_healpix(cls, sky, lmax):
+        """Split a HealpixSky's complex alm into real leaves."""
+        alm = jnp.asarray(sky.mapalm)
+        _, mpos_idx = _real_alm_indices(lmax)
+        return cls(
+            re=jnp.real(alm),
+            im_mpos=jnp.imag(alm)[:, mpos_idx],
+            lmax=lmax,
+            Nside=getattr(sky, "Nside", None),
+            frame=sky.frame,
+        )
+
+    @classmethod
+    def zeros_like(cls, sky, lmax):
+        """Zero-init a RealAlmSky matching a HealpixSky's shape."""
+        nfreq, nalm = sky.mapalm.shape
+        _, mpos_idx = _real_alm_indices(lmax)
+        return cls(
+            re=jnp.zeros((nfreq, nalm)),
+            im_mpos=jnp.zeros((nfreq, len(mpos_idx))),
+            lmax=lmax,
+            Nside=getattr(sky, "Nside", None),
+            frame=sky.frame,
+        )
+
+    @property
+    def mapalm(self):
+        """Complex healpy-packed alm, reassembled from the real leaves."""
+        _, mpos_idx = _real_alm_indices(self.lmax)
+        im_full = jnp.zeros_like(self.re).at[:, mpos_idx].set(self.im_mpos)
+        return self.re + 1j * im_full
+
+    def get_alm(self, ndx, freq=None):
+        ndx = jnp.atleast_1d(jnp.asarray(ndx))
+        return self.mapalm[ndx]
+
+    def prior_inv_diag(self, cl_inv_full):
+        """Real-coord 1/C_l diagonal for the Gaussian log-prior.
+
+        Takes a per-(nfreq, nalm) array of 1/C_l (e.g. from ``alm2cl``
+        broadcast over m) and returns ``(re_diag, im_diag)`` matching the
+        leaves. Encodes ``E[Re(a_{l,0})²] = C_l`` and
+        ``E[Re/Im(a_{l,m>0})²] = C_l/2`` — i.e. the m>0 entries get the
+        ×2 factor.
+        """
+        _, mpos_idx = _real_alm_indices(self.lmax)
+        re_diag = cl_inv_full.at[:, mpos_idx].multiply(2.0)
+        im_diag = 2.0 * cl_inv_full[:, mpos_idx]
+        return re_diag, im_diag
+
+    def tree_flatten(self):
+        children = (self.re, self.im_mpos)
+        aux = (self.lmax, self.Nside, self.frame)
+        return children, aux
+
+    @classmethod
+    def tree_unflatten(cls, aux, children):
+        lmax, Nside, frame = aux
+        re, im_mpos = children
+        return cls(re=re, im_mpos=im_mpos, lmax=lmax, Nside=Nside, frame=frame)
+
 
 @jax.tree_util.register_pytree_node_class
 class FitsSky (HealpixSky):
@@ -257,7 +359,7 @@ class FitsSky (HealpixSky):
             as_jax=True,
         )
         super().__init__(Nside=hp.npix2nside(maps.shape[1]), lmax=lmax, maps=maps, freq=freq, frame="galactic")
-        
+
 
 @jax.tree_util.register_pytree_node_class
 class SingleSourceHealpixSky (HealpixSky):
@@ -297,14 +399,14 @@ class SingleSourceHealpixSky (HealpixSky):
             self.frame = "galactic"
             theta = jnp.pi / 2 - jnp.radians(b_deg)
             phi = jnp.radians(l_deg) % (2 * jnp.pi)
- 
+
         pix = hp.ang2pix(Nside, float(theta), float(phi))
         Npix = Nside**2 * 12
         map = jnp.zeros(Npix)
         map = map.at[pix].set(1.0)
         map  = map[None,:]*T[:,None]
         super().__init__(Nside, 3*Nside-1, map, freq=freq, frame=self.frame)
-        
+
 
 @jax.tree_util.register_pytree_node_class
 class HarmonicPointSourceSky:
@@ -384,7 +486,8 @@ class HarmonicPointSourceSky:
         alm, T = children
         sky = cls.__new__(cls)
         sky.lmax = lmax
-        sky.freq = jnp.asarray(freq)
+        # numpy (not jnp) — see HealpixSky.tree_unflatten for rationale.
+        sky.freq = np.asarray(freq)
         sky.frame = frame
         sky._alm = alm
         sky._T = T
