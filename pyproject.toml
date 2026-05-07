@@ -25,6 +25,7 @@ dependencies = [
     "croissant-sim==5.1.3",
     "pytest>=9.0.2",
     "optax>=0.2.8",
+    "saturn-notebook>=1.3.0",
 ]
 [project.optional-dependencies]
 croissant = [

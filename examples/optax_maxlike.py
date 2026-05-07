@@ -3,6 +3,10 @@ Minimise the Camacho et al. 2026 log-posterior with JAX + optax:
 
     L(m) = (d - A m)^T N^{-1} (d - A m) + m^T S^{-1} m
 
+This is 2 * the Bayesian -log P: the 1/2 factors of Eq. 336 in the
+paper are dropped. Same minimum as the paper, but the printed
+``final_loss`` is twice the canonical -log P value.
+
 Sky is parameterised by real DOFs via ``lusee.sky.RealAlmSky``
 (leaves: ``re`` over all m, ``im_mpos`` over m>0), so ``Im(a_{l,0})`` is
 not a parameter and the Gaussian prior's factor-of-2 on m>0 entries is

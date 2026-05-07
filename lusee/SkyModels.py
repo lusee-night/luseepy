@@ -14,8 +14,8 @@ from .frequencies import ALL_FREQUENCIES_MHZ, canonicalize_frequencies
 @jax.tree_util.register_pytree_node_class
 class ConstSky:
     """
-    Class that initializes a healpix sky map with a frequency dependent monopole signal given by one of the available Constant Sky models: 
-    1) the Cane (1979) radio background model, or 
+    Class that initializes a healpix sky map with a frequency dependent monopole signal given by one of the available Constant Sky models:
+    1) the Cane (1979) radio background model, or
     2) the Dark Ages monopole model
 
     :param Nside: Size of Healpix map to create
@@ -82,7 +82,7 @@ class ConstSky:
         """
         ndx = jnp.atleast_1d(jnp.asarray(ndx))
         return jnp.full(ndx.shape, self._T) if type(self._T)==float else self._T[ndx]
-    
+
 
     def get_alm(self, ndx, freq=None):
         """
@@ -123,7 +123,7 @@ class DarkAgesMonopole(ConstSky):
     :type Nside: int
     :param lmax: Maximum l value for maps
     :type lmax: int
-    :param scaled: Whether to generate maps from frequency scaled model (True), or temperature list model (False) 
+    :param scaled: Whether to generate maps from frequency scaled model (True), or temperature list model (False)
     :type scaled: bool
     :param nu_min: Frequency of the minimum of the Dark Ages trough
     :type nu_min: float
@@ -141,7 +141,7 @@ class DarkAgesMonopole(ConstSky):
             T = T_DarkAges_Scaled(self.freq, nu_min, nu_rms, A)
         else:
             T = T_DarkAges(self.freq)
-        ConstSky.__init__(self, Nside, lmax, T, self.freq)  
+        ConstSky.__init__(self, Nside, lmax, T, self.freq)
 
 @jax.tree_util.register_pytree_node_class
 class GalCenter (ConstSky):
@@ -182,10 +182,10 @@ class HealpixSky:
     :param maps: List of healpix maps to use as sky model, one for each frequency in freq list
     :type maps: list of arrays
     :param freq: List of frequencies at which to make sky maps.
-    :type freq: list    
+    :type freq: list
     :param frame: Coordinate frame of the sky maps (default: "galactic", also accepts "equatorial" and "ecliptic")
     :type frame: str
-    
+
     """
     def __init__ (self, Nside, lmax, maps, freq=None, frame="galactic"):
         self.Nside = Nside
@@ -359,7 +359,7 @@ class FitsSky (HealpixSky):
             as_jax=True,
         )
         super().__init__(Nside=hp.npix2nside(maps.shape[1]), lmax=lmax, maps=maps, freq=freq, frame="galactic")
-        
+
 
 @jax.tree_util.register_pytree_node_class
 class SingleSourceHealpixSky (HealpixSky):
@@ -399,14 +399,14 @@ class SingleSourceHealpixSky (HealpixSky):
             self.frame = "galactic"
             theta = jnp.pi / 2 - jnp.radians(b_deg)
             phi = jnp.radians(l_deg) % (2 * jnp.pi)
- 
+
         pix = hp.ang2pix(Nside, float(theta), float(phi))
         Npix = Nside**2 * 12
         map = jnp.zeros(Npix)
         map = map.at[pix].set(1.0)
         map  = map[None,:]*T[:,None]
         super().__init__(Nside, 3*Nside-1, map, freq=freq, frame=self.frame)
-        
+
 
 @jax.tree_util.register_pytree_node_class
 class HarmonicPointSourceSky:

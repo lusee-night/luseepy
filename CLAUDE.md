@@ -126,6 +126,31 @@ Reads simulator FITS output. Extends `Observation`. Indexed as `D[:, '01I', :]` 
 
 Other drivers in `simulation/driver/`: `run_Cro_sim.py`, `run_calibrator_sim.py` (+ `calibrator_sim_driver.py`), `run_batch.py`.
 
+## macOS gotcha: `import lusee` at script scope
+
+On macOS, `import lusee` triggers `lunarsky.spice_utils.furnish_kernels()`
+at import time, which uses `multiprocessing` to download/verify SPICE
+kernels. Under Python 3.12's default `spawn` start method each worker
+re-runs the script, so if `import lusee` lives at module scope it
+executes again in every child, producing recursive import storms with
+tracebacks like
+
+```
+File ".../multiprocessing/spawn.py", line 297, in _fixup_main_from_path
+  main_content = runpy.run_path(main_path, ...)
+File ".../examples/<script>.py", line N, in <module>
+  import lusee
+...
+File ".../lunarsky/spice_utils.py", line 64, in furnish_kernels
+```
+
+Wrapping the entrypoint in `if __name__ == "__main__": main()` is
+*not* enough by itself — the top-level `import lusee` still runs in
+every child during `runpy.run_path`. Fix: move `import lusee` **inside**
+`main()`, and pass the module (or the specific classes you need) as an
+argument to any helper that needs it. See
+`examples/optax_maxlike.py` for a working pattern.
+
 ## Coordinate Conventions
 
 - Beam files use theta (0=zenith) × phi (0–360°) grids with wraparound at last phi bin (phi[0] == phi[-1] for most operations; the `-1` index is dropped in alm computation)
