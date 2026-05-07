@@ -119,6 +119,8 @@ def solve(sim, data, sky_template, sigma,
     :param method: 'cg' for conjugate gradients (default), 'direct' for
         dense Cholesky (exact but O(n_theta^3), feasible for n_theta < ~5000).
         The paper (Camacho et al. 2026) uses direct inversion.
+        NOTE: 'direct' is only correct for nfreq == 1; the multi-frequency
+        path is broken (see _solve_direct).
     :returns: Recovered sky mapalm array (same shape as sky_template.mapalm)
     """
     _, aux = sky_template.tree_flatten()
@@ -181,7 +183,7 @@ def solve(sim, data, sky_template, sigma,
                              data, nfreq, n_theta)
 
     def cg_matvec(theta):
-        """(A^T A / σ² + S^{-1}) θ  — real symmetric operator."""
+        """(A^T N^{-1} A + S^{-1}) θ  — real symmetric operator."""
         fwd, vjp_fn = jax.vjp(A, theta)
         return vjp_fn(N_inv * fwd)[0] + S_inv_real * theta
 
@@ -209,6 +211,13 @@ def solve(sim, data, sky_template, sigma,
 
 def _solve_direct(A, theta_to_alm, N_inv, S_inv_real, data, nfreq, n_theta):
     """Exact solve via Jacobian + Cholesky (same as Camacho et al. 2026).
+
+    BROKEN for nfreq > 1. The Jacobian build loop perturbs only the
+    freq-0 entry of theta, so the assembled J has shape
+    (ndata, n_theta) rather than (ndata, nfreq*n_theta), and the H
+    assembly mixes (n_theta, n_theta) with a (nfreq*n_theta,
+    nfreq*n_theta) prior diagonal -- it errors out at runtime.
+    Use method='cg' for multi-frequency inputs.
 
     Builds the Jacobian column-by-column using the linearity of A,
     forms the normal matrix H = J^T N^{-1} J + S^{-1}, and solves
