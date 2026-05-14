@@ -42,7 +42,8 @@ class CalibratorSimDriver(dict):
                 angle = bdc.get("common_beam_angle", 0) + cbeam.get("angle", 0)
                 print(f"  Creating Gaussian beam {b}, angle={angle}")
                 B = lusee.BeamGauss(
-                    dec_deg=cbeam["declination"],
+                    alt_deg=cbeam["altitude"],
+                    az_deg=cbeam["azimuth"],
                     sigma_deg=cbeam["sigma"],
                     one_over_freq_scaling=cbeam.get("one_over_freq_scaling", False),
                     id=b,

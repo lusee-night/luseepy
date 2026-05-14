@@ -7,10 +7,10 @@ beam_config:
   type: Gaussian          # no FITS needed for the example
 
 beams:
-  N: {declination: 0, sigma: 20}
-  E: {declination: 0, sigma: 20, angle: 90}
-  S: {declination: 0, sigma: 20, angle: 180}
-  W: {declination: 0, sigma: 20, angle: 270}
+  N: {altitude: 90.0, azimuth: 0, sigma: 20}
+  E: {altitude: 90.0, azimuth: 0, sigma: 20, angle: 90}
+  S: {altitude: 90.0, azimuth: 0, sigma: 20, angle: 180}
+  W: {altitude: 90.0, azimuth: 0, sigma: 20, angle: 270}
 
 satellite:
   # Orbital parameters (defaults match lusee.Satellite defaults)
