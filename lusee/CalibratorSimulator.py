@@ -65,6 +65,7 @@ class CalibratorSimulator:
                 pol = track.polarization[ti]
                 #this phase ramp is the same for all beams at this time index, but changes from time index to time index
                 phase_ramp = 1j*np.random.uniform(0, 2*np.pi)*track.tone_freqs/track.tone_freqs[0]
+                phase_correction = None
                 for bi, (iEt, iEp) in enumerate(self.interpolators):
                     sim_freqs = self.sim_freqs[bi]
                     if track.tone_freqs.min() < sim_freqs[0] or track.tone_freqs.max() > sim_freqs[-1]:
@@ -80,8 +81,10 @@ class CalibratorSimulator:
                     pass_result[ti, bi, :] = (
                         track.tone_amplitude * (Et * np.cos(pol) + Ep * np.sin(pol))
                     )
-                    # now phase correction. Phase rotate so that Et is purely real and add a random omega*t term to simulate phase noise
-                    phase_correction = np.exp(-1j * np.angle(Et)+1j*phase_ramp)
+                    # now phase correction. Phase rotate so that Et is purely real for antenna 0. Need to think this through. [AS]
+                    # 
+                    if phase_correction is None:
+                        phase_correction = np.exp(-1j * np.angle(Et)+1j*phase_ramp)
                     pass_result[ti, bi, :] *= phase_correction
                 
 
