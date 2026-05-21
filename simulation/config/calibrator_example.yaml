@@ -14,8 +14,7 @@ beams:
 
 satellite:
   # Orbital parameters (defaults match lusee.Satellite defaults)
-  tone_freqs: [10.0, 12.0, 14.0, 16.0, 18.0, 20.0]  # MHz
-  tone_amplitude: 200.0                                 # same units as sky temperature
+  waveform: default  # default or alt
 
 observation:
   lunar_day: 2501

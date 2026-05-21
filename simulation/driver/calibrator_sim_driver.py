@@ -77,12 +77,10 @@ class CalibratorSimDriver(dict):
         lusee    = self._lusee
         sat_conf = self["satellite"]
 
-        tone_freqs = np.array(sat_conf["tone_freqs"], dtype=float)
-        amp_cfg    = sat_conf["tone_amplitude"]
-        if np.isscalar(amp_cfg):
-            tone_amplitude = np.full(len(tone_freqs), float(amp_cfg))
-        else:
-            tone_amplitude = np.array(amp_cfg, dtype=float)
+        waveform = sat_conf.get("waveform", "default")
+        tone_freqs, tone_amplitude = lusee.return_calibrator_waveform_coefficients(waveform)
+        tone_freqs = np.asarray(tone_freqs, dtype=float)
+        tone_amplitude = np.asarray(tone_amplitude, dtype=complex)
 
         sat_kwargs = {}
         for key in ("semi_major_km", "eccentricity", "inclination_deg",

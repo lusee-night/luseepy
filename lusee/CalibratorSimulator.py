@@ -12,11 +12,11 @@ class CalibratorSimulator:
 
     Result: list of complex arrays, one per pass, shape (NTime, NBeam, NFreq).
 
-    Signal formula for pass p, time t, beam b, frequency f::
+    Signal formula for pass p, time t, beam b, tone frequency f::
 
-        E_theta = beam_b.interp_Etheta(alt_t, az_t, tone_freqs[f])
-        E_phi   = beam_b.interp_Ephi  (alt_t, az_t, tone_freqs[f])
-        result[p][t, b, f] = tone_amplitude[t] * (E_theta * cos(pol_t) + E_phi * sin(pol_t))
+        E_theta = interp_to_tone_freqs(beam_b.interp_Etheta(alt_t, az_t, beam_freqs))
+        E_phi   = interp_to_tone_freqs(beam_b.interp_Ephi  (alt_t, az_t, beam_freqs))
+        result[p][t, b, f] = tone_amplitude[f] * (E_theta * cos(pol_t) + E_phi * sin(pol_t))
 
     :param obs: Observation object with calibrator_tracks populated
     :param beams: List of Beam (or BeamGauss) objects
@@ -28,6 +28,21 @@ class CalibratorSimulator:
         self.result = None
         # Build interpolators once — beam patterns are constant across all passes
         self.interpolators = [b.get_Efield_interpolator() for b in beams]
+        self.sim_freqs = [self._beam_sim_freqs(b) for b in beams]
+
+    @staticmethod
+    def _beam_sim_freqs(beam):
+        freqs = np.asarray(beam.freq, dtype=float)
+        freqs = freqs[(freqs >= 10.0) & (freqs <= 50.0)]
+        if len(freqs) < 2:
+            raise ValueError("Beam must provide at least two frequencies between 10 and 50 MHz")
+        return np.sort(freqs)
+
+    @staticmethod
+    def _interp_complex(x, xp, fp):
+        real = np.interp(x, xp, fp.real)
+        imag = np.interp(x, xp, fp.imag)
+        return real + 1j * imag
 
     def simulate(self):
         """
@@ -48,14 +63,27 @@ class CalibratorSimulator:
                 alt = track.alt[ti]
                 az  = track.az[ti]
                 pol = track.polarization[ti]
-
+                #this phase ramp is the same for all beams at this time index, but changes from time index to time index
+                phase_ramp = 1j*np.random.uniform(0, 2*np.pi)*track.tone_freqs/track.tone_freqs[0]
                 for bi, (iEt, iEp) in enumerate(self.interpolators):
-                    # Vectorize over all tone freqs at once
-                    Et = iEt(alt, az, track.tone_freqs)   # shape (NFreq,)
-                    Ep = iEp(alt, az, track.tone_freqs)   # shape (NFreq,)
+                    sim_freqs = self.sim_freqs[bi]
+                    if track.tone_freqs.min() < sim_freqs[0] or track.tone_freqs.max() > sim_freqs[-1]:
+                        raise ValueError(
+                            "Tone frequencies must lie within the beam simulation "
+                            f"frequency range [{sim_freqs[0]}, {sim_freqs[-1]}] MHz"
+                        )
+
+                    Et_grid = np.asarray(iEt(alt, az, sim_freqs), dtype=complex)
+                    Ep_grid = np.asarray(iEp(alt, az, sim_freqs), dtype=complex)
+                    Et = self._interp_complex(track.tone_freqs, sim_freqs, Et_grid)
+                    Ep = self._interp_complex(track.tone_freqs, sim_freqs, Ep_grid)
                     pass_result[ti, bi, :] = (
                         track.tone_amplitude * (Et * np.cos(pol) + Ep * np.sin(pol))
                     )
+                    # now phase correction. Phase rotate so that Et is purely real and add a random omega*t term to simulate phase noise
+                    phase_correction = np.exp(-1j * np.angle(Et)+1j*phase_ramp)
+                    pass_result[ti, bi, :] *= phase_correction
+                
 
             self.result.append(pass_result)
         return self.result

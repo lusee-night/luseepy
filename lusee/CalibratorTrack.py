@@ -16,7 +16,7 @@ class CalibratorTrack:
     :param polarization: Spin-2 polarization angle in radians
         (0 = pure E_theta, pi/2 = pure E_phi)
     :param tone_freqs: Tone frequencies in MHz — NFreq values, independent of NTime
-    :param tone_amplitude: Tone amplitudes (same units as sky temperature),
+    :param tone_amplitude: Complex tone amplitudes (same units as sky temperature),
         one per frequency (must match len(tone_freqs))
     """
 
@@ -26,7 +26,7 @@ class CalibratorTrack:
         az             = np.asarray(az,             dtype=float)
         polarization   = np.asarray(polarization,   dtype=float)
         tone_freqs     = np.asarray(tone_freqs,     dtype=float)
-        tone_amplitude = np.asarray(tone_amplitude, dtype=float)
+        tone_amplitude = np.asarray(tone_amplitude, dtype=complex)
 
         n = len(times)
         for name, arr in [

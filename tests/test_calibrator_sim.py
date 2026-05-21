@@ -13,7 +13,7 @@ from lusee import (
 )
 
 TONE_FREQS = np.array([10.0, 12.0, 14.0])        # MHz, NFreq=3
-TONE_AMP   = np.ones(len(TONE_FREQS))            # one amplitude per frequency
+TONE_AMP   = 1.0 + 1j * np.arange(len(TONE_FREQS))  # one amplitude per frequency
 
 # Angles match N/E/S/W layout used in the calibrator example config
 _BEAM_ANGLES = [0, 90, 180, 270]
@@ -88,10 +88,10 @@ def test_signal_nonzero(simulator):
         assert np.any(np.abs(res) > 0), f"Pass {p}: all results are zero"
 
 
-def test_polarization_zero_gives_real_signal(obs_and_tracks, beams):
+def test_polarization_zero_keeps_complex_tone_phase(obs_and_tracks, beams):
     """
     With polarization=0 and BeamGauss (Ephi=0, Etheta real),
-    result = amp * Etheta * cos(0) = amp * Etheta, which is real.
+    result = amp * Etheta * cos(0) = amp * Etheta, so the tone phase is preserved.
     """
     obs, tracks = obs_and_tracks
     if not tracks:
@@ -110,8 +110,22 @@ def test_polarization_zero_gives_real_signal(obs_and_tracks, beams):
     sim.simulate()
     res = sim.result[0]
 
-    # BeamGauss Etheta is real-valued; with pol=0, result should be real
+    nonzero = np.abs(track0.tone_amplitude) > 0
+    ratio = res[:, :, nonzero] / track0.tone_amplitude[nonzero]
     np.testing.assert_allclose(
-        res.imag, 0, atol=1e-10,
-        err_msg="With pol=0 and BeamGauss (Ephi=0, Etheta real), imaginary part should be zero"
+        ratio.imag, 0, atol=1e-10,
+        err_msg="With pol=0 and BeamGauss (Ephi=0, Etheta real), only tone amplitudes should carry phase"
     )
+
+
+def test_simulator_interpolates_from_beam_grid_to_tones(obs_and_tracks, beams):
+    obs, tracks = obs_and_tracks
+    if not tracks:
+        pytest.skip("No satellite passes found")
+
+    sim = CalibratorSimulator(obs, beams)
+    assert all(np.all((freqs >= 10.0) & (freqs <= 50.0)) for freqs in sim.sim_freqs)
+    sim.simulate()
+
+    for res, track in zip(sim.result, tracks):
+        assert res.shape[-1] == len(track.tone_freqs)
