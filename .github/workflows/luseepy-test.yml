@@ -20,8 +20,11 @@ jobs:
       JAX_ENABLE_X64: "True"
       MPLCONFIGDIR: /tmp/matplotlib
       UV_CACHE_DIR: /tmp/uv-cache
+      UNCRATER_PATH: ${{ github.workspace }}/../uncrater
     steps:
       - uses: actions/checkout@v4
+      - name: Clone uncrater (sibling checkout)
+        run: git clone --depth 1 https://github.com/lusee-night/uncrater.git "${{ github.workspace }}/../uncrater"
       - run: sudo apt-get update && sudo apt-get install -y curl wget gfortran build-essential pkg-config cmake libopenblas-dev libfftw3-dev
       - run: curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh
       - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"

@@ -11,6 +11,7 @@ the environment normally.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 
@@ -27,3 +28,11 @@ if _uncrater_path and _uncrater_path not in sys.path:
 _telemetry_path = os.environ.get("LUSEE_TELEMETRY_PATH")
 if _telemetry_path and _telemetry_path not in sys.path:
     sys.path.insert(0, _telemetry_path)
+
+# Skip the whole tests/ingest/ directory when uncrater isn't importable.
+# lusee.ingest.collation imports uncrater at module top, so every test file
+# here transitively requires it; collection would fail with ImportError
+# otherwise.
+collect_ignore_glob: list[str] = []
+if importlib.util.find_spec("uncrater") is None:
+    collect_ignore_glob = ["test_*.py"]
