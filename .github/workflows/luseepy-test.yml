@@ -29,6 +29,7 @@ jobs:
       - run: curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh
       - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: uv sync
+      - run: uv sync --extra ingest
       - run: wget "https://drive.google.com/uc?export=download&id=1PbU432IYAFSzOjWRrKMoGFR6F1M3dmaV" -O drive.tgz
       - run: tar zxvf drive.tgz
       - run: uv run pytest tests/ -v

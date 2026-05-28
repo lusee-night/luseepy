@@ -14,11 +14,11 @@ import struct
 from pathlib import Path
 
 
-pytest.importorskip("h5py")
 import numpy as np
 import pytest
 
 
+pytest.importorskip("h5py")
 pytest.importorskip("uncrater")
 
 # Resolve the FLASH_TLMFS fixture; skip the whole module when absent so

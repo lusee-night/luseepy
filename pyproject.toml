@@ -43,6 +43,9 @@ cuda13 = [
 # `uv pip install "uncrater @ git+https://github.com/lusee-night/uncrater"`.
 ingest = [
     "h5py",
+    "hexdump",
+    "icecream",
+    "scipy",
 ]
 dev = ["pytest>=7"]
 
