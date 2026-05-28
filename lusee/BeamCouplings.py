@@ -43,7 +43,7 @@ class BeamCouplings:
                 self.cross_powers[(c[1],c[0])] = cross_power
 
                 
-    def Ex_coupling (self, b1, b2, freq_ndx):
+    def Ex_coupling (self, b1, b2, freq_map):
         """
         Function that obtains E field cross coupling power for two input beams, b1 and b2
 
@@ -51,22 +51,20 @@ class BeamCouplings:
         :type b1: class
         :param b2: Beam two
         :type b2: class
-        :param freq_ndx: Frequency bin index at which to find cross power.
-        :type freq_ndx: int
+        :param freq_map: Interpolation map (see :func:`lusee.frequencies.interpolation_weights`)
+            from the simulator target frequencies to the beams' native frequency grid.
+        :type freq_map: lusee.frequencies.FrequencyMap
 
-        :returns: Cross power between two input beams 
-        :rtype: float
+        :returns: Cross power between two input beams at the target frequencies.
+        :rtype: numpy array of shape ``(N_target,)``
         """
-        
-        cross_power = self.cross_powers.get((b1.id,b2.id))
-        freq_ndx_arr = np.asarray(freq_ndx, dtype=np.int32)
+        from .frequencies import interp1d
+
+        cross_power = self.cross_powers.get((b1.id, b2.id))
+        ntarget = int(freq_map.alpha.shape[0])
         if cross_power is None:
-            cross_power = np.zeros_like(freq_ndx_arr, dtype=float)
-        else:
-            # JAX arrays do not allow list-based advanced indexing; normalize the
-            # frequency selection once at the boundary so both NumPy and JAX work.
-            cross_power = cross_power[freq_ndx_arr]
-        return cross_power
+            return np.zeros(ntarget, dtype=float)
+        return interp1d(freq_map, np.asarray(cross_power))
     
         
 

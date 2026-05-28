@@ -68,7 +68,7 @@ class SimDriver:
         import jax
 
     def _parse_base(self):
-        from lusee.frequencies import canonical_frequencies, frequency_indices_from_config
+        from lusee.frequencies import frequencies_from_config
 
         self.lmax = self.cfg["observation"]["lmax"]
         self.root = self.cfg["paths"]["lusee_drive_dir"]
@@ -82,8 +82,7 @@ class SimDriver:
         self.dt = od["dt"]
         if isinstance(self.dt, str):
             self.dt = eval(self.dt)
-        self.freq_indices = frequency_indices_from_config(od["freq"])
-        self.freq = canonical_frequencies(self.freq_indices)
+        self.freq = frequencies_from_config(od["freq"])
 
     def _parse_sky(self):
         lusee = self._lusee

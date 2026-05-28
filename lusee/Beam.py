@@ -17,7 +17,6 @@ import healpy as hp
 from scipy.special import sph_harm_y
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import RegularGridInterpolator
-from .frequencies import canonicalize_frequencies
 
 
 @lru_cache(maxsize=None)
@@ -337,7 +336,7 @@ class Beam:
             self.f_ground = jnp.asarray(fits['f_ground'].read())
         elif version==2:
             self.gain_conv = jnp.asarray(fits['gain_conv'].read())
-            self.freq = canonicalize_frequencies(fits['freq'].read(), as_jax=True)
+            self.freq = jnp.asarray(fits['freq'].read(), dtype=jnp.float64)
             
         self.freq_min = float(header['FREQ_MIN'])
         self.freq_max = float(header['FREQ_MAX'])
@@ -350,10 +349,7 @@ class Beam:
         self.Nphi = int(header['PHI_N'])
         self.header = header
         if version==1:
-            self.freq = canonicalize_frequencies(
-                np.linspace(self.freq_min, self.freq_max, self.Nfreq),
-                as_jax=True,
-            )
+            self.freq = jnp.linspace(self.freq_min, self.freq_max, self.Nfreq)
         self.theta_deg = jnp.linspace(self.theta_min, self.theta_max,self.Ntheta)
         self.phi_deg = jnp.linspace(self.phi_min, self.phi_max,self.Nphi)
         self.theta = self.theta_deg/180*jnp.pi

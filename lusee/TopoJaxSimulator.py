@@ -2,6 +2,7 @@ from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, rot2eul
+from .frequencies import interp1d
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -74,13 +75,15 @@ class TopoJaxSimulator(SimulatorBase):
         self._setup_simulation_kernels()
         self._log_timing("__init__._setup_simulation_kernels", t0)
         if self._debug_enabled:
+            nfreq_sky_str = "closed-form" if self.freq_ndx_sky is None else len(self.freq_ndx_sky)
             self._debug_print(
                 f"init summary: frame={self.sky_model.frame} lmax={self.lmax} "
-                f"nfreq={len(self.freq)} nfreq_sky={len(self.freq_ndx_sky)} "
+                f"nfreq={len(self.freq)} nfreq_sky={nfreq_sky_str} "
                 f"nfreq_beam={len(self.freq_ndx_beam)} ncomb={len(self.combinations)}"
             )
             self._debug_array_summary("freq", self.freq)
-            self._debug_array_summary("freq_ndx_sky", self.freq_ndx_sky)
+            if self.freq_ndx_sky is not None:
+                self._debug_array_summary("freq_ndx_sky", self.freq_ndx_sky)
             self._debug_array_summary("freq_ndx_beam", self.freq_ndx_beam)
             self._debug_array_summary("_output_beams", self._output_beams)
             self._debug_array_summary("_output_ground", self._output_ground)
@@ -156,32 +159,33 @@ class TopoJaxSimulator(SimulatorBase):
         self.beams = beams
         self.efbeams = []
         self.combinations = [(int(i), int(j)) for i, j in combinations]
-        beam_idx = jnp.asarray(np.array(self.freq_ndx_beam, dtype=np.int32))
+        fmap = self.freq_map_beam
 
         for i, j in self.combinations:
             bi, bj = beams[i], beams[j]
             print(f"  intializing beam combination {bi.id} x {bj.id} ...")
-            norm = jnp.sqrt(
-                jnp.asarray(bi.gain_conv)[beam_idx]
-                * jnp.asarray(bj.gain_conv)[beam_idx]
-            )
-            beamreal, beamimag = bi.get_healpix_alm(
+            gain_i = interp1d(fmap, jnp.asarray(bi.gain_conv))
+            gain_j = interp1d(fmap, jnp.asarray(bj.gain_conv))
+            norm = jnp.sqrt(gain_i * gain_j)
+            beamreal_native, beamimag_native = bi.get_healpix_alm(
                 self.lmax,
-                freq_ndx=self.freq_ndx_beam,
+                freq_ndx=fmap.unique_native_idx,
                 other=bj,
                 return_I_stokes_only=True,
                 return_complex_components=True,
             )
-            beamreal = jnp.asarray(beamreal) * norm[:, None]
-            if beamimag is not None:
-                beamimag = jnp.asarray(beamimag) * norm[:, None]
+            beamreal = jnp.asarray(interp1d(fmap, jnp.asarray(beamreal_native))) * norm[:, None]
+            if beamimag_native is not None:
+                beamimag = jnp.asarray(interp1d(fmap, jnp.asarray(beamimag_native))) * norm[:, None]
+            else:
+                beamimag = None
 
             if i == j:
                 ground_power_real = 1.0 - jnp.real(beamreal[:, 0]) / jnp.sqrt(4.0 * jnp.pi)
                 ground_power_imag = jnp.zeros_like(ground_power_real)
                 beamimag = None
             else:
-                cross_power = jnp.asarray(self.cross_power.Ex_coupling(bi, bj, self.freq_ndx_beam))
+                cross_power = jnp.asarray(self.cross_power.Ex_coupling(bi, bj, fmap))
                 print(f"    cross power is {cross_power[0]} ... {cross_power[-1]} ")
                 ground_power_real = cross_power - jnp.real(beamreal[:, 0]) / jnp.sqrt(4.0 * jnp.pi)
                 ground_power_imag = -jnp.real(beamimag[:, 0]) / jnp.sqrt(4.0 * jnp.pi)
@@ -436,7 +440,11 @@ class TopoJaxSimulator(SimulatorBase):
 
         Nt = len(times)
         t0 = time.perf_counter()
-        sky_base = jnp.asarray(self.sky_model.get_alm(self.freq_ndx_sky))
+        if hasattr(self.sky_model, "get_alm_at_freq"):
+            sky_base = jnp.asarray(self.sky_model.get_alm_at_freq(self.freq))
+        else:
+            sky_native = jnp.asarray(self.sky_model.get_alm(self.freq_map_sky.unique_native_idx))
+            sky_base = interp1d(self.freq_map_sky, sky_native)
         sky_base_flm = self._hp_to_full_flm_batch_jax(sky_base)
         self._block_ready(sky_base_flm)
         self._log_timing("simulate.sky_model.get_alm", t0)
