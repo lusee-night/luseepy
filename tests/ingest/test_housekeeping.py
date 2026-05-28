@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import h5py
 import numpy as np
 import pytest
+
+h5py = pytest.importorskip("h5py")
 
 from lusee.ingest.decode import HKSample, Products
 from lusee.ingest.hdf5_writer import write_hdf5
