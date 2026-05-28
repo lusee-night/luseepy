@@ -112,12 +112,21 @@ def _resolve_one(target: Path, *, prefer_format: str) -> List[Path]:
     primary_exts = _H5_EXTS if prefer_format == "h5" else _FITS_EXTS
     fallback_exts = _FITS_EXTS if prefer_format == "h5" else _H5_EXTS
 
-    primary = sorted(p for ext in primary_exts for p in target.rglob(f"*{ext}"))
-    if primary:
-        return primary
-    fallback = sorted(p for ext in fallback_exts for p in target.rglob(f"*{ext}"))
-    if fallback:
-        return fallback
+    primary = {
+        p.relative_to(target).with_suffix(""): p
+        for ext in primary_exts
+        for p in target.rglob(f"*{ext}")
+    }
+    fallback = {
+        p.relative_to(target).with_suffix(""): p
+        for ext in fallback_exts
+        for p in target.rglob(f"*{ext}")
+    }
+
+    resolved = dict(fallback)
+    resolved.update(primary)
+    if resolved:
+        return sorted(resolved.values())
     raise FileNotFoundError(
         f"no .h5 / .hdf5 / .fits files found under {target}"
     )
