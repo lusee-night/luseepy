@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from .MonoSkyModels import T_C, T_DarkAges, T_DarkAges_Scaled
-from .frequencies import ALL_FREQUENCIES_MHZ, canonicalize_frequencies
+from .frequencies import ALL_FREQUENCIES_MHZ
 
 @jax.tree_util.register_pytree_node_class
 class ConstSky:
@@ -42,7 +42,7 @@ class ConstSky:
             Tmap = jnp.where(theta>0.75*jnp.pi, 0.0, Tmap)
         self.mapalm = jnp.asarray(hp.map2alm(np.asarray(Tmap), lmax=lmax))
         self.frame = "MCMF"
-        self.freq = None if freq is None else canonicalize_frequencies(freq, as_jax=True)
+        self.freq = None if freq is None else jnp.asarray(freq, dtype=jnp.float64)
 
     def tree_flatten(self):
         children = (self.mapalm, self._T)
@@ -108,9 +108,19 @@ class ConstSkyCane1979(ConstSky):
     :type freq: list
     """
     def __init__(self, Nside, lmax, freq=None):
-        self.freq = ALL_FREQUENCIES_MHZ if freq is None else canonicalize_frequencies(freq, as_jax=True)
+        self.freq = ALL_FREQUENCIES_MHZ if freq is None else jnp.asarray(freq, dtype=jnp.float64)
         T = T_C(self.freq).value
         ConstSky.__init__(self, Nside, lmax, T, self.freq)
+
+    def get_alm_at_freq(self, target_freqs):
+        """Evaluate alm at arbitrary target frequencies in MHz.
+
+        Uses the closed-form Cane (1979) spectrum directly, so any positive
+        frequency is supported without interpolation.
+        """
+        target = jnp.asarray(target_freqs, dtype=jnp.float64)
+        T_at = jnp.asarray(T_C(target).value)
+        return self.mapalm[None, :] * T_at[:, None]
 
 class DarkAgesMonopole(ConstSky):
     """
@@ -133,12 +143,29 @@ class DarkAgesMonopole(ConstSky):
     """
     def __init__(self, Nside, lmax, scaled = True, nu_min = 16.4,
                      nu_rms = 14.0, A = 0.04, freq=None):
-        self.freq = ALL_FREQUENCIES_MHZ if freq is None else canonicalize_frequencies(freq, as_jax=True)
+        self.freq = ALL_FREQUENCIES_MHZ if freq is None else jnp.asarray(freq, dtype=jnp.float64)
+        self._scaled = scaled
+        self._nu_min = nu_min
+        self._nu_rms = nu_rms
+        self._A = A
         if scaled:
             T = T_DarkAges_Scaled(self.freq, nu_min, nu_rms, A)
         else:
             T = T_DarkAges(self.freq)
-        ConstSky.__init__(self, Nside, lmax, T, self.freq)  
+        ConstSky.__init__(self, Nside, lmax, T, self.freq)
+
+    def get_alm_at_freq(self, target_freqs):
+        """Evaluate alm at arbitrary target frequencies in MHz.
+
+        Uses the closed-form Dark Ages spectrum directly, so any positive
+        frequency is supported without interpolation.
+        """
+        target = jnp.asarray(target_freqs, dtype=jnp.float64)
+        if self._scaled:
+            T_at = jnp.asarray(T_DarkAges_Scaled(target, self._nu_min, self._nu_rms, self._A))
+        else:
+            T_at = jnp.asarray(T_DarkAges(target))
+        return self.mapalm[None, :] * T_at[:, None]
 
 @jax.tree_util.register_pytree_node_class
 class GalCenter (ConstSky):
@@ -165,7 +192,7 @@ class GalCenter (ConstSky):
         Tmap = jnp.exp(-(phi)**2/0.1-(theta-jnp.pi/2)**2/0.1)
         self.mapalm = jnp.asarray(hp.map2alm(np.asarray(Tmap), lmax = lmax))
         self.frame = "galactic"
-        self.freq = None if freq is None else canonicalize_frequencies(freq, as_jax=True)
+        self.freq = None if freq is None else jnp.asarray(freq, dtype=jnp.float64)
 
 
 @jax.tree_util.register_pytree_node_class
@@ -198,7 +225,7 @@ class HealpixSky:
         self.maps = jnp.asarray(maps)
         if freq is None:
             freq = ALL_FREQUENCIES_MHZ[jnp.asarray([24], dtype=jnp.int32)]
-        self.freq = canonicalize_frequencies(freq, as_jax=True)
+        self.freq = jnp.asarray(freq, dtype=jnp.float64)
         assert (len(maps)==len(freq))
         self.mapalm = jnp.asarray([hp.map2alm(np.asarray(m),lmax = lmax) for m in self.maps])
         self.frame  = frame
@@ -257,9 +284,9 @@ class FitsSky (HealpixSky):
         fstart      = header['freq_start']
         fend        = header['freq_end']
         fstep       = header['freq_step']
-        freq = canonicalize_frequencies(
-            np.arange(fstart, fend + 1e-3 * fstep, fstep, dtype=float),
-            as_jax=True,
+        freq = jnp.asarray(
+            np.arange(fstart, fend + 0.5 * fstep, fstep, dtype=float),
+            dtype=jnp.float64,
         )
         super().__init__(Nside=hp.npix2nside(maps.shape[1]), lmax=lmax, maps=maps, freq=freq, frame="galactic")
         
@@ -283,7 +310,7 @@ class SingleSourceHealpixSky (HealpixSky):
         # convert ra, dec to galactic coordinates and then to pixel number
         if freq is None:
             freq = ALL_FREQUENCIES_MHZ[jnp.asarray([24], dtype=jnp.int32)]
-        self.freq = canonicalize_frequencies(freq, as_jax=True)
+        self.freq = jnp.asarray(freq, dtype=jnp.float64)
         T = jnp.atleast_1d(jnp.asarray(T, dtype=float))
         if T.size == 1:
             T = jnp.broadcast_to(T, len(self.freq))
@@ -342,7 +369,7 @@ class HarmonicPointSourceSky:
     def __init__(self, lmax, freq, T=1.0, *,
                  ra_deg=None, dec_deg=None, l_deg=None, b_deg=None):
         self.lmax = lmax
-        self.freq = canonicalize_frequencies(freq, as_jax=True)
+        self.freq = jnp.asarray(freq, dtype=jnp.float64)
         T = jnp.atleast_1d(jnp.asarray(T, dtype=float))
         if T.size == 1:
             T = jnp.broadcast_to(T, len(self.freq))

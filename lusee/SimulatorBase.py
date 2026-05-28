@@ -1,6 +1,7 @@
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
+from .frequencies import interp1d, interpolation_weights
 
 import numpy as np
 import jax.numpy as jnp
@@ -153,34 +154,50 @@ class SimulatorBase:
             self.freq = beams[0].freq
         else:
             self.freq = freq
-            
-        freq_ndx_beam = []
-        freq_ndx_sky = []
-        for f in self.freq:
-            ndx = self._find_frequency_index(beams[0].freq, f)
-            if ndx is None:
-                print ("Error:")
-                print (f"Frequency {f} does not exist in beams.")
-                sys.exit(1)
-            freq_ndx_beam.append(ndx)
-            ndx = self._find_frequency_index(sky_model.freq, f)
-            if ndx is None:
-                print ("Error:")
-                print (f"Frequency {f} does not exist in sky model.")
-                sys.exit(1)
-            freq_ndx_sky.append(ndx)
-            
-        self.freq_ndx_beam = freq_ndx_beam
-        self.freq_ndx_sky = freq_ndx_sky
+
+        ref_freq = np.asarray(beams[0].freq, dtype=float)
+        for idx, b in enumerate(beams[1:], start=1):
+            other = np.asarray(b.freq, dtype=float)
+            if other.shape != ref_freq.shape or not np.allclose(other, ref_freq):
+                raise ValueError(
+                    f"All beams must share the same native frequency grid; "
+                    f"beam[{idx}] (id={getattr(b, 'id', None)!r}) differs from "
+                    f"beam[0] (id={getattr(beams[0], 'id', None)!r})."
+                )
+        try:
+            self.freq_map_beam = interpolation_weights(self.freq, beams[0].freq)
+        except ValueError as exc:
+            raise ValueError(f"Beam frequency mismatch: {exc}") from exc
+        if hasattr(sky_model, "get_alm_at_freq"):
+            self.freq_map_sky = None
+        else:
+            try:
+                self.freq_map_sky = interpolation_weights(self.freq, sky_model.freq)
+            except ValueError as exc:
+                raise ValueError(f"Sky-model frequency mismatch: {exc}") from exc
+
         self.Nfreq = len(self.freq)
 
-    @staticmethod
-    def _find_frequency_index(freq_values, target, atol=1e-8, rtol=1e-8):
-        freq_arr = np.asarray(freq_values, dtype=float)
-        matches = np.nonzero(np.isclose(freq_arr, float(target), atol=atol, rtol=rtol))[0]
-        if matches.size == 0:
+    @property
+    def freq_ndx_beam(self):
+        """Compat shim: unique native beam indices touched by self.freq.
+
+        Prefer ``self.freq_map_beam`` for new code; this property exists for
+        external consumers that previously inspected ``freq_ndx_beam`` as a
+        list of indices.
+        """
+        return self.freq_map_beam.unique_native_idx
+
+    @property
+    def freq_ndx_sky(self):
+        """Compat shim: unique native sky indices touched by self.freq.
+
+        Returns ``None`` if the sky model provides ``get_alm_at_freq`` (no
+        index mapping needed in that case).
+        """
+        if self.freq_map_sky is None:
             return None
-        return int(matches[0])
+        return self.freq_map_sky.unique_native_idx
 
     def simulate(self, times=None):
         """
@@ -306,8 +323,10 @@ class SimulatorBase:
         fits.write(np.asarray(self.freq), extname='freq')
         fits.write(np.array(self.combinations), extname='combinations')
         for i,b in enumerate(self.beams):
-            fits.write(np.asarray(b.ZRe)[self.freq_ndx_beam],extname=f'ZRe_{i}')
-            fits.write(np.asarray(b.ZIm)[self.freq_ndx_beam],extname=f'ZIm_{i}')
+            ZRe_target = interp1d(self.freq_map_beam, np.asarray(b.ZRe))
+            ZIm_target = interp1d(self.freq_map_beam, np.asarray(b.ZIm))
+            fits.write(ZRe_target, extname=f'ZRe_{i}')
+            fits.write(ZIm_target, extname=f'ZIm_{i}')
 
     def prepare_beams(self, beams, combinations):
         """
@@ -325,28 +344,35 @@ class SimulatorBase:
         self.efbeams = []
         bomega = []
         self.combinations = [(int(i),int(j)) for i,j in combinations]
-        
+        fmap = self.freq_map_beam
+
         for i,j in self.combinations:
             bi , bj = beams[i], beams[j]
             print (f"  intializing beam combination {bi.id} x {bj.id} ...")
-            norm = np.sqrt(np.asarray(bi.gain_conv)[self.freq_ndx_beam]*np.asarray(bj.gain_conv)[self.freq_ndx_beam])
-            beamreal, beamimag = bi.get_healpix_alm(
+            gain_i = interp1d(fmap, np.asarray(bi.gain_conv))
+            gain_j = interp1d(fmap, np.asarray(bj.gain_conv))
+            norm = np.sqrt(gain_i * gain_j)
+            beamreal_native, beamimag_native = bi.get_healpix_alm(
                 self.lmax,
-                freq_ndx=self.freq_ndx_beam,
+                freq_ndx=fmap.unique_native_idx,
                 other=bj,
                 return_I_stokes_only=True,
                 return_complex_components=True,
             )
+            beamreal = np.asarray(interp1d(fmap, np.asarray(beamreal_native)))
             beamreal = beamreal * norm[:, None]
-            if beamimag is not None:
+            if beamimag_native is not None:
+                beamimag = np.asarray(interp1d(fmap, np.asarray(beamimag_native)))
                 beamimag = beamimag * norm[:, None]
+            else:
+                beamimag = None
 
             if i==j:
                 groundPowerReal = np.array([1-np.real(br[0])/np.sqrt(4*np.pi) for br in beamreal])
                 beamimag = None
                 groundPowerImag = 0.
             else:
-                cross_power = self.cross_power.Ex_coupling(bi,bj,self.freq_ndx_beam)
+                cross_power = self.cross_power.Ex_coupling(bi, bj, fmap)
                 print (f"    cross power is {cross_power[0]} ... {cross_power[-1]} ")
                 groundPowerReal = np.array([cp-np.real(br[0])/np.sqrt(4*np.pi) for br,cp in
                                             zip(beamreal,cross_power)])

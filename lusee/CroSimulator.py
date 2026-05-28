@@ -6,6 +6,7 @@ from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, get_topo_z_rotation_angles
 from .spice_utils import ensure_lunarsky_moon_frame
+from .frequencies import interp1d
 import numpy as np
 import fitsio
 import sys
@@ -76,32 +77,33 @@ class CroSimulator(SimulatorBase):
         self.beams = beams
         self.efbeams = []
         self.combinations = [(int(i), int(j)) for i, j in combinations]
-        beam_idx = jnp.asarray(np.array(self.freq_ndx_beam, dtype=np.int32))
+        fmap = self.freq_map_beam
 
         for i, j in self.combinations:
             bi, bj = beams[i], beams[j]
             print (f"  intializing beam combination {bi.id} x {bj.id} ...")
-            norm = jnp.sqrt(
-                jnp.asarray(bi.gain_conv)[beam_idx]
-                * jnp.asarray(bj.gain_conv)[beam_idx]
-            )
-            beamreal, beamimag = bi.get_healpix_alm(
+            gain_i = interp1d(fmap, jnp.asarray(bi.gain_conv))
+            gain_j = interp1d(fmap, jnp.asarray(bj.gain_conv))
+            norm = jnp.sqrt(gain_i * gain_j)
+            beamreal_native, beamimag_native = bi.get_healpix_alm(
                 self.lmax,
-                freq_ndx=self.freq_ndx_beam,
+                freq_ndx=fmap.unique_native_idx,
                 other=bj,
                 return_I_stokes_only=True,
                 return_complex_components=True,
             )
-            beamreal = jnp.asarray(beamreal) * norm[:, None]
-            if beamimag is not None:
-                beamimag = jnp.asarray(beamimag) * norm[:, None]
+            beamreal = jnp.asarray(interp1d(fmap, jnp.asarray(beamreal_native))) * norm[:, None]
+            if beamimag_native is not None:
+                beamimag = jnp.asarray(interp1d(fmap, jnp.asarray(beamimag_native))) * norm[:, None]
+            else:
+                beamimag = None
 
             if i==j:
                 groundPowerReal = 1.0 - jnp.real(beamreal[:,0]) / jnp.sqrt(4*jnp.pi)
                 beamimag = None
                 groundPowerImag = 0.0
             else:
-                cross_power = jnp.asarray(self.cross_power.Ex_coupling(bi,bj,self.freq_ndx_beam))
+                cross_power = jnp.asarray(self.cross_power.Ex_coupling(bi, bj, fmap))
                 print (f"    cross power is {cross_power[0]} ... {cross_power[-1]} ")
                 groundPowerReal = cross_power - jnp.real(beamreal[:,0]) / jnp.sqrt(4*jnp.pi)
                 groundPowerImag = -jnp.real(beamimag[:,0]) / jnp.sqrt(4*jnp.pi)
@@ -163,7 +165,11 @@ class CroSimulator(SimulatorBase):
             rotation=eul_topo,
             dl_array=dl_topo,
         )
-        sky_gal = sky_model.get_alm(self.freq_ndx_sky)
+        if hasattr(sky_model, "get_alm_at_freq"):
+            sky_gal = jnp.asarray(sky_model.get_alm_at_freq(self.freq))
+        else:
+            sky_native = sky_model.get_alm(self.freq_map_sky.unique_native_idx)
+            sky_gal = interp1d(self.freq_map_sky, jnp.asarray(sky_native))
         sky_2d = jnp.stack([
             s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(s_), sim_L)
             for s_ in sky_gal

@@ -2,6 +2,7 @@ from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, mean_alm_np, rot2eul_np
+from .frequencies import interp1d
 import numpy as np
 import healpy as hp
 import fitsio
@@ -94,7 +95,12 @@ class TopoNumpySimulator(SimulatorBase):
         else:
             raise NotImplementedError
 
-        sky_base = [np.asarray(s_, dtype=np.complex128) for s_ in self.sky_model.get_alm (self.freq_ndx_sky, self.freq)]
+        if hasattr(self.sky_model, "get_alm_at_freq"):
+            sky_target = np.asarray(self.sky_model.get_alm_at_freq(self.freq))
+        else:
+            sky_native = self.sky_model.get_alm(self.freq_map_sky.unique_native_idx)
+            sky_target = interp1d(self.freq_map_sky, np.asarray(sky_native))
+        sky_base = [np.asarray(s_, dtype=np.complex128) for s_ in sky_target]
         wfall = []
         Nt = len (times)
         for ti, t in enumerate(times):

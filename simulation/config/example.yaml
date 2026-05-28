@@ -41,9 +41,7 @@ observation:
   lmax: 32
   combinations: all
   freq:
-    start_idx: 0
-    stop_idx: 5
-    step_idx: 4
+    values: [1.0, 5.0]
 
 simulation:
   engine: croissant
