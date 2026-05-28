@@ -224,7 +224,7 @@ def test_fits_basic_roundtrip(tmp_path: Path):
 
 def test_fits_matches_hdf5_row_counts(tmp_path: Path):
     """The drop-NaN-row retention rule must produce identical N in both formats."""
-    import h5py
+    pytest.importorskip("h5py")
 
     products, fpga, encoder = _make_products()
     h5_path = tmp_path / "out.h5"

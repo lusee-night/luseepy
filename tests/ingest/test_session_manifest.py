@@ -13,7 +13,8 @@ import shutil
 import struct
 from pathlib import Path
 
-import h5py
+
+pytest.importorskip("h5py")
 import numpy as np
 import pytest
 

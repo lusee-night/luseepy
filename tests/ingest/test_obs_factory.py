@@ -37,6 +37,7 @@ from lusee.ingest.decode import (
     WaveformSample,
     ZoomSample,
 )
+pytest.importorskip("h5py")
 from lusee.ingest.fits_writer import write_fits
 from lusee.ingest.hdf5_writer import write_hdf5
 
