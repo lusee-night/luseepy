@@ -903,9 +903,11 @@ class IngestData(Observation):
         if ax is None:
             _, ax = plt.subplots(figsize=(10, 5))
         ms = self.dcb_telemetry.get("mission_seconds")
-        ss = self.dcb_telemetry.get("lusee_subsecs", np.zeros_like(ms or np.empty(0)))
         if ms is None or ms.size == 0:
             raise ValueError("DCB telemetry has no time axis")
+        ss = self.dcb_telemetry.get("lusee_subsecs")
+        if ss is None:
+            ss = np.zeros_like(ms)
         t = ms + ss * (1.0 / 65536.0)
         t = t - t[0]
         if channels is None:
