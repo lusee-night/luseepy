@@ -458,8 +458,12 @@ def _concat_dict_arrays(
                 if ref is None:
                     continue
                 tail = ref.shape[1:]
-                fill = np.full((n,) + tail, np.nan,
-                               dtype=np.float64 if ref.dtype.kind == "f" else ref.dtype)
+                fill_dtype = (
+                    ref.dtype
+                    if ref.dtype.kind in {"f", "c"}
+                    else np.float64
+                )
+                fill = np.full((n,) + tail, np.nan, dtype=fill_dtype)
                 chunks.append(fill)
         if chunks:
             out[k] = np.concatenate(chunks, axis=0)
