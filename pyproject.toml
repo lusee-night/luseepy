@@ -36,6 +36,17 @@ cuda12 = [
 cuda13 = [
     "jax[cuda13]; sys_platform == 'linux'",
 ]
+# Downlink-ingest pipeline (lusee.ingest). Needs h5py for HDF5 output and
+# the externally-developed uncrater package (and its pycoreloop dependency)
+# for packet decoding. uncrater is not yet on PyPI; install it separately,
+# e.g. `uv pip install -e <path-to-uncrater>` or, once available,
+# `uv pip install "uncrater @ git+https://github.com/lusee-night/uncrater"`.
+ingest = [
+    "h5py",
+    "hexdump",
+    "icecream",
+    "scipy",
+]
 dev = ["pytest>=7"]
 
 [tool.pytest.ini_options]
