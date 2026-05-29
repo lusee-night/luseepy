@@ -24,7 +24,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Clone uncrater (sibling checkout)
-        run: git clone --depth 1 https://github.com/lusee-night/uncrater.git "${{ github.workspace }}/../uncrater"
+        run: |
+          git clone --depth 1 https://github.com/lusee-night/uncrater.git "${{ github.workspace }}/../uncrater"
+          # uncrater/Packet_Calibrator.py does `from pycoreloop import appId`,
+          # a top-level import. The generated `pycoreloop/` dir at the uncrater
+          # repo root is not in git (it's built locally via uncrater/pycoreloop/Makefile
+          # with ctypesgen + sibling coreloop headers). Use the snapshot bundled
+          # at uncrater/coreloop/pycoreloop_307/, which is byte-identical in shape.
+          ln -sfn uncrater/coreloop/pycoreloop_307 "${{ github.workspace }}/../uncrater/pycoreloop"
       - run: sudo apt-get update && sudo apt-get install -y curl wget gfortran build-essential pkg-config cmake libopenblas-dev libfftw3-dev
       - run: curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh
       - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
