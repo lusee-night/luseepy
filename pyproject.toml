@@ -21,6 +21,7 @@ dependencies = [
     "lunarsky",
     "jax",
     "hydra-core>=1.3.2",
+    "PyYAML>=6.0",
     "s2fft>=1.4.0",
     "croissant-sim==5.1.3",
     "pytest>=9.0.2",

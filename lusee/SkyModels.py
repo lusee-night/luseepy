@@ -5,7 +5,12 @@ import jax
 import jax.numpy as jnp
 
 from .MonoSkyModels import T_C, T_DarkAges, T_DarkAges_Scaled
-from .frequencies import ALL_FREQUENCIES_MHZ, canonicalize_frequencies
+from .frequencies import (
+    ALL_FREQUENCIES_MHZ,
+    canonical_frequencies,
+    canonicalize_frequencies,
+    frequency_indices_from_values,
+)
 
 @jax.tree_util.register_pytree_node_class
 class ConstSky:
@@ -254,13 +259,23 @@ class FitsSky (HealpixSky):
         header      = fitsio.read_header(fname)
         fits        = fitsio.FITS(fname,'r')
         maps        = fits[0].read()
-        fstart      = header['freq_start']
-        fend        = header['freq_end']
-        fstep       = header['freq_step']
-        freq = canonicalize_frequencies(
-            np.arange(fstart, fend + 1e-3 * fstep, fstep, dtype=float),
-            as_jax=True,
+        fstart      = float(header['freq_start'])
+        fend        = float(header['freq_end'])
+        fstep       = float(header['freq_step'])
+        # FITS headers often use arange endpoints that differ slightly from the
+        # canonical float64 1..50 MHz grid; snap with a modest MHz tolerance.
+        freq_raw = np.arange(
+            fstart, fend + 1e-3 * fstep, fstep, dtype=np.float64
         )
+        freq_idx = frequency_indices_from_values(
+            freq_raw, atol=5e-3, rtol=0.0
+        )
+        if np.unique(freq_idx).size != freq_idx.size:
+            raise ValueError(
+                "FITS frequency axis maps multiple channels to the same canonical "
+                f"frequency after tolerance matching; check {fname!r}"
+            )
+        freq = canonical_frequencies(freq_idx, as_jax=True)
         super().__init__(Nside=hp.npix2nside(maps.shape[1]), lmax=lmax, maps=maps, freq=freq, frame="galactic")
         
 

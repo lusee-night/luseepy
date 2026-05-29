@@ -175,8 +175,13 @@ class SimulatorBase:
         self.Nfreq = len(self.freq)
 
     @staticmethod
-    def _find_frequency_index(freq_values, target, atol=1e-8, rtol=1e-8):
+    def _find_frequency_index(freq_values, target, atol=None, rtol=1e-9):
         freq_arr = np.asarray(freq_values, dtype=float)
+        if atol is None and freq_arr.size >= 2:
+            df = float(np.min(np.abs(np.diff(np.sort(freq_arr)))))
+            atol = max(1e-12, 0.01 * df)
+        elif atol is None:
+            atol = 1e-8
         matches = np.nonzero(np.isclose(freq_arr, float(target), atol=atol, rtol=rtol))[0]
         if matches.size == 0:
             return None

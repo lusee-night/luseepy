@@ -1,0 +1,56 @@
+# RRL + ULSA Croissant run with uniform frequency spacing (e.g. 1 kHz).
+# RRL FITS is used only for source positions (lon/lat); line frequencies follow
+# the hydrogenic Rydberg model in code.
+#
+# For the full 1–50 MHz band at 1 kHz (~49k channels), set:
+#   freq: { start_mhz: 1.0, stop_mhz: 50.0, step_khz: 1.0 }
+# (May require large memory / runtime)
+
+paths:
+  lusee_drive_dir: $LUSEE_DRIVE_DIR
+  output_dir: $LUSEE_OUTPUT_DIR
+  beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
+
+observation:
+  long: 0
+  lat: 0
+  beams: [N]
+  lunar_day: "2025-03-01 00:00:00 to 2025-03-14 00:00:00"
+  dt: 3600
+  Tground: 0
+  lmax: 32
+  combinations: [[0, 0]]
+  freq:
+    start_mhz: 10.0
+    stop_mhz: 15.0
+    step_khz: 1.0
+
+beam:
+  type: gauss
+  alt_deg: 90.0
+  az_deg: 0.0
+  sigma_deg: 25.0
+  one_over_freq_scaling: false
+  id: rrl_demo
+
+sky:
+  # RRL line Gaussian in ν: default 25 kHz FWHM → σ = FWHM/(2√(2 ln 2)) MHz; 0.5 K peak
+  rrl_sigma_mhz: 0.010616575061747945
+  rrl_peak_k: 0.5
+  spot_sigma_deg: 0.35
+
+# Staged analysis: smooth envelope on catalog positions → Croissant @ beam ν →
+# resample → add Rydberg lines (see lusee.RRLAnalysisPipeline).
+rrl_analysis:
+  fine_step_khz: 0.5
+  envelope:
+    # Vydula+2024 Eq. (7): cold = Cα diffuse (Table 3), hot = Hα emission
+    gas_case: cold
+    # optional overrides: Te, tau_L, T100, beta, f_TR, bn, beta_n_coeffs
+    # legacy Gaussian placeholder: gas_case: gaussian
+    # nu_ref_mhz: 12.5
+    # sigma_mhz: 3.0
+    # amplitude_k: 0.5
+
+output:
+  fits: rrl_sim_waterfall.fits
