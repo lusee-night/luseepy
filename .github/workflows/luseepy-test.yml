@@ -25,7 +25,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Clone uncrater (sibling checkout)
         run: |
-          git clone --depth 1 https://github.com/lusee-night/uncrater.git "${{ github.workspace }}/../uncrater"
+          # TEMP: tracking branch an/add_constants until it's merged to main.
+          git clone --depth 1 --branch an/add_constants https://github.com/lusee-night/uncrater.git "${{ github.workspace }}/../uncrater"
           # uncrater/Packet_Calibrator.py does `from pycoreloop import appId`,
           # a top-level import. The generated `pycoreloop/` dir at the uncrater
           # repo root is not in git (it's built locally via uncrater/pycoreloop/Makefile
