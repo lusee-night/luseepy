@@ -10,9 +10,22 @@ real-space spectral-index map) is *non-linear* and fit by an outer optimiser.
 This is the variable-projection / profile-likelihood pattern in
 ``lusee.fitting``.
 
-Truth:  flux = ULSA at f_fid;  beta = a smooth map inside the prior box.
-Run:    python notebooks/spectral_fit_demo.py
-Needs:  LUSEE_DRIVE_DIR (beam + ULSA fits).  Set JAX_ENABLE_X64=1 for accuracy.
+Truth: ``--truth ulsa`` uses the real ULSA maps (model is then mis-specified);
+``--truth powerlaw`` generates self-consistent data from the model itself.
+
+Command line (``--help`` for the full list; writes a single ``.npz`` that the
+recovery notebook reads)::
+
+    # MAP only, default Nside=16/lmax=31 ULSA fit:
+    python notebooks/spectral_fit_demo.py
+    # add Fisher (Wiener-weighted) recovery and HMC posterior, custom output:
+    python notebooks/spectral_fit_demo.py --fisher --hmc -o /tmp/spec.npz
+    # quick low-res self-consistent run:
+    python notebooks/spectral_fit_demo.py --truth powerlaw --lmax 15 --nside 8 \\
+        --beta-nside 4 --dt-hours 8 --hmc --num-samples 300
+
+Needs ``LUSEE_DRIVE_DIR`` (beam + ULSA fits) when run; set ``JAX_ENABLE_X64=1``.
+The ``run()`` function takes the same options as keyword arguments.
 """
 
 import os
@@ -31,9 +44,9 @@ import lusee
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
-DRIVE = os.environ["LUSEE_DRIVE_DIR"]
-BEAM_FILE = DRIVE + "/Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
-SKY_FILE = DRIVE + "/Simulations/SkyModels/ULSA_32_ddi_smooth.fits"
+DRIVE = os.environ.get("LUSEE_DRIVE_DIR")  # resolved lazily so --help works unset
+BEAM_FILE = (DRIVE or "") + "/Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
+SKY_FILE = (DRIVE or "") + "/Simulations/SkyModels/ULSA_32_ddi_smooth.fits"
 
 
 def build_truth(Nside, lmax, beta_nside, freq, f_fid):
@@ -89,8 +102,11 @@ def run(lmax=31, Nside=16, beta_nside=8,
         obs_range="2025-02-01 13:00:00 to 2025-02-28 13:00:00",
         dt_sec=2 * 3600.0, taper=0.03, maxiter=200, inner_maxiter=1500,
         fit_gain=False, truth="powerlaw", target_snr=1e4, compute_fisher=False,
-        sample=False, num_samples=300, num_warmup=300, noise_seed=42):
+        sample=False, num_samples=300, num_warmup=300, noise_seed=42,
+        outfile=None):
 
+    if not DRIVE:
+        raise SystemExit("LUSEE_DRIVE_DIR must be set (beam + ULSA data files).")
     freq = np.asarray(freq, dtype=float)
     print(f"=== Spectral fit ({truth} truth): lmax={lmax} Nside={Nside} "
           f"beta_nside={beta_nside} freq={freq.tolist()} f_fid={f_fid} ===")
@@ -230,12 +246,57 @@ def run(lmax=31, Nside=16, beta_nside=8,
               f"(truth mean {beta_t.mean():.3f}); |pull| median = "
               f"{np.median(np.abs(bz)):.2f} sigma")
 
-    outfile = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           f"spectral_fit_result_{truth}.npz")
+    if outfile is None:
+        outfile = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               f"spectral_fit_result_{truth}.npz")
     np.savez(outfile, **save)
     print(f"\nsaved arrays -> {outfile}")
     return fit
 
 
+def main(argv=None):
+    import argparse
+    p = argparse.ArgumentParser(
+        description="Spectral sky fit: T(theta,f) = flux(theta)*(f/f_fid)^beta(theta). "
+                    "MAP (Wiener flux + L-BFGS-B beta), optional Fisher and HMC.")
+    p.add_argument("--lmax", type=int, default=31)
+    p.add_argument("--nside", type=int, default=16, dest="Nside")
+    p.add_argument("--beta-nside", type=int, default=8, dest="beta_nside")
+    p.add_argument("--freq", type=float, nargs="+",
+                   default=[15., 20., 25., 30., 35., 40., 45.],
+                   help="frequencies in MHz")
+    p.add_argument("--f-fid", type=float, default=25.0, dest="f_fid")
+    p.add_argument("--obs-range", default="2025-02-01 13:00:00 to 2025-02-28 13:00:00",
+                   dest="obs_range")
+    p.add_argument("--dt-hours", type=float, default=4.0,
+                   help="time step in hours")
+    p.add_argument("--taper", type=float, default=0.03)
+    p.add_argument("--truth", choices=["powerlaw", "ulsa"], default="ulsa",
+                   help="generate data from the spectral model ('powerlaw') "
+                        "or from the real ULSA maps ('ulsa')")
+    p.add_argument("--target-snr", type=float, default=1e4, dest="target_snr")
+    p.add_argument("--maxiter", type=int, default=200)
+    p.add_argument("--inner-maxiter", type=int, default=1500, dest="inner_maxiter")
+    p.add_argument("--fit-gain", action="store_true", dest="fit_gain",
+                   help="fit a broadband instrument gain (bilinear with flux)")
+    p.add_argument("--fisher", action="store_true", dest="compute_fisher",
+                   help="compute the Fisher / Wiener-weighted flux recovery")
+    p.add_argument("--hmc", action="store_true", dest="sample",
+                   help="run HMC (NUTS) for the posterior mean/std")
+    p.add_argument("--num-samples", type=int, default=300, dest="num_samples")
+    p.add_argument("--num-warmup", type=int, default=300, dest="num_warmup")
+    p.add_argument("--seed", type=int, default=42, dest="noise_seed")
+    p.add_argument("-o", "--output", default=None, dest="outfile",
+                   help="output .npz path (default: spectral_fit_result_<truth>.npz)")
+    a = p.parse_args(argv)
+    run(lmax=a.lmax, Nside=a.Nside, beta_nside=a.beta_nside, freq=tuple(a.freq),
+        f_fid=a.f_fid, obs_range=a.obs_range, dt_sec=a.dt_hours * 3600.0,
+        taper=a.taper, maxiter=a.maxiter, inner_maxiter=a.inner_maxiter,
+        fit_gain=a.fit_gain, truth=a.truth, target_snr=a.target_snr,
+        compute_fisher=a.compute_fisher, sample=a.sample,
+        num_samples=a.num_samples, num_warmup=a.num_warmup,
+        noise_seed=a.noise_seed, outfile=a.outfile)
+
+
 if __name__ == "__main__":
-    run()
+    main()

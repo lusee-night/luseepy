@@ -268,6 +268,33 @@ usually shouldn't be on the GPU at all yet.)
 * **Vectorise the forward** (see §5) — the single highest-value performance fix,
   and the prerequisite for the GPU ever being worthwhile here.
 
+## Running the demos (CLI)
+
+Both drivers are command-line programs (`--help` lists every option) that write a
+single `.npz`; the recovery notebooks read *everything* from that `.npz` (set
+`RESULT` / the loaded path to point at it). Run with `JAX_ENABLE_X64=1` and
+`LUSEE_DRIVE_DIR` set (beam + ULSA data); CPU is the right backend (§5).
+
+```bash
+# Spectral (power-law) — MAP, default Nside=16/lmax=31, real ULSA data:
+python notebooks/spectral_fit_demo.py --truth ulsa
+# add Fisher (Wiener-weighted) recovery + HMC posterior, custom output:
+python notebooks/spectral_fit_demo.py --truth ulsa --fisher --hmc -o out/spec.npz
+# self-consistent (theory) data instead of ULSA, low-res quick run:
+python notebooks/spectral_fit_demo.py --truth powerlaw --lmax 15 --nside 8 \
+    --beta-nside 4 --dt-hours 8 --hmc
+
+# Separable (templates) — 3 templates, HMC, data-PCA shape init:
+python notebooks/separable_fit_demo.py --n-templates 3 --hmc -o out/sep.npz
+```
+
+Key options (shared): `--lmax`, `--nside`, `--freq f1 f2 …`, `--dt-hours`,
+`--target-snr`, `--maxiter`, `--inner-maxiter`, `--hmc` (+`--num-samples` /
+`--num-warmup`), `--seed`, `-o/--output`. Spectral-only: `--truth
+{powerlaw,ulsa}`, `--beta-nside`, `--fisher`, `--fit-gain`. Separable-only:
+`--n-templates`, `--ref-freq`, `--init-from {data,truth}`. The same names are
+keyword arguments of each module's `run()`.
+
 ## File map
 
 | File | Role |
