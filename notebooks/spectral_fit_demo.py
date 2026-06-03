@@ -87,8 +87,9 @@ def build_truth_ulsa(Nside, lmax, beta_nside, freq, f_fid):
 def run(lmax=31, Nside=16, beta_nside=8,
         freq=(15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0), f_fid=25.0,
         obs_range="2025-02-01 13:00:00 to 2025-02-28 13:00:00",
-        dt_sec=2 * 3600.0, taper=0.03, maxiter=120, inner_maxiter=400,
-        fit_gain=False, truth="powerlaw", target_snr=1e4, noise_seed=42):
+        dt_sec=2 * 3600.0, taper=0.03, maxiter=200, inner_maxiter=1500,
+        fit_gain=False, truth="powerlaw", target_snr=1e4, compute_fisher=False,
+        sample=False, num_samples=300, num_warmup=300, noise_seed=42):
 
     freq = np.asarray(freq, dtype=float)
     print(f"=== Spectral fit ({truth} truth): lmax={lmax} Nside={Nside} "
@@ -178,12 +179,60 @@ def run(lmax=31, Nside=16, beta_nside=8,
     print(f"  a00: true={flux_t[0].real:.0f}, rec={flux_hat[0].real:.0f}")
     print(f"  mean rho(1..{min(10,lmax)}) = {np.nanmean(rho[1:min(11,lmax+1)]):.4f}")
 
+    # ---- Fisher / SNR-weighted recovery of the flux block ----
+    save = dict(flux_true=flux_t, flux_hat=flux_hat, beta_true=beta_t,
+                beta_hat=beta_hat, rho=rho, freq=freq, lmax=lmax, Nside=Nside,
+                beta_nside=beta_nside, f_fid=f_fid,
+                chi2_history=out["chi2_history"], converged=out["converged"])
+    if compute_fisher:
+        from lusee.Fitting import linear_fisher, snr_weighted_recovery
+        block = exp.paramset.linear[0].reparam
+        t0 = time.time()
+        fish = linear_fisher(exp.predict, exp.paramset, data, N_inv,
+                             out["nonlinear"])
+        rec = snr_weighted_recovery(block.natural_to_theta(flux_hat),
+                                    block.natural_to_theta(flux_t), fish)
+        print(f"\nFisher / Wiener-weighted flux recovery ({time.time()-t0:.0f}s):")
+        print(f"  Wiener-weighted rho = {rec['rho_w']:.4f}  "
+              f"(1 = recoverable modes recovered)")
+        print(f"  residual power frac = {rec['resid_frac']:.4f}  (0 = perfect)")
+        print(f"  effective measured modes n_eff = {rec['n_eff']:.1f} / {rec['n']}")
+        ww = rec["whitened"][np.isfinite(rec["whitened"])]
+        print(f"  (diagnostic) whitened residual std = {ww.std():.1f}")
+        save.update(post_std=fish["std"], wiener=fish["wiener"],
+                    whitened=rec["whitened"], rho_w=rec["rho_w"],
+                    resid_frac=rec["resid_frac"], n_eff=rec["n_eff"])
+
+    # ---- HMC posterior (mean = estimate, std = per-mode SNR) ----
+    if sample:
+        from lusee.Fitting import sample_posterior
+        t0 = time.time()
+        post = sample_posterior(
+            exp.predict, exp.paramset, data, N_inv,
+            num_samples=num_samples, num_warmup=num_warmup, seed=noise_seed,
+            init_linear=exp.paramset.pack_linear(out["linear"]),
+            init_nonlinear=exp.paramset.pack_nonlinear(out["nonlinear"]))
+        print(f"\nHMC: {num_samples} samples in {time.time()-t0:.0f}s, "
+              f"accept={post['accept']:.2f}")
+        fa = np.asarray(post["linear"]["sky.flux"])          # (ns, nalm) complex
+        flux_smaps = np.stack([hp.alm2map(fa[i], Nside) for i in range(len(fa))])
+        bb = np.asarray(post["nonlinear"]["sky.beta"])        # (ns, nbeta)
+        save.update(
+            accept=post["accept"],
+            flux_map_map=hp.alm2map(flux_hat, Nside),
+            flux_true_map=hp.alm2map(flux_t, Nside),
+            flux_post_mean_map=flux_smaps.mean(0),
+            flux_post_std_map=flux_smaps.std(0),
+            beta_post_mean=bb.mean(0), beta_post_std=bb.std(0))
+        # how many sigma is each beta pixel from truth?
+        bz = (bb.mean(0) - beta_t) / np.maximum(bb.std(0), 1e-9)
+        print(f"  beta: post mean {bb.mean():.3f}+/-{bb.std(0).mean():.3f} "
+              f"(truth mean {beta_t.mean():.3f}); |pull| median = "
+              f"{np.median(np.abs(bz)):.2f} sigma")
+
     outfile = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            f"spectral_fit_result_{truth}.npz")
-    np.savez(outfile, flux_true=flux_t, flux_hat=flux_hat, beta_true=beta_t,
-             beta_hat=beta_hat, rho=rho, freq=freq, lmax=lmax, Nside=Nside,
-             beta_nside=beta_nside, f_fid=f_fid,
-             chi2_history=out["chi2_history"], converged=out["converged"])
+    np.savez(outfile, **save)
     print(f"\nsaved arrays -> {outfile}")
     return fit
 

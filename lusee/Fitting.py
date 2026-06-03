@@ -267,7 +267,7 @@ def linear_solve_cg(A, n_theta, N_inv, S_inv, data, maxiter=400, tol=1e-10,
 # ============================================================================
 
 def profile_optimize(predict, paramset, data, N_inv, *, maxiter=100,
-                     inner_maxiter=400, inner_tol=1e-10, max_restarts=3,
+                     inner_maxiter=1500, inner_tol=1e-10, max_restarts=3,
                      ftol=2.22e-9, gtol=1e-5, tol=None, verbose=True):
     """Variable-projection optimisation of a conditionally-linear model.
 
@@ -305,14 +305,19 @@ def profile_optimize(predict, paramset, data, N_inv, *, maxiter=100,
     x0_holder = [jnp.zeros(n_lin)]
     nfev = [0]
     history = []
+    best = {"chi2": np.inf, "x": None}
     def scipy_fun(x):
         (v, theta), g = value_and_grad(jnp.asarray(x), x0_holder[0])
         x0_holder[0] = theta
         nfev[0] += 1
-        history.append(float(v))
+        vf = float(v)
+        history.append(vf)
+        if vf < best["chi2"]:                 # L-BFGS-B may end at a worse point
+            best["chi2"] = vf
+            best["x"] = np.array(x, dtype=np.float64)
         if verbose:
-            print(f"  [{nfev[0]:3d}] chi2 = {float(v):.6e}", flush=True)
-        return float(v), np.asarray(g, dtype=np.float64)
+            print(f"  [{nfev[0]:3d}] chi2 = {vf:.6e}", flush=True)
+        return vf, np.asarray(g, dtype=np.float64)
 
     # L-BFGS-B with restart-on-ABNORMAL: a failed line search corrupts the
     # limited-memory Hessian, so restart from the current point with a fresh one.
@@ -331,21 +336,35 @@ def profile_optimize(predict, paramset, data, N_inv, *, maxiter=100,
         x_start = res.x
 
     gnorm = float(np.max(np.abs(np.asarray(res.jac)))) if res.jac is not None else np.nan
-    converged = bool(res.success) and res.nit < maxiter
+    # Use the best point ever seen, not L-BFGS-B's final iterate (which can be
+    # worse after a line-search excursion).
+    use_best = best["x"] is not None and best["chi2"] < float(res.fun)
+    x_final = best["x"] if use_best else np.asarray(res.x)
+    chi2_final = best["chi2"] if use_best else float(res.fun)
+
+    # How stable is chi2 over the last few evals? (a few-sig-fig convergence check)
+    tail = np.asarray(history[-min(8, len(history)):])
+    tail_spread = float(tail.max() - tail.min()) / max(abs(chi2_final), 1e-30)
+    converged = bool(res.success) and res.nit < maxiter and tail_spread < 1e-4
     if verbose:
         msg = res.message.decode() if isinstance(res.message, bytes) else res.message
         print(f"  -> stop: {msg}  (nit={res.nit}, |grad|inf={gnorm:.2e}, "
               f"success={res.success})", flush=True)
+        print(f"  -> best chi2={chi2_final:.6e} (returned best={use_best}); "
+              f"last-8 spread={tail_spread:.1e}; converged={converged}", flush=True)
         if res.nit >= maxiter:
             print("  -> WARNING: hit maxiter; increase maxiter or loosen tol.", flush=True)
+        elif not converged:
+            print("  -> WARNING: chi2 not stable to ~4 sig figs (erratic tail).", flush=True)
 
-    nl_hat = paramset.unpack_nonlinear(jnp.asarray(res.x))
+    nl_hat = paramset.unpack_nonlinear(jnp.asarray(x_final))
     lin_hat = paramset.unpack_linear(solve_linear(nl_hat, x0_holder[0]))
     return {
         "linear": lin_hat,
         "nonlinear": {k: np.asarray(v) for k, v in nl_hat.items()},
-        "chi2": float(res.fun),
+        "chi2": chi2_final,
         "chi2_history": np.asarray(history),
+        "tail_spread": tail_spread,
         "nfev": nfev[0],
         "nit": int(res.nit),
         "grad_inf": gnorm,
@@ -354,6 +373,165 @@ def profile_optimize(predict, paramset, data, N_inv, *, maxiter=100,
         "result": res,
         "paramset": paramset,
     }
+
+
+# ============================================================================
+# Posterior uncertainty: Fisher / Laplace for the linear block
+# ============================================================================
+
+def linear_fisher(predict, paramset, data, N_inv, nonlinear):
+    """Gaussian posterior of the linear block at fixed non-linear parameters.
+
+    Conditional on ``nonlinear``, the linear block has an exact Gaussian
+    posterior with precision (the curvature of -logL, i.e. 1/sigma^2 per mode)
+
+        H = A^T N^{-1} A + S^{-1}
+
+    where ``A`` is the (linear) forward at the given non-linear parameters.  ``A``
+    is linear, so column ``i`` of its matrix is just ``A(e_i)`` -- no autodiff
+    needed (and reverse-mode safe through ``s2fft``).  Builds ``H`` densely;
+    intended for linear blocks up to a few thousand modes.
+
+    :returns: dict with ``H`` (precision), ``cov`` = ``H^{-1}``, and ``std`` =
+        per-mode posterior standard deviation ``sqrt(diag(cov))``, all in the
+        block's real parameterisation.
+    """
+    N_inv_flat = np.asarray(N_inv).ravel()
+    S_inv = np.broadcast_to(np.asarray(paramset.Sinv_linear()),
+                            (paramset.n_linear,))
+    n = paramset.n_linear
+    A = jax.jit(lambda theta: predict(paramset.unpack_linear(theta), nonlinear))
+    eye = np.eye(n)
+    J = np.stack([np.asarray(A(jnp.asarray(eye[i]))) for i in range(n)], axis=1)
+    H = (J.T * N_inv_flat) @ J + np.diag(S_inv)
+    cov = np.linalg.inv(H)
+    var = np.clip(np.diag(cov), 0, None)
+    # Wiener gain per mode: w = signal/(signal+noise) = diag(I - S^-1 H^-1).
+    # -> 1 for signal-dominated modes, 0 for noise-dominated ones.
+    wiener = np.clip(1.0 - S_inv * var, 0.0, 1.0)
+    return {"H": H, "cov": cov, "std": np.sqrt(var), "wiener": wiener}
+
+
+def sample_posterior(predict, paramset, data, N_inv, *, num_samples=500,
+                     num_warmup=500, seed=0, init_linear=None,
+                     init_nonlinear=None):
+    """NUTS over the *joint* (linear, non-linear) posterior.
+
+    log p(lam, eta | d) = -1/2 [ ||d - predict||^2_{N^-1} + lam^T S^-1 lam ]
+                          + logprior(eta)
+
+    The linear block is sampled rather than marginalised (so we get per-mode
+    flux samples directly); the conditional-linear structure still helps because
+    the linear directions are Gaussian and well-conditioned.  Bounded non-linear
+    params are sampled in an unconstrained sigmoid space (with the log-Jacobian).
+
+    :returns: dict with ``linear`` (``{name: (num_samples, ...) alm samples}``),
+        ``nonlinear`` (``{name: (num_samples, ...) value samples}``), and
+        ``accept`` (mean acceptance).  Posterior mean = estimate; std = per-mode
+        1-sigma, i.e. the direct SNR.
+    """
+    import blackjax
+
+    d_flat = jnp.asarray(data).ravel()
+    N_inv_flat = jnp.asarray(N_inv).ravel()
+    S_inv = jnp.asarray(paramset.Sinv_linear())
+    n_lin = paramset.n_linear
+
+    # Box transforms for the non-linear block (sigmoid where bounded).
+    lo, hi = [], []
+    for p, sz in zip(paramset.nonlinear, paramset._nl_sizes):
+        b = p.bounds if p.bounds is not None else (-np.inf, np.inf)
+        lo += [b[0]] * sz
+        hi += [b[1]] * sz
+    lo = jnp.asarray(lo, float)
+    hi = jnp.asarray(hi, float)
+    bounded = jnp.isfinite(lo) & jnp.isfinite(hi)
+    span = jnp.where(bounded, hi - lo, 1.0)
+
+    def eta_from_z(zeta):
+        s = jax.nn.sigmoid(zeta)
+        eta = jnp.where(bounded, lo + span * s, zeta)
+        logj = jnp.where(bounded, jnp.log(span) + jnp.log(s) + jnp.log1p(-s), 0.0)
+        return eta, jnp.sum(logj)
+
+    def z_from_eta(eta):
+        s = jnp.clip((eta - lo) / span, 1e-6, 1 - 1e-6)
+        return jnp.where(bounded, jnp.log(s) - jnp.log1p(-s), eta)
+
+    def logdensity(z):
+        lam, zeta = z[:n_lin], z[n_lin:]
+        eta_vec, logj = eta_from_z(zeta)
+        nl = paramset.unpack_nonlinear(eta_vec)
+        r = d_flat - predict(paramset.unpack_linear(lam), nl)
+        chi2 = jnp.sum(N_inv_flat * r ** 2) + jnp.sum(S_inv * lam ** 2)
+        return -0.5 * chi2 + paramset.logprior_nonlinear(nl) + logj
+
+    lam0 = (jnp.zeros(n_lin) if init_linear is None
+            else jnp.asarray(init_linear))
+    eta0 = (jnp.asarray(paramset.nonlinear_init()) if init_nonlinear is None
+            else jnp.asarray(init_nonlinear))
+    z0 = jnp.concatenate([lam0, z_from_eta(eta0)])
+
+    rng = jax.random.PRNGKey(seed)
+    rng, wk = jax.random.split(rng)
+    warmup = blackjax.window_adaptation(blackjax.nuts, logdensity)
+    (state, params), _ = warmup.run(wk, z0, num_steps=num_warmup)
+    kernel = blackjax.nuts(logdensity, **params)
+
+    @jax.jit
+    def one_step(state, k):
+        state, info = kernel.step(k, state)
+        return state, (state.position, info.acceptance_rate)
+
+    rng, sk = jax.random.split(rng)
+    _, (positions, accept) = jax.lax.scan(
+        one_step, state, jax.random.split(sk, num_samples))
+
+    lam_s = positions[:, :n_lin]
+    eta_s = jax.vmap(lambda z: eta_from_z(z)[0])(positions[:, n_lin:])
+    # unpack to named samples
+    lin_out, i = {}, 0
+    for p, sz in zip(paramset.linear, paramset._lin_sizes):
+        lin_out[p.name] = jax.vmap(p.reparam.theta_to_natural)(
+            lam_s[:, i:i + sz])
+        i += sz
+    nl_out, j = {}, 0
+    for p, sz in zip(paramset.nonlinear, paramset._nl_sizes):
+        block = eta_s[:, j:j + sz]
+        nl_out[p.name] = block.reshape((num_samples,) + p.shape) if p.shape \
+            else block[:, 0]
+        j += sz
+    return {"linear": lin_out, "nonlinear": nl_out,
+            "accept": float(jnp.mean(accept))}
+
+
+def snr_weighted_recovery(theta_hat, theta_true, fisher):
+    """Wiener-weighted comparison of a recovered linear block against truth.
+
+    Weights each mode by its Wiener gain ``w = signal/(signal+noise)`` (1 for
+    signal-dominated modes, 0 for noise-dominated ones), so the comparison only
+    counts the modes the data could actually measure -- without the high-SNR
+    modes blowing up the metric (as an unbounded 1/sigma^2 weight would).
+
+    :returns: dict with
+        * ``rho_w`` -- Wiener-weighted correlation of recovered vs truth
+          (1 = recoverable modes perfectly recovered),
+        * ``resid_frac`` -- Wiener-weighted residual power / signal power
+          (0 = perfect),
+        * ``n_eff`` -- effective number of measured modes (sum of w),
+        * ``n`` -- total modes, ``w`` -- per-mode weights,
+        * ``whitened`` -- per-mode residual in sigma units (diagnostic).
+    """
+    h = np.asarray(theta_hat, dtype=float)
+    t = np.asarray(theta_true, dtype=float)
+    w = np.asarray(fisher["wiener"], dtype=float)
+    rho_w = float(np.sum(w * h * t) /
+                  np.sqrt(np.sum(w * h * h) * np.sum(w * t * t) + 1e-300))
+    resid_frac = float(np.sum(w * (h - t) ** 2) / (np.sum(w * t * t) + 1e-300))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        whitened = (h - t) / fisher["std"]
+    return {"rho_w": rho_w, "resid_frac": resid_frac, "n_eff": float(w.sum()),
+            "n": len(w), "w": w, "whitened": whitened}
 
 
 # ============================================================================

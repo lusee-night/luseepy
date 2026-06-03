@@ -79,8 +79,9 @@ def build_truth(Nside, lmax, freq, ref_freq, n_templates):
 def run(lmax=31, Nside=16, n_templates=2,
         freq=(15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0), ref_freq=25.0,
         obs_range="2025-02-01 13:00:00 to 2025-02-28 13:00:00",
-        dt_sec=4 * 3600.0, taper=0.03, maxiter=80, inner_maxiter=300,
-        init_from="data", shape_perturb=0.25, target_snr=1e4, noise_seed=42):
+        dt_sec=4 * 3600.0, taper=0.03, maxiter=200, inner_maxiter=1500,
+        init_from="data", shape_perturb=0.25, target_snr=1e4,
+        sample=False, num_samples=300, num_warmup=300, noise_seed=42):
 
     freq = np.asarray(freq, dtype=float)
     print(f"=== Separable fit: lmax={lmax} Nside={Nside} "
@@ -177,14 +178,51 @@ def run(lmax=31, Nside=16, n_templates=2,
         print(f"  template {i}: truth {np.round(shapes_true[i],3).tolist()}")
         print(f"              rec   {np.round(shapes_hat[i],3).tolist()}")
 
+    save = dict(flux_true=np.asarray(flux_true), flux_hat=flux_hat,
+                shapes_true=np.asarray(shapes_true), shapes_hat=shapes_hat,
+                shape_init=shape_init, freq=freq, test_freq=np.asarray(test_freq),
+                lmax=lmax, Nside=Nside, ref_freq=ref_freq,
+                ulsa_test=np.asarray(ulsa_test), rec_test=np.asarray(rec_test),
+                chi2_history=res["chi2_history"], converged=res["converged"])
+
+    # ---- HMC posterior (gauge-invariant total flux mean/std + shape errors) ----
+    if sample:
+        from lusee.Fitting import sample_posterior
+        t0 = time.time()
+        post = sample_posterior(
+            exp.predict, exp.paramset, data, N_inv,
+            num_samples=num_samples, num_warmup=num_warmup, seed=noise_seed,
+            init_linear=exp.paramset.pack_linear(res["linear"]),
+            init_nonlinear=exp.paramset.pack_nonlinear(res["nonlinear"]))
+        print(f"\nHMC: {num_samples} samples in {time.time()-t0:.0f}s, "
+              f"accept={post['accept']:.2f}")
+        fa = [np.asarray(post["linear"][f"sep.flux.{i}"])
+              for i in range(n_templates)]              # each (ns, nalm)
+        sh_free = np.asarray(post["nonlinear"]["sep.shape"])  # (ns, n_templ, nfree)
+        ns = sh_free.shape[0]
+        full_sh = np.ones((ns, n_templates, len(freq)))
+        full_sh[:, :, sky_mod.nonref] = sh_free
+        pmean, pstd = [], []
+        print("  total-flux posterior recovery vs ULSA:")
+        for k, f in enumerate(test_freq):
+            kf = int(np.argmin(np.abs(freq - f)))
+            tot = sum(full_sh[:, i, kf][:, None] * fa[i]
+                      for i in range(n_templates))       # (ns, nalm) per-sample total alm
+            tmaps = np.stack([hp.alm2map(tot[s], Nside) for s in range(ns)])
+            pmean.append(tmaps.mean(0)); pstd.append(tmaps.std(0))
+            r = np.std(pmean[k] - ulsa_test[k]) / np.std(ulsa_test[k])
+            snr = np.median(np.abs(pmean[k]) / np.maximum(pstd[k], 1e-9))
+            print(f"    f={f:4.0f} MHz: post-mean resid {100*r:.0f}% of ULSA std; "
+                  f"median per-pixel SNR={snr:.1f}")
+        save.update(accept=post["accept"],
+                    flux_post_mean_test=np.asarray(pmean),
+                    flux_post_std_test=np.asarray(pstd),
+                    shapes_post_mean=full_sh.mean(0),
+                    shapes_post_std=full_sh.std(0))
+
     outfile = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "separable_fit_result.npz")
-    np.savez(outfile, flux_true=np.asarray(flux_true), flux_hat=flux_hat,
-             shapes_true=np.asarray(shapes_true), shapes_hat=shapes_hat,
-             shape_init=shape_init, freq=freq, test_freq=np.asarray(test_freq),
-             lmax=lmax, Nside=Nside, ref_freq=ref_freq,
-             ulsa_test=np.asarray(ulsa_test), rec_test=np.asarray(rec_test),
-             chi2_history=res["chi2_history"], converged=res["converged"])
+    np.savez(outfile, **save)
     print(f"\nsaved arrays -> {outfile}")
     return res
 
