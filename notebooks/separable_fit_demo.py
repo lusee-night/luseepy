@@ -1,0 +1,193 @@
+"""Separable (space-frequency template) sky fitting demo.
+
+Fits the bilinear model
+
+    T(theta, f) = sum_i  flux_i(theta) * shape_i(f)        (n_templates = 2)
+
+to mock LuSEE-Night data generated from the *real ULSA maps*.  The template
+maps `flux_i` (alm) are the **linear** block (Wiener solve); the spectral shapes
+`shape_i(f)` are the **non-linear** block (outer optimiser).  This is the same
+`lusee.fitting` machinery as the power-law demo — only a different sky module —
+so it exercises the registry's support for *multiple* linear blocks and the
+bilinear flux x shape coupling.
+
+Truth: a rank-2 PCA (over frequency) of the ULSA maps, re-gauged so each shape
+equals 1 at the reference frequency.  The data are the full ULSA maps, so the
+rank-2 model is mildly mis-specified.
+
+Run:    python notebooks/separable_fit_demo.py
+Needs:  LUSEE_DRIVE_DIR;  set JAX_ENABLE_X64=1.
+"""
+
+import os
+os.environ.setdefault("JAX_ENABLE_X64", "1")
+
+import time
+import numpy as np
+import jax
+import jax.numpy as jnp
+import healpy as hp
+import fitsio
+
+import lusee
+from lusee.SeparableSky import SeparableSkyModule
+from lusee.Fitting import BeamModule, InstrumentModule, Experiment
+
+DRIVE = os.environ["LUSEE_DRIVE_DIR"]
+BEAM_FILE = DRIVE + "/Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
+SKY_FILE = DRIVE + "/Simulations/SkyModels/ULSA_32_ddi_smooth.fits"
+
+
+def build_truth(Nside, lmax, freq, ref_freq, n_templates):
+    """Rank-`n_templates` PCA of the ULSA maps over frequency, gauge-anchored so
+    each spectral shape equals 1 at `ref_freq`.
+
+    Returns ``(data_sky, flux_alms_true, shapes_true)``:
+      * data_sky      — HealpixSky of the *full* ULSA maps (the data we fit),
+      * flux_alms_true — (n_templates, nalm) template maps in alm,
+      * shapes_true    — (n_templates, nfreq) spectral shapes.
+    """
+    maps_all = np.maximum(fitsio.read(SKY_FILE), 1e-3)     # (50, Npix32)
+    ulsa_nside = hp.npix2nside(maps_all.shape[1])
+    fr = np.arange(1, maps_all.shape[0] + 1, dtype=float)
+    idx = [int(np.argmin(np.abs(fr - f))) for f in freq]
+    ulsa = maps_all[idx]                                    # (nfreq, Npix32)
+
+    # Data-generating sky: the full ULSA maps at the fitted frequencies.
+    data_sky = lusee.HealpixSky(ulsa_nside, lmax, maps=list(ulsa),
+                                freq=freq, frame="galactic")
+
+    # PCA over frequency at the working resolution.
+    X = hp.ud_grade(ulsa, Nside).T                          # (Npix, nfreq)
+    U, S, Vt = np.linalg.svd(X, full_matrices=False)
+    flux_maps = (U[:, :n_templates] * S[:n_templates])      # (Npix, n_templ)
+    shapes = Vt[:n_templates]                               # (n_templ, nfreq)
+
+    # Re-gauge: anchor each shape at the reference frequency (shape_i(f_ref)=1).
+    k_ref = int(np.argmin(np.abs(np.asarray(freq) - ref_freq)))
+    c = shapes[:, k_ref].copy()
+    shapes = shapes / c[:, None]
+    flux_maps = flux_maps * c[None, :]
+
+    # Templates in healpy-packed alm (the separable forward is pure alm -- no
+    # s2fft -- so we stay in the healpy convention throughout).
+    flux_alms = np.stack([hp.map2alm(flux_maps[:, i], lmax)
+                          for i in range(n_templates)])
+    return data_sky, jnp.asarray(flux_alms), jnp.asarray(shapes)
+
+
+def run(lmax=31, Nside=16, n_templates=2,
+        freq=(15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0), ref_freq=25.0,
+        obs_range="2025-02-01 13:00:00 to 2025-02-28 13:00:00",
+        dt_sec=4 * 3600.0, taper=0.03, maxiter=80, inner_maxiter=300,
+        init_from="data", shape_perturb=0.25, target_snr=1e4, noise_seed=42):
+
+    freq = np.asarray(freq, dtype=float)
+    print(f"=== Separable fit: lmax={lmax} Nside={Nside} "
+          f"n_templates={n_templates} freq={freq.tolist()} ref={ref_freq} ===")
+
+    sim, beams, obs = lusee.mapmaker.build_instrument(
+        beam_file=BEAM_FILE, obs_range=obs_range, freq=freq, lmax=lmax,
+        taper=taper, dt_sec=dt_sec)
+    print(f"{len(obs.times)} timesteps, {len(sim.combinations)} combinations")
+
+    data_sky, flux_true, shapes_true = build_truth(
+        Nside, lmax, freq, ref_freq, n_templates)
+
+    t0 = time.time()
+    data_clean = sim.simulate(sky=data_sky)
+    print(f"forward (ULSA) in {time.time()-t0:.1f}s, data shape {data_clean.shape}")
+
+    sigma = lusee.mapmaker.compute_radiometric_noise(
+        data_clean, combinations=sim.combinations,
+        delta_f_hz=1e6, delta_t_sec=dt_sec)
+    if target_snr is not None:
+        snr0 = float(jnp.std(data_clean)) / float(jnp.median(sigma))
+        sigma = sigma * (snr0 / target_snr)
+    data = data_clean + sigma * jax.random.normal(
+        jax.random.PRNGKey(noise_seed), data_clean.shape)
+    N_inv = 1.0 / jnp.asarray(sigma) ** 2
+    print(f"median sigma = {float(jnp.median(sigma)):.3f} K, "
+          f"SNR ~ {float(jnp.std(data_clean))/float(jnp.median(sigma)):.0f}")
+
+    cl_flux = [hp.alm2cl(np.asarray(flux_true[i])) for i in range(n_templates)]
+
+    k_ref = int(np.argmin(np.abs(freq - ref_freq)))
+    if init_from == "data":
+        # Realistic, truth-free initialisation: PCA of the *data* over frequency.
+        # Each (time, channel) sample is a row; the first n_templates right
+        # singular vectors are the dominant frequency modes of what the
+        # instrument actually measured.  Anchor each to 1 at the reference
+        # frequency (guarding against a near-zero crossing there).
+        D = np.asarray(data).reshape(-1, len(freq))          # (Ntime*Nchan, Nfreq)
+        _, _, Vt = np.linalg.svd(D, full_matrices=False)
+        modes = Vt[:n_templates]                             # (n_templ, Nfreq)
+        ref_vals = modes[:, k_ref]
+        ref_vals = np.where(np.abs(ref_vals) < 1e-2,
+                            np.sign(ref_vals + 1e-12) * 1e-2, ref_vals)
+        shape_init = modes / ref_vals[:, None]
+        print("shape init from PCA of the DATA over frequency (truth not used)")
+    else:
+        # Truth-perturbation init (diagnostic only -- assumes knowing the truth).
+        rng = np.random.default_rng(noise_seed)
+        shape_init = np.asarray(shapes_true) * (
+            1.0 + shape_perturb * rng.standard_normal(np.asarray(shapes_true).shape))
+        print(f"shape init perturbed by {shape_perturb:.0%} from truth")
+
+    # ---- Assemble (Layer 2 + 3): only the sky module differs from the
+    #      power-law demo; everything else is reused unchanged. ----
+    sky_mod = SeparableSkyModule(
+        lmax=lmax, freq=freq, ref_freq=ref_freq, n_templates=n_templates,
+        cl_flux=cl_flux, shape_init=shape_init)
+    exp = Experiment(sim, sky=sky_mod, beam=BeamModule(),
+                     instrument=InstrumentModule(), data=data, N_inv=N_inv)
+    print("\nParameters in the model:")
+    for p in exp.paramset.params:
+        print(f"  {p.name:12s} {p.kind}")
+
+    t0 = time.time()
+    res = exp.optimize(maxiter=maxiter, inner_maxiter=inner_maxiter)
+    print(f"Fit in {time.time()-t0:.1f}s  ({res['nfev']} evals, "
+          f"final chi2={res['chi2']:.4e})")
+
+    flux_hat = np.stack([np.asarray(res["linear"][f"sep.flux.{i}"])
+                         for i in range(n_templates)])
+    shapes_hat = np.asarray(sky_mod._full_shapes(
+        jnp.asarray(res["nonlinear"]["sep.shape"])))
+
+    # ---- Report: gauge-invariant total flux at low/mid/high frequency ----
+    test_freq = [float(freq.min()), float(freq[len(freq) // 2]), float(freq.max())]
+    maps_all = np.maximum(fitsio.read(SKY_FILE), 1e-3)
+    fr = np.arange(1, maps_all.shape[0] + 1, dtype=float)
+    ulsa_test, rec_test = [], []
+    print("\nTotal-flux recovery (gauge-invariant) vs ULSA:")
+    for f in test_freq:
+        kf = int(np.argmin(np.abs(freq - f)))
+        rec_alm = np.einsum("i,ia->a", shapes_hat[:, kf], flux_hat)
+        rec = hp.alm2map(rec_alm.astype(complex), Nside)
+        ulsa = hp.ud_grade(maps_all[int(np.argmin(np.abs(fr - f)))], Nside)
+        rho = (hp.alm2cl(rec_alm, hp.map2alm(ulsa, lmax)) /
+               np.sqrt(hp.alm2cl(rec_alm) * hp.alm2cl(hp.map2alm(ulsa, lmax)) + 1e-30))
+        print(f"  f={f:4.0f} MHz: rec/ULSA mean ratio = {rec.mean()/ulsa.mean():.3f}, "
+              f"mean rho(1..{min(10,lmax)}) = {np.nanmean(rho[1:min(11,lmax+1)]):.4f}")
+        ulsa_test.append(ulsa); rec_test.append(rec)
+
+    print("\nSpectral shapes (recovered vs truth, anchored at f_ref=1):")
+    for i in range(n_templates):
+        print(f"  template {i}: truth {np.round(shapes_true[i],3).tolist()}")
+        print(f"              rec   {np.round(shapes_hat[i],3).tolist()}")
+
+    outfile = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "separable_fit_result.npz")
+    np.savez(outfile, flux_true=np.asarray(flux_true), flux_hat=flux_hat,
+             shapes_true=np.asarray(shapes_true), shapes_hat=shapes_hat,
+             shape_init=shape_init, freq=freq, test_freq=np.asarray(test_freq),
+             lmax=lmax, Nside=Nside, ref_freq=ref_freq,
+             ulsa_test=np.asarray(ulsa_test), rec_test=np.asarray(rec_test),
+             chi2_history=res["chi2_history"], converged=res["converged"])
+    print(f"\nsaved arrays -> {outfile}")
+    return res
+
+
+if __name__ == "__main__":
+    run()
