@@ -8,6 +8,10 @@ import  astropy.constants   as ac
 import  astropy.units       as u
 from    scipy.spatial.transform import Rotation as R
 from    lunarsky            import MCMF, SkyCoord, LunarTopo
+from    scipy.integrate     import quad
+from    scipy.interpolate   import interp1d
+import  pandas              as pd
+from    scipy.optimize      import brentq
 
 
 class Satellite:
@@ -228,3 +232,45 @@ class ObservedSatellite:
 
         return m
     
+    def load_density_profile(self, csv_path):
+        df = pd.read_csv(csv_path).sort_values('Altitude')
+        return interp1d(df['Altitude'], df['Electron Density'],
+                        kind='cubic', bounds_error=False, fill_value=0.0)
+        
+    def compute_tec(self, density_profile_csv):
+        # load the electron density profile as a callable n_e(altitude_km)
+        # returns 0 outside the range of the CSV (i.e. 5-90 km)
+        n_e = self.load_density_profile(density_profile_csv) 
+        R_MOON_KM = 1737.4
+
+        alt   = self.alt         # elevation angle of the satellite at each time step, shape (NTime,)
+        L     = self.dist_km()   # slant range from receiver to satellite at each time step in km, shape (NTime,)
+
+        dx = 1.0                                    # physical spacing between integration points along the ray in km
+        N_STEPS = int(np.ceil(L.max() / dx)) + 1    # total number of integration points, set by the longest slant range across all time steps
+        lam_phys = np.arange(N_STEPS) * dx          # 1D grid of distances along the ray from 0 to max(L), shape (N_STEPS,)
+
+        el = alt[:, np.newaxis]                     # Reshape elevation to (NTime, 1) for broadcasting against (1, N_STEPS)
+        lam_phys = lam_phys[np.newaxis, :]          # reshape lam_phys to (1, N_STEPS) for broadcasting against (NTime, 1)
+        print(L[0])
+        print(lam_phys[0])
+
+        # Compute the altitude above the lunar surface at every (time, path point) combination
+        # derived from the triangle: r^2 = R^2 + lam^2 + 2*R*lam*sin(el), then h = r - R
+        # shape (NTime, N_STEPS)
+        h = np.sqrt(R_MOON_KM**2 + lam_phys**2 + 2*R_MOON_KM*lam_phys*np.sin(el)) - R_MOON_KM
+
+        # evaluate electron density at every (time, path point), shape (NTime, N_STEPS)
+        ne_grid = n_e(h)
+
+        # Mask out integration points that lie beyond the satellite for each time step
+        # (the grid extends to max(L) but shorter passes don't reach that far)
+        mask = lam_phys > L[:, np.newaxis]
+        ne_grid[mask] = 0.0
+
+        # Integrate along the ray path for each time step using the trapezoidal rule
+        # dx is in km, ne_grid is in units of 1e10 m^-3, raw has units of 1e10 m^-3 * km
+        raw = np.trapezoid(ne_grid, dx=dx, axis=1)   # (NTime,)
+        
+        # convert to TECU: 1e10 m^-3 * km * 1e3 m/km = 1e13 m^-2, divide by 1e16 for TECU -> 1e-3
+        return raw * 1e-3

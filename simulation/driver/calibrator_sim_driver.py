@@ -91,6 +91,8 @@ class CalibratorSimDriver(dict):
         sat    = lusee.Satellite(**sat_kwargs)
         os_    = lusee.ObservedSatellite(obs, sat)
         passes = os_.get_transit_indices()
+        
+        tec_array = os_.compute_tec(self["lunar_ionsophere_model"]) if self["lunar_ionsophere_model"] else None
 
         tracks = []
         for si, ei in passes:
@@ -104,6 +106,7 @@ class CalibratorSimDriver(dict):
                 polarization  = np.zeros(n),
                 tone_freqs    = tone_freqs,
                 tone_amplitude= tone_amplitude,
+                #tec           = tec_array[si:ei] if tec_array is not None else None,
             ))
 
         return tracks
