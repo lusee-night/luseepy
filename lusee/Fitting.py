@@ -262,13 +262,47 @@ def linear_solve_cg(A, n_theta, N_inv, S_inv, data, maxiter=400, tol=1e-10,
     return theta_hat
 
 
+def _dense_linear_system(A, n_theta, N_inv, S_inv, data):
+    """Build dense normal equations for a linear forward map.
+
+    Returns ``(H, rhs, cols)`` where ``cols[i] = A(e_i)``.  The column matrix is
+    transposed relative to the conventional Jacobian so the weighted normal
+    matrix can be formed without an extra transpose.
+    """
+    N_inv = jnp.asarray(N_inv).ravel()
+    d = jnp.asarray(data).ravel()
+    dtype = jnp.result_type(d, jnp.float64)
+    eye = jnp.eye(int(n_theta), dtype=dtype)
+    cols = jax.vmap(A)(eye)                         # (n_theta, ndata)
+    weighted_cols = cols * N_inv[None, :]
+    H = weighted_cols @ cols.T
+    if jnp.ndim(S_inv) == 0:
+        H = H + S_inv * jnp.eye(int(n_theta), dtype=H.dtype)
+    else:
+        H = H + jnp.diag(jnp.asarray(S_inv, dtype=H.dtype))
+    rhs = cols @ (N_inv * d)
+    return H, rhs, cols
+
+
+def linear_solve_dense(A, n_theta, N_inv, S_inv, data):
+    """Solve the linear Wiener step by explicitly building ``A``.
+
+    This is intended for small linear blocks where GPU batching and dense
+    Cholesky beat many matrix-free VJP/CG iterations.
+    """
+    H, rhs, _ = _dense_linear_system(A, n_theta, N_inv, S_inv, data)
+    L = jnp.linalg.cholesky(H)
+    return jax.scipy.linalg.cho_solve((L, True), rhs)
+
+
 # ============================================================================
 # Generic VarPro driver
 # ============================================================================
 
 def profile_optimize(predict, paramset, data, N_inv, *, maxiter=100,
                      inner_maxiter=1500, inner_tol=1e-10, max_restarts=3,
-                     ftol=2.22e-9, gtol=1e-5, tol=None, verbose=True):
+                     ftol=2.22e-9, gtol=1e-5, tol=None, verbose=True,
+                     inner_method="auto", dense_threshold=512):
     """Variable-projection optimisation of a conditionally-linear model.
 
     :param predict: Assembly ``predict(linear: dict, nonlinear: dict) ->
@@ -284,9 +318,19 @@ def profile_optimize(predict, paramset, data, N_inv, *, maxiter=100,
     N_inv_flat = jnp.asarray(N_inv).ravel()
     S_inv = paramset.Sinv_linear()
     n_lin = paramset.n_linear
+    if inner_method == "auto":
+        solve_method = "dense" if n_lin <= int(dense_threshold) else "cg"
+    else:
+        solve_method = inner_method
+    if solve_method not in {"cg", "dense"}:
+        raise ValueError("inner_method must be 'auto', 'cg', or 'dense'")
+    if verbose:
+        print(f"  inner solve: {solve_method} (n_linear={n_lin})", flush=True)
 
     def solve_linear(nl, x0):
         A = lambda theta: predict(paramset.unpack_linear(theta), nl)
+        if solve_method == "dense":
+            return linear_solve_dense(A, n_lin, N_inv_flat, S_inv, d_flat)
         return linear_solve_cg(A, n_lin, N_inv_flat, S_inv, d_flat,
                                maxiter=inner_maxiter, tol=inner_tol, x0=x0)
 
@@ -379,7 +423,8 @@ def profile_optimize(predict, paramset, data, N_inv, *, maxiter=100,
 # Posterior uncertainty: Fisher / Laplace for the linear block
 # ============================================================================
 
-def linear_fisher(predict, paramset, data, N_inv, nonlinear):
+def linear_fisher(predict, paramset, data, N_inv, nonlinear, *,
+                  method="auto", dense_threshold=4096):
     """Gaussian posterior of the linear block at fixed non-linear parameters.
 
     Conditional on ``nonlinear``, the linear block has an exact Gaussian
@@ -396,15 +441,39 @@ def linear_fisher(predict, paramset, data, N_inv, nonlinear):
         per-mode posterior standard deviation ``sqrt(diag(cov))``, all in the
         block's real parameterisation.
     """
-    N_inv_flat = np.asarray(N_inv).ravel()
-    S_inv = np.broadcast_to(np.asarray(paramset.Sinv_linear()),
-                            (paramset.n_linear,))
     n = paramset.n_linear
-    A = jax.jit(lambda theta: predict(paramset.unpack_linear(theta), nonlinear))
-    eye = np.eye(n)
-    J = np.stack([np.asarray(A(jnp.asarray(eye[i]))) for i in range(n)], axis=1)
-    H = (J.T * N_inv_flat) @ J + np.diag(S_inv)
-    cov = np.linalg.inv(H)
+    if method == "auto":
+        method = "dense" if n <= int(dense_threshold) else "loop"
+    if method not in {"dense", "loop"}:
+        raise ValueError("linear_fisher method must be 'auto', 'dense', or 'loop'")
+
+    S_inv = np.broadcast_to(np.asarray(paramset.Sinv_linear()), (n,))
+    if method == "dense":
+        A = lambda theta: predict(paramset.unpack_linear(theta), nonlinear)
+
+        @jax.jit
+        def build_cov():
+            H, _, _ = _dense_linear_system(
+                A, n, jnp.asarray(N_inv).ravel(), jnp.asarray(S_inv),
+                jnp.asarray(data).ravel()
+            )
+            L = jnp.linalg.cholesky(H)
+            cov = jax.scipy.linalg.cho_solve(
+                (L, True), jnp.eye(n, dtype=H.dtype)
+            )
+            return H, cov
+
+        H, cov = build_cov()
+        H = np.asarray(H)
+        cov = np.asarray(cov)
+    else:
+        N_inv_flat = np.asarray(N_inv).ravel()
+        A = jax.jit(lambda theta: predict(paramset.unpack_linear(theta), nonlinear))
+        eye = np.eye(n)
+        J = np.stack([np.asarray(A(jnp.asarray(eye[i]))) for i in range(n)], axis=1)
+        H = (J.T * N_inv_flat) @ J + np.diag(S_inv)
+        cov = np.linalg.inv(H)
+
     var = np.clip(np.diag(cov), 0, None)
     # Wiener gain per mode: w = signal/(signal+noise) = diag(I - S^-1 H^-1).
     # -> 1 for signal-dominated modes, 0 for noise-dominated ones.
@@ -414,7 +483,10 @@ def linear_fisher(predict, paramset, data, N_inv, nonlinear):
 
 def sample_posterior(predict, paramset, data, N_inv, *, num_samples=500,
                      num_warmup=500, seed=0, init_linear=None,
-                     init_nonlinear=None):
+                     init_nonlinear=None, engine="nuts",
+                     hmc_num_integration_steps=10,
+                     initial_step_size=1.0,
+                     target_acceptance_rate=0.8):
     """NUTS over the *joint* (linear, non-linear) posterior.
 
     log p(lam, eta | d) = -1/2 [ ||d - predict||^2_{N^-1} + lam^T S^-1 lam ]
@@ -425,6 +497,10 @@ def sample_posterior(predict, paramset, data, N_inv, *, num_samples=500,
     the linear directions are Gaussian and well-conditioned.  Bounded non-linear
     params are sampled in an unconstrained sigmoid space (with the log-Jacobian).
 
+    :param engine: BlackJAX HMC-like engine. Supported values are ``"nuts"``
+        (default) and ``"hmc"``.
+    :param hmc_num_integration_steps: Static trajectory length for
+        ``engine="hmc"``.
     :returns: dict with ``linear`` (``{name: (num_samples, ...) alm samples}``),
         ``nonlinear`` (``{name: (num_samples, ...) value samples}``), and
         ``accept`` (mean acceptance).  Posterior mean = estimate; std = per-mode
@@ -472,16 +548,33 @@ def sample_posterior(predict, paramset, data, N_inv, *, num_samples=500,
             else jnp.asarray(init_nonlinear))
     z0 = jnp.concatenate([lam0, z_from_eta(eta0)])
 
+    engine = engine.lower()
+    if engine == "nuts":
+        algorithm = blackjax.nuts
+        warmup_kwargs = {}
+    elif engine == "hmc":
+        algorithm = blackjax.hmc
+        warmup_kwargs = {"num_integration_steps": int(hmc_num_integration_steps)}
+    else:
+        raise ValueError("engine must be 'nuts' or 'hmc'")
+
     rng = jax.random.PRNGKey(seed)
     rng, wk = jax.random.split(rng)
-    warmup = blackjax.window_adaptation(blackjax.nuts, logdensity)
+    warmup = blackjax.window_adaptation(
+        algorithm,
+        logdensity,
+        initial_step_size=float(initial_step_size),
+        target_acceptance_rate=float(target_acceptance_rate),
+        **warmup_kwargs,
+    )
     (state, params), _ = warmup.run(wk, z0, num_steps=num_warmup)
-    kernel = blackjax.nuts(logdensity, **params)
+    kernel = algorithm(logdensity, **params)
 
     @jax.jit
     def one_step(state, k):
         state, info = kernel.step(k, state)
-        return state, (state.position, info.acceptance_rate)
+        accept = getattr(info, "acceptance_rate", getattr(info, "is_accepted", jnp.nan))
+        return state, (state.position, accept)
 
     rng, sk = jax.random.split(rng)
     _, (positions, accept) = jax.lax.scan(

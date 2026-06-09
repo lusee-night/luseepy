@@ -226,43 +226,65 @@ the two recovered shapes. Reuse outcome: **only the sky module is new** — the
 registry, `Experiment`, `profile_optimize`, `linear_solve_cg`, `BeamModule` and
 `InstrumentModule` are imported unchanged.
 
-## 5. Performance: run on CPU (for now)
+## 5. Performance: CPU baseline and GPU path
 
-**Run these fits on CPU, not GPU.** This is counter-intuitive but measured. On an
-identical lmax=31 / Nside=16 / 3-template separable fit:
+The original fitting path was faster on CPU than GPU. On an identical
+lmax=31 / Nside=16 / 3-template separable fit:
 
 | backend | compile | per evaluation | full fit (117 evals) |
 | --- | --- | --- | --- |
 | CPU | ~95 s | ~2.7 s | **310 s** |
 | GPU (RTX 4090) | ~17 min | ~480 s | ~15 h (extrapolated) |
 
-Over one 480 s window the CPU completed **97** optimiser evaluations; the GPU
-completed **1**. CPU is ~180× faster end to end.
+The workload was **latency/dispatch-bound, not throughput-bound**. The old
+`CroSimulator` path rebuilt fixed beam/frame rotations inside each forward and
+called the croissant convolution separately for each real/imag beam channel. The
+inner CG solve then re-ran that forward many times per optimiser evaluation. At
+the low resolutions used in the demos, this produced a very large XLA graph made
+from many tiny kernels; GPU compile time and command-buffer pressure dominated.
 
-The workload is **latency/dispatch-bound, not throughput-bound**. The forward
-model is a Python-unrolled loop over time steps (×10 beam combinations), and the
-inner CG re-runs it up to a few hundred times per evaluation. At these
-resolutions the arrays are tiny (e.g. `L = 32`), so every operation becomes a
-separate sub-microsecond GPU kernel — and we launch millions of them, each
-paying kernel-launch latency. The CPU runs them inline with no launch overhead;
-the GPU's throughput is wasted on kernels too small to amortise dispatch. The
-GPU also compiles the large unrolled graph ~10× slower.
+The current path adds two GPU-oriented changes while preserving the old fallbacks:
 
-GPU will only pay off after the forward is **vectorised** — `vmap` the time loop
-(and ideally the beam combinations) and `jit` the whole forward, so each
-evaluation is a few large batched kernels instead of millions of tiny ones — and
-even then only at large `lmax`. Until that refactor, prefer CPU. Memory is never
-the constraint: the inner solve is matrix-free, peak usage well under 1 GB at
-`lmax ≤ 32`. (When sharing a GPU between jobs, JAX preallocates ~75% of the card
-by default; cap each with `XLA_PYTHON_CLIENT_MEM_FRACTION`, but per the above you
-usually shouldn't be on the GPU at all yet.)
+* `CroSimulator.simulate()` now defaults to a cached batched MEPA plan for fixed
+  beams. The observation phases, galactic→MEPA rotation coefficients, and
+  topocentric→MEPA beam alms are cached once; all real/imag output channels are
+  stacked and convolved with one batched `einsum`. The old loop path is still
+  used for plotting and dynamic `beam=` pytrees.
+* `profile_optimize()` has `inner_method={auto,cg,dense}`. `auto` chooses a
+  dense Cholesky solve when the linear block is small (`n_linear <=
+  dense_threshold`, default 512) and CG otherwise. For the common
+  `lmax=16` spectral run, `n_linear=289`, so the inner solve is dense by default.
+  This avoids thousands of matrix-free VJP/CG forwards on the GPU.
+
+`linear_fisher()` has the same idea: for small blocks it builds the dense Fisher
+matrix by batching all design-matrix columns with `jax.vmap`, then computes the
+covariance by Cholesky. The old Python column loop remains available via
+`--fisher-method loop`.
+
+Short validation probe on an RTX 4090, using
+`--truth ulsa --lmax 16 --nside 8 --beta-nside 8 --dt-hours 1 --maxiter 1
+--inner-maxiter 20`:
+
+| path | result |
+| --- | --- |
+| old GPU path | `jit_loss` compile >2m40s, then CUDA graph command-buffer OOM |
+| new GPU path | selected `inner solve: dense (n_linear=289)`, completed 3 objective evals in ~12 s |
+| new GPU path + `--fisher` | Fisher completed in ~2 s after the short fit |
+
+This does not mean every full run is GPU-optimal. Dense solves are intended for
+small linear blocks; for larger `lmax`, leave `--inner-method auto` or force
+`--inner-method cg`. When sharing a GPU between jobs, JAX may still preallocate a
+large fraction of the card; cap it with `XLA_PYTHON_CLIENT_MEM_FRACTION` if
+needed.
 
 ## 6. Roadmap
 
-* **Sampling.** Add a `log_posterior(η)` that marginalises the linear block
-  (the `−½ log det` term, which factorises per frequency) and hand it to
-  blackjax/numpyro NUTS over `η`. The `bijector` slot on `Param` provides the
-  unconstrained transform for box-bounded `η`. No change to modules or forward.
+* **Sampling.** The current `sample_posterior()` still samples the joint
+  `(linear, nonlinear)` posterior, but it now exposes BlackJAX engine selection:
+  `engine="nuts"` (default) or `engine="hmc"` with `hmc_num_integration_steps`.
+  A future Rao–Blackwellised sampler could marginalise the linear block and add
+  the dense-system `−½ log det(A^T N^{-1} A + S^{-1})` term, but this should be
+  benchmarked before replacing the joint sampler.
 * **Parameterised beam.** Subclass `BeamModule` to return a `CachedBeam` pytree
   built from regolith/impedance parameters; it slots into the same `ParamSet`.
 * **Vectorise the forward** (see §5) — the single highest-value performance fix,
@@ -270,16 +292,20 @@ usually shouldn't be on the GPU at all yet.)
 
 ## Running the demos (CLI)
 
-Both drivers are command-line programs (`--help` lists every option) that write a
-single `.npz`; the recovery notebooks read *everything* from that `.npz` (set
-`RESULT` / the loaded path to point at it). Run with `JAX_ENABLE_X64=1` and
-`LUSEE_DRIVE_DIR` set (beam + ULSA data); CPU is the right backend (§5).
+Both drivers are command-line programs (`--help` lists every option and its
+default) that write a single `.npz`; the recovery notebooks read *everything*
+from that `.npz` (set `RESULT` / the loaded path to point at it). Run with
+`JAX_ENABLE_X64=1` and `LUSEE_DRIVE_DIR` set (beam + ULSA data). Use
+`JAX_PLATFORMS=cpu` for CPU-only runs; omit it to let JAX use a visible GPU.
 
 ```bash
 # Spectral (power-law) — MAP, default Nside=16/lmax=31, real ULSA data:
 python notebooks/spectral_fit_demo.py --truth ulsa
 # add Fisher (Wiener-weighted) recovery + HMC posterior, custom output:
 python notebooks/spectral_fit_demo.py --truth ulsa --fisher --hmc -o out/spec.npz
+# GPU-oriented low-resolution run; auto selects the dense inner solve at lmax=16:
+python notebooks/spectral_fit_demo.py --truth ulsa --lmax 16 --nside 8 \
+    --beta-nside 8 --dt-hours 1 --fisher --hmc
 # self-consistent (theory) data instead of ULSA, low-res quick run:
 python notebooks/spectral_fit_demo.py --truth powerlaw --lmax 15 --nside 8 \
     --beta-nside 4 --dt-hours 8 --hmc
@@ -289,9 +315,11 @@ python notebooks/separable_fit_demo.py --n-templates 3 --hmc -o out/sep.npz
 ```
 
 Key options (shared): `--lmax`, `--nside`, `--freq f1 f2 …`, `--dt-hours`,
-`--target-snr`, `--maxiter`, `--inner-maxiter`, `--hmc` (+`--num-samples` /
-`--num-warmup`), `--seed`, `-o/--output`. Spectral-only: `--truth
-{powerlaw,ulsa}`, `--beta-nside`, `--fisher`, `--fit-gain`. Separable-only:
+`--target-snr`, `--maxiter`, `--inner-maxiter`, `--inner-method {auto,cg,dense}`,
+`--dense-threshold`, `--hmc`, `--hmc-engine {nuts,hmc}`, `--hmc-steps`
+(+`--num-samples` / `--num-warmup`), `--seed`, `-o/--output`. Spectral-only:
+`--truth {powerlaw,ulsa}`, `--beta-nside`, `--fisher`,
+`--fisher-method {auto,dense,loop}`, `--fit-gain`. Separable-only:
 `--n-templates`, `--ref-freq`, `--init-from {data,truth}`. The same names are
 keyword arguments of each module's `run()`.
 
@@ -301,7 +329,7 @@ keyword arguments of each module's `run()`.
 | --- | --- |
 | `lusee/SpectralSky.py` | `SpectralHealpixSky` — the power-law model (pytree, differentiable `get_alm`) |
 | `lusee/SeparableSky.py` | `SeparableHealpixSky` — the separable template model (no SHT in forward) |
-| `lusee/Fitting.py` | Layer 1 (`Param`/`ParamSet`/`RealAlmBlock`), Layer 2 modules, Layer 3 `Experiment`, drivers (`linear_solve_cg`, `profile_optimize`) |
+| `lusee/Fitting.py` | Layer 1 (`Param`/`ParamSet`/`RealAlmBlock`), Layer 2 modules, Layer 3 `Experiment`, drivers (`linear_solve_cg`, `linear_solve_dense`, `profile_optimize`) |
 | `notebooks/spectral_fit_demo.py` | Power-law driver (`truth='powerlaw'` self-consistent, or `'ulsa'` real maps) |
 | `notebooks/spectral_fit_recovery.ipynb` | Input vs recovered flux/β maps and `ρ_ℓ` |
 | `notebooks/separable_fit_demo.py` | Separable-model driver (ULSA data, rank-2 PCA truth) |

@@ -101,9 +101,10 @@ def run(lmax=31, Nside=16, beta_nside=8,
         freq=(15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0), f_fid=25.0,
         obs_range="2025-02-01 13:00:00 to 2025-02-28 13:00:00",
         dt_sec=2 * 3600.0, taper=0.03, maxiter=200, inner_maxiter=1500,
+        inner_method="auto", dense_threshold=512, fisher_method="auto",
         fit_gain=False, truth="powerlaw", target_snr=1e4, compute_fisher=False,
-        sample=False, num_samples=300, num_warmup=300, noise_seed=42,
-        outfile=None):
+        sample=False, num_samples=300, num_warmup=300, hmc_engine="nuts",
+        hmc_num_integration_steps=10, noise_seed=42, outfile=None):
 
     if not DRIVE:
         raise SystemExit("LUSEE_DRIVE_DIR must be set (beam + ULSA data files).")
@@ -169,7 +170,9 @@ def run(lmax=31, Nside=16, beta_nside=8,
 
     # ---- Fit (shared driver) ----
     t0 = time.time()
-    out = exp.optimize(maxiter=maxiter, inner_maxiter=inner_maxiter)
+    out = exp.optimize(maxiter=maxiter, inner_maxiter=inner_maxiter,
+                       inner_method=inner_method,
+                       dense_threshold=dense_threshold)
     fit = {"flux_alm": out["linear"]["sky.flux"],
            "beta_pix": out["nonlinear"]["sky.beta"],
            "chi2": out["chi2"], "nfev": out["nfev"]}
@@ -205,7 +208,7 @@ def run(lmax=31, Nside=16, beta_nside=8,
         block = exp.paramset.linear[0].reparam
         t0 = time.time()
         fish = linear_fisher(exp.predict, exp.paramset, data, N_inv,
-                             out["nonlinear"])
+                             out["nonlinear"], method=fisher_method)
         rec = snr_weighted_recovery(block.natural_to_theta(flux_hat),
                                     block.natural_to_theta(flux_t), fish)
         print(f"\nFisher / Wiener-weighted flux recovery ({time.time()-t0:.0f}s):")
@@ -227,7 +230,9 @@ def run(lmax=31, Nside=16, beta_nside=8,
             exp.predict, exp.paramset, data, N_inv,
             num_samples=num_samples, num_warmup=num_warmup, seed=noise_seed,
             init_linear=exp.paramset.pack_linear(out["linear"]),
-            init_nonlinear=exp.paramset.pack_nonlinear(out["nonlinear"]))
+            init_nonlinear=exp.paramset.pack_nonlinear(out["nonlinear"]),
+            engine=hmc_engine,
+            hmc_num_integration_steps=hmc_num_integration_steps)
         print(f"\nHMC: {num_samples} samples in {time.time()-t0:.0f}s, "
               f"accept={post['accept']:.2f}")
         fa = np.asarray(post["linear"]["sky.flux"])          # (ns, nalm) complex
@@ -256,9 +261,22 @@ def run(lmax=31, Nside=16, beta_nside=8,
 
 def main(argv=None):
     import argparse
+
+    class DefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+        def _get_help_string(self, action):
+            help_text = action.help or ""
+            if (action.option_strings
+                    and action.default is not argparse.SUPPRESS
+                    and "%(default)" not in help_text):
+                if help_text:
+                    help_text += " "
+                help_text += "(default: %(default)s)"
+            return help_text
+
     p = argparse.ArgumentParser(
         description="Spectral sky fit: T(theta,f) = flux(theta)*(f/f_fid)^beta(theta). "
-                    "MAP (Wiener flux + L-BFGS-B beta), optional Fisher and HMC.")
+                    "MAP (Wiener flux + L-BFGS-B beta), optional Fisher and HMC.",
+        formatter_class=DefaultsHelpFormatter)
     p.add_argument("--lmax", type=int, default=31)
     p.add_argument("--nside", type=int, default=16, dest="Nside")
     p.add_argument("--beta-nside", type=int, default=8, dest="beta_nside")
@@ -277,23 +295,43 @@ def main(argv=None):
     p.add_argument("--target-snr", type=float, default=1e4, dest="target_snr")
     p.add_argument("--maxiter", type=int, default=200)
     p.add_argument("--inner-maxiter", type=int, default=1500, dest="inner_maxiter")
+    p.add_argument("--inner-method", choices=["auto", "cg", "dense"],
+                   default="auto", dest="inner_method",
+                   help="linear solve method for the VarPro inner step")
+    p.add_argument("--dense-threshold", type=int, default=512, dest="dense_threshold",
+                   help="n_linear threshold where --inner-method auto selects dense")
     p.add_argument("--fit-gain", action="store_true", dest="fit_gain",
                    help="fit a broadband instrument gain (bilinear with flux)")
     p.add_argument("--fisher", action="store_true", dest="compute_fisher",
                    help="compute the Fisher / Wiener-weighted flux recovery")
+    p.add_argument("--fisher-method", choices=["auto", "dense", "loop"],
+                   default="auto", dest="fisher_method",
+                   help="linear Fisher construction method")
     p.add_argument("--hmc", action="store_true", dest="sample",
                    help="run HMC (NUTS) for the posterior mean/std")
+    p.add_argument("--hmc-engine", choices=["nuts", "hmc"],
+                   default="nuts", dest="hmc_engine",
+                   help="BlackJAX HMC-family engine")
+    p.add_argument("--hmc-steps", type=int, default=10,
+                   dest="hmc_num_integration_steps",
+                   help="integration steps for --hmc-engine hmc")
     p.add_argument("--num-samples", type=int, default=300, dest="num_samples")
     p.add_argument("--num-warmup", type=int, default=300, dest="num_warmup")
     p.add_argument("--seed", type=int, default=42, dest="noise_seed")
     p.add_argument("-o", "--output", default=None, dest="outfile",
                    help="output .npz path (default: spectral_fit_result_<truth>.npz)")
+    for action in p._actions:
+        if action.option_strings and action.help is None:
+            action.help = "(default: %(default)s)"
     a = p.parse_args(argv)
     run(lmax=a.lmax, Nside=a.Nside, beta_nside=a.beta_nside, freq=tuple(a.freq),
         f_fid=a.f_fid, obs_range=a.obs_range, dt_sec=a.dt_hours * 3600.0,
         taper=a.taper, maxiter=a.maxiter, inner_maxiter=a.inner_maxiter,
+        inner_method=a.inner_method, dense_threshold=a.dense_threshold,
         fit_gain=a.fit_gain, truth=a.truth, target_snr=a.target_snr,
-        compute_fisher=a.compute_fisher, sample=a.sample,
+        compute_fisher=a.compute_fisher, fisher_method=a.fisher_method,
+        sample=a.sample, hmc_engine=a.hmc_engine,
+        hmc_num_integration_steps=a.hmc_num_integration_steps,
         num_samples=a.num_samples, num_warmup=a.num_warmup,
         noise_seed=a.noise_seed, outfile=a.outfile)
 

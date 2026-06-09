@@ -91,9 +91,10 @@ def run(lmax=31, Nside=16, n_templates=2,
         freq=(15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0), ref_freq=25.0,
         obs_range="2025-02-01 13:00:00 to 2025-02-28 13:00:00",
         dt_sec=4 * 3600.0, taper=0.03, maxiter=200, inner_maxiter=1500,
+        inner_method="auto", dense_threshold=512,
         init_from="data", shape_perturb=0.25, target_snr=1e4,
-        sample=False, num_samples=300, num_warmup=300, noise_seed=42,
-        outfile=None):
+        sample=False, num_samples=300, num_warmup=300, hmc_engine="nuts",
+        hmc_num_integration_steps=10, noise_seed=42, outfile=None):
 
     if not DRIVE:
         raise SystemExit("LUSEE_DRIVE_DIR must be set (beam + ULSA data files).")
@@ -161,7 +162,9 @@ def run(lmax=31, Nside=16, n_templates=2,
         print(f"  {p.name:12s} {p.kind}")
 
     t0 = time.time()
-    res = exp.optimize(maxiter=maxiter, inner_maxiter=inner_maxiter)
+    res = exp.optimize(maxiter=maxiter, inner_maxiter=inner_maxiter,
+                       inner_method=inner_method,
+                       dense_threshold=dense_threshold)
     print(f"Fit in {time.time()-t0:.1f}s  ({res['nfev']} evals, "
           f"final chi2={res['chi2']:.4e})")
 
@@ -207,7 +210,9 @@ def run(lmax=31, Nside=16, n_templates=2,
             exp.predict, exp.paramset, data, N_inv,
             num_samples=num_samples, num_warmup=num_warmup, seed=noise_seed,
             init_linear=exp.paramset.pack_linear(res["linear"]),
-            init_nonlinear=exp.paramset.pack_nonlinear(res["nonlinear"]))
+            init_nonlinear=exp.paramset.pack_nonlinear(res["nonlinear"]),
+            engine=hmc_engine,
+            hmc_num_integration_steps=hmc_num_integration_steps)
         print(f"\nHMC: {num_samples} samples in {time.time()-t0:.0f}s, "
               f"accept={post['accept']:.2f}")
         fa = [np.asarray(post["linear"][f"sep.flux.{i}"])
@@ -244,10 +249,23 @@ def run(lmax=31, Nside=16, n_templates=2,
 
 def main(argv=None):
     import argparse
+
+    class DefaultsHelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+        def _get_help_string(self, action):
+            help_text = action.help or ""
+            if (action.option_strings
+                    and action.default is not argparse.SUPPRESS
+                    and "%(default)" not in help_text):
+                if help_text:
+                    help_text += " "
+                help_text += "(default: %(default)s)"
+            return help_text
+
     p = argparse.ArgumentParser(
         description="Separable sky fit: T(theta,f) = sum_i flux_i(theta)*shape_i(f). "
                     "Template maps linear (Wiener), spectral shapes non-linear; "
-                    "MAP + optional HMC.  Data are the real ULSA maps.")
+                    "MAP + optional HMC.  Data are the real ULSA maps.",
+        formatter_class=DefaultsHelpFormatter)
     p.add_argument("--lmax", type=int, default=31)
     p.add_argument("--nside", type=int, default=16, dest="Nside")
     p.add_argument("--n-templates", type=int, default=2, dest="n_templates")
@@ -268,19 +286,36 @@ def main(argv=None):
                    help="perturbation for init-from=truth")
     p.add_argument("--maxiter", type=int, default=200)
     p.add_argument("--inner-maxiter", type=int, default=1500, dest="inner_maxiter")
+    p.add_argument("--inner-method", choices=["auto", "cg", "dense"],
+                   default="auto", dest="inner_method",
+                   help="linear solve method for the VarPro inner step")
+    p.add_argument("--dense-threshold", type=int, default=512, dest="dense_threshold",
+                   help="n_linear threshold where --inner-method auto selects dense")
     p.add_argument("--hmc", action="store_true", dest="sample",
                    help="run HMC (NUTS) for the posterior mean/std")
+    p.add_argument("--hmc-engine", choices=["nuts", "hmc"],
+                   default="nuts", dest="hmc_engine",
+                   help="BlackJAX HMC-family engine")
+    p.add_argument("--hmc-steps", type=int, default=10,
+                   dest="hmc_num_integration_steps",
+                   help="integration steps for --hmc-engine hmc")
     p.add_argument("--num-samples", type=int, default=300, dest="num_samples")
     p.add_argument("--num-warmup", type=int, default=300, dest="num_warmup")
     p.add_argument("--seed", type=int, default=42, dest="noise_seed")
     p.add_argument("-o", "--output", default=None, dest="outfile",
                    help="output .npz path (default: separable_fit_result.npz)")
+    for action in p._actions:
+        if action.option_strings and action.help is None:
+            action.help = "(default: %(default)s)"
     a = p.parse_args(argv)
     run(lmax=a.lmax, Nside=a.Nside, n_templates=a.n_templates, freq=tuple(a.freq),
         ref_freq=a.ref_freq, obs_range=a.obs_range, dt_sec=a.dt_hours * 3600.0,
         taper=a.taper, maxiter=a.maxiter, inner_maxiter=a.inner_maxiter,
+        inner_method=a.inner_method, dense_threshold=a.dense_threshold,
         init_from=a.init_from, shape_perturb=a.shape_perturb,
-        target_snr=a.target_snr, sample=a.sample, num_samples=a.num_samples,
+        target_snr=a.target_snr, sample=a.sample, hmc_engine=a.hmc_engine,
+        hmc_num_integration_steps=a.hmc_num_integration_steps,
+        num_samples=a.num_samples,
         num_warmup=a.num_warmup, noise_seed=a.noise_seed, outfile=a.outfile)
 
 
