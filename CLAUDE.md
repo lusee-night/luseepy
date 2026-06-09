@@ -13,28 +13,27 @@ Required environment variables:
 - `LUSEE_OUTPUT_DIR` — output directory for simulation results
 - `LUSEEPY_PATH` — path to the luseepy checkout (optional)
 
-Docker-based development (see `docker/README.md`) or local install:
+Python 3.12 is required (`pyproject.toml` pins `requires-python = "==3.12.*"`). Build backend is flit. Local editable install:
 ```bash
-pip install .                          # core install
-pip install ".[croissant]"             # with optional CroSimulator support
+pip install -e ".[dev]"        # editable + pytest
+pip install -e ".[cuda12]"     # GPU jax on Linux (or [cuda13])
 ```
+The `[croissant]` extra is legacy — `croissant-sim` and `s2fft` are already core dependencies. Docker (`docker/README.md`) is deprecated.
 
 ## Running Tests
 
+Pytest is the primary runner. `pyproject.toml` sets `testpaths = ["tests"]`, excludes `tests/attic`, and registers an `integration` marker for tests that need real Drive data. `tests/conftest.py` exposes a `drive_dir` fixture that auto-skips when `LUSEE_DRIVE_DIR` is unset.
+
 ```bash
-# Unit tests (can run without LUSEE_DRIVE_DIR for most)
-python tests/LunarCalendarTest.py -v
-python tests/CoordTest.py
-
-# Integration tests (require LUSEE_DRIVE_DIR with beam/sky data)
-python tests/SimTest.py
-python tests/SimReadTest.py <path-to-fits>
-
-# Compare CroSimulator vs DefaultSimulator (requires croissant + LUSEE_DRIVE_DIR)
-cd simulation && python driver/test_cro_vs_default.py config/sim_choice_realistic.yaml
+pytest                                           # full suite
+pytest tests/test_observation.py                 # single file
+pytest tests/test_sim.py::test_name              # single test
+pytest -m "not integration"                      # skip Drive-dependent tests
 ```
 
-CI runs tests via `.github/workflows/luseepy-test.yml`. It uses `LUSEE_DRIVE_DIR=Drive` (a local tarball extracted during CI).
+Legacy script-style tests (`tests/SimTest.py`, `tests/SimReadTest.py`, `tests/LunarCalendarTest.py`, `tests/CoordTest.py`) still exist and can be run directly with `python`, but new tests use the pytest `test_*.py` convention.
+
+CI runs tests via `.github/workflows/luseepy-test.yml` with `LUSEE_DRIVE_DIR=Drive` (a local tarball extracted during CI).
 
 ## Running a Simulation
 
@@ -74,6 +73,9 @@ Smooth interpolation of beam alm products across a parameter space (e.g., rotati
 **`lusee.BeamCouplings`** (`lusee/BeamCouplings.py`)
 Models cross-coupling between antennas (two-port impedance). Used by simulators for off-diagonal beam combinations.
 
+**`lusee.CachedBeam`** (`lusee/CachedBeam.py`)
+JAX pytree base class for parameterized beam caches. Subclasses define free parameters and a `transform_beam` method; the base exposes a `.efbeams` property that simulators consume. Used by autodiff calibration / map-making flows where the beam is differentiable.
+
 ### Sky Models (`lusee/SkyModels.py`, `lusee/MonoSkyModels.py`)
 
 All sky models expose `get_alm(freq_ndx, freq)` returning a list of healpy-format alm arrays, and a `frame` attribute (`"galactic"`, `"MCMF"`, or `"equatorial"`).
@@ -88,11 +90,20 @@ All sky models expose `get_alm(freq_ndx, freq)` returning a list of healpy-forma
 **`lusee.SimulatorBase`** (`lusee/SimulatorBase.py`)
 Abstract base. `prepare_beams()` pre-computes beam alm products for all antenna combinations, storing them in `self.efbeams`. Output of `simulate()` is stored in `self.result` as a numpy array of shape `(Ntimes, Ncombinations, Nfreq)`.
 
-**`lusee.DefaultSimulator`** (`lusee/DefaultSimulator.py`)
-Per-timestep rotation of galactic sky alms into the observer frame using healpy rotators. Uses `mean_alm()` for the beam–sky integral.
+**`lusee.TopoNumpySimulator`** (`lusee/DefaultSimulator.py`)
+Topocentric numpy simulator — per-timestep rotation of galactic sky alms into the observer frame using healpy rotators. Uses `mean_alm()` for the beam–sky integral. This is the historical "default" simulator (the YAML driver accepts `engine: luseepy`/`default`/`lusee`/`numpy` as aliases for it).
+
+**`lusee.TopoJaxSimulator`** (`lusee/TopoJaxSimulator.py`)
+JAX port of the topocentric simulator. Differentiable through beam parameters; consumes `CachedBeam`/`BeamInterpolator` outputs.
+
+**`lusee.NumpySimulator`** (`lusee/NumpySimulator.py`)
+Reference numpy implementation; primarily used for cross-checking.
 
 **`lusee.CroSimulator`** (`lusee/CroSimulator.py`)
-Alternative engine using the `croissant` library and JAX. Works in MEPA (Moon-centred Ephemeris Pole Axis) with `rot_alm_z` phase rotations rather than per-time full sky rotation. Optional install: `pip install ".[croissant]"`. `CroSimulator` is `None` if croissant is not installed.
+Engine using the `croissant` library and JAX. Works in MEPA (Moon-centred Ephemeris Pole Axis) with `rot_alm_z` phase rotations rather than per-time full sky rotation. `CroSimulator` is `None` if croissant fails to import (the import is guarded in `lusee/__init__.py`).
+
+**`lusee.CalibratorSimulator`** (`lusee/CalibratorSimulator.py`)
+Simulates calibrator satellite passes. Takes an `Observation` with `calibrator_tracks` populated (see `lusee.CalibratorTrack`, `lusee.Satellite`, `lusee.ObservedSatellite`) and a list of beams; produces complex E-field traces of shape `(NTime, NBeam, NFreq)` per pass. Separate code path from the sky simulators.
 
 ### Map-Making (`lusee/MapMaker.py`)
 
@@ -111,16 +122,23 @@ Reads simulator FITS output. Extends `Observation`. Indexed as `D[:, '01I', :]` 
 
 ### Simulation Driver (`simulation/driver/run_sim.py`)
 
-`SimDriver` class reads YAML config, instantiates the appropriate objects, calls `simulator.simulate()`, and writes FITS. Supports `engine: default` (and `engine: croissant` in development). Config fields: `paths`, `sky`, `beam_config`, `beams`, `observation`, `simulation`.
+`SimDriver` class reads YAML config, instantiates the appropriate objects, calls `simulator.simulate()`, and writes FITS. The `engine` keyword (top-level or under `simulation:`) selects the back end:
+
+| Value | Back end |
+| --- | --- |
+| `croissant` | `lusee.CroSimulator` (JAX / s2fft) |
+| `luseepy`, `default`, `lusee`, `numpy` | `lusee.TopoNumpySimulator` |
+
+Config fields: `paths`, `sky`, `beam_config`, `beams`, `observation`, `simulation`.
 
 ## Coordinate Conventions
 
 - Beam files use theta (0=zenith) × phi (0–360°) grids with wraparound at last phi bin (phi[0] == phi[-1] for most operations; the `-1` index is dropped in alm computation)
 - `lmax` is used consistently in healpy convention; `grid2healpix_alm_fast` uses `lmax+1` internally (different convention from `pyshtools.legendre`)
-- The Euler rotation used in `DefaultSimulator` follows `XYZ` convention via `rot2eul`/`eul2rot`
+- The Euler rotation used in `TopoNumpySimulator` follows `XYZ` convention via `rot2eul`/`eul2rot`
 
 ## Version Conventions
 
 - Version in `lusee/__init__.py` as `__version__` and `__comment__` (dev suffix for unreleased)
-- New release: clean version → tag → new docker image → bump to `x.y dev`
+- New release: clean version → tag → bump to `x.y dev`
 - API-breaking changes → increment major integer; small fixes → increment by 0.01
