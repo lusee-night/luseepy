@@ -70,9 +70,9 @@ def counts_to_nv_auto(counts, gain):
     Bins where the gain is non-finite/non-positive or the power is negative
     are returned as NaN.  Returns a bare numpy array.
     """
-    X = np.asarray(counts, dtype=float)
-    G = np.asarray(gain, dtype=float)
-    out = np.full(np.broadcast(X, G).shape, np.nan)
+    X, G = np.broadcast_arrays(np.asarray(counts, dtype=float),
+                               np.asarray(gain, dtype=float))
+    out = np.full(X.shape, np.nan)
     valid = np.isfinite(X) & np.isfinite(G) & (G > 0.0) & (X >= 0.0)
     out[valid] = np.sqrt(X[valid] / G[valid])
     return out
@@ -85,9 +85,9 @@ def counts_to_nv_cross(counts, gain_a, gain_b):
     component is preserved).  Bins with non-finite/non-positive geometric
     gain are returned as NaN.  Returns a bare numpy array.
     """
-    X = np.asarray(counts, dtype=float)
     g_geom = np.sqrt(np.asarray(gain_a, dtype=float) * np.asarray(gain_b, dtype=float))
-    out = np.full(np.broadcast(X, g_geom).shape, np.nan)
+    X, g_geom = np.broadcast_arrays(np.asarray(counts, dtype=float), g_geom)
+    out = np.full(X.shape, np.nan)
     valid = np.isfinite(X) & np.isfinite(g_geom) & (g_geom > 0.0)
     out[valid] = np.sign(X[valid]) * np.sqrt(np.abs(X[valid]) / g_geom[valid])
     return out
@@ -170,16 +170,52 @@ class SpectrometerGain:
         if freqs_mhz is None:
             freqs_mhz = bin_frequencies(counts.shape[-1])
 
-        if product <= 3:
-            ch = product
-            gain = self.predict_gain(self._level_of(levels, ch), ch, telemetry, freqs_mhz)
-            out = counts_to_nv_auto(counts, gain)
-        else:
-            i, j = CROSS_PRODUCT_CHANNELS[product]
-            gain_a = self.predict_gain(self._level_of(levels, i), i, telemetry, freqs_mhz)
-            gain_b = self.predict_gain(self._level_of(levels, j), j, telemetry, freqs_mhz)
-            out = counts_to_nv_cross(counts, gain_a, gain_b)
+        def gain_for(ch):
+            return self.predict_gain(self._level_of(levels, ch), ch, telemetry, freqs_mhz)
+
+        return label(self._convert_one(product, counts, gain_for), units=NV_PER_SQRT_HZ)
+
+    def convert_row(self, spectra, telemetry, levels, freqs_mhz=None):
+        """Convert a full set of products for one telemetry row to nV/sqrt(Hz).
+
+        Each channel's gain spectrum is predicted once and reused across the
+        autos/crosses that use it (4 gain predictions instead of one per
+        product), which matters for bulk HDF5 conversion.
+
+        :param spectra: Raw counts shaped (nproduct, nfreq); product order is
+            the standard layout (0-3 auto, 4-15 cross Re/Im pairs).
+        :param telemetry: Telemetry dict (see predict_gain).
+        :param levels: Per-channel gain levels (length-4 sequence or dict).
+        :param freqs_mhz: Bin frequencies (MHz); defaults to the 0.025 MHz grid.
+        :returns: LabeledArray (nproduct, nfreq) with units "nV/sqrt(Hz)".
+        """
+        spectra = np.asarray(spectra, dtype=float)
+        if freqs_mhz is None:
+            freqs_mhz = bin_frequencies(spectra.shape[-1])
+
+        cache = {}
+
+        def gain_for(ch):
+            if ch not in cache:
+                cache[ch] = self.predict_gain(self._level_of(levels, ch), ch,
+                                              telemetry, freqs_mhz)
+            return cache[ch]
+
+        out = np.stack([self._convert_one(p, spectra[p], gain_for)
+                        for p in range(spectra.shape[0])])
         return label(out, units=NV_PER_SQRT_HZ)
+
+    @staticmethod
+    def _convert_one(product, counts, gain_for):
+        """Convert one product's counts to nV/sqrt(Hz) (bare array).
+
+        ``gain_for(channel)`` returns that channel's gain spectrum; the caller
+        controls whether it is recomputed or cached.
+        """
+        if product <= 3:
+            return counts_to_nv_auto(counts, gain_for(product))
+        i, j = CROSS_PRODUCT_CHANNELS[product]
+        return counts_to_nv_cross(counts, gain_for(i), gain_for(j))
 
     # -- internals ----------------------------------------------------------
     @staticmethod

@@ -125,11 +125,14 @@ class Data(Observation):
             return label(toret, units=self.data_units, frame=FRAME_TOPO)
         elif vwhat == "V":
                 ## ffact can be scalar +1 or -1
+                # T2Vsq = 4 kB Re(Z) Gamma^2 is V^2/(Hz K), so multiplying a
+                # Kelvin (auto/cross) value by sqrt(T2Vsq_i T2Vsq_j) yields a
+                # voltage power spectral density in V^2/Hz, not amplitude.
                 T2V = np.sqrt(self.T2Vsq[i]*self.T2Vsq[j])[freq]
                 if toret.ndim == 1:
-                    return label(toret*T2V, units="V", frame=FRAME_TOPO)
+                    return label(toret*T2V, units="V^2/Hz", frame=FRAME_TOPO)
                 else:
-                    return label(toret*T2V[None,:], units="V", frame=FRAME_TOPO)
+                    return label(toret*T2V[None,:], units="V^2/Hz", frame=FRAME_TOPO)
         else:
             raise NotImplemented
 

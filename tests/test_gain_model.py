@@ -123,6 +123,54 @@ def test_counts_to_nv_cross_geom_gain():
     np.testing.assert_allclose(out, [2.0])
 
 
+def test_counts_to_nv_auto_broadcasts():
+    # scalar gain broadcast over a vector of counts
+    out = counts_to_nv_auto([4.0, 9.0, 16.0], 4.0)
+    np.testing.assert_allclose(out, [1.0, 1.5, 2.0])
+    # (ntime, nfreq) counts with per-freq gain
+    counts = np.array([[4.0, 9.0], [16.0, 25.0]])
+    gain = np.array([1.0, 1.0])
+    np.testing.assert_allclose(counts_to_nv_auto(counts, gain),
+                               [[2.0, 3.0], [4.0, 5.0]])
+
+
+def test_counts_to_nv_cross_broadcasts():
+    out = counts_to_nv_cross([4.0, -4.0], 1.0, 1.0)  # scalar gains
+    np.testing.assert_array_equal(out, [2.0, -2.0])
+    counts = np.array([[16.0, -16.0]])
+    np.testing.assert_allclose(counts_to_nv_cross(counts, np.array([2.0, 2.0]),
+                                                  np.array([8.0, 8.0])),
+                               [[2.0, -2.0]])
+
+
+def test_convert_row_matches_per_product_and_reuses_gains(sg):
+    nbins = 50
+    rng = np.random.default_rng(0)
+    spectra = rng.normal(size=(16, nbins)) ** 2  # non-negative-ish
+    levels = ["H", "M", "L", "H"]
+
+    row = sg.convert_row(spectra, TELE, levels)
+    assert isinstance(row, LabeledArray)
+    assert row.units == NV_PER_SQRT_HZ
+    assert row.shape == (16, nbins)
+
+    # matches calling convert_product per product
+    for p in range(16):
+        per = np.asarray(sg.convert_product(p, spectra[p], TELE, levels))
+        np.testing.assert_allclose(np.asarray(row)[p], per, equal_nan=True)
+
+    # only 4 channel-gain predictions for the whole row
+    calls = {"n": 0}
+    orig = sg.predict_gain
+    sg.predict_gain = lambda *a, **k: (calls.__setitem__("n", calls["n"] + 1),
+                                       orig(*a, **k))[1]
+    try:
+        sg.convert_row(spectra, TELE, levels)
+    finally:
+        sg.predict_gain = orig
+    assert calls["n"] == 4
+
+
 def test_bin_frequencies():
     f = bin_frequencies(2048)
     assert f.shape == (2048,) and f[0] == 0.0

@@ -72,8 +72,9 @@ def test_data_getitem_is_labeled(tmp_path):
 
     volts = D[0, "00RV", :]
     assert isinstance(volts, LabeledArray)
-    assert volts.units == "V"
-    # T2Vsq stub is unity, so V values equal K values here
+    # sqrt(T2Vsq_i T2Vsq_j) * K is a voltage power spectral density (V^2/Hz)
+    assert volts.units == "V^2/Hz"
+    # T2Vsq stub is unity, so values equal the K values here
     np.testing.assert_allclose(np.asarray(volts), np.asarray(raw))
 
 
