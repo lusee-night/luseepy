@@ -1,8 +1,9 @@
 import  numpy           as np
-import  fitsio          
+import  fitsio
 from    .Observation import Observation
 from .LunarCalendar  import LunarCalendar
 from .Throughput import Throughput
+from .LabeledArray import label, FRAME_TOPO
 
 class ThroughputBeam:
     """
@@ -39,6 +40,10 @@ class Data(Observation):
         super().__init__(lunar_day, lun_lat_deg, lun_long_deg, lun_height_m, deltaT_sec)
         fits = fitsio.FITS(filename,'r')
         self.data = fits['data'].read()
+        # Units of the raw 'data' array.  Simulator FITS output is brightness
+        # temperature in Kelvin; an HDF5 ingest path may set this to e.g.
+        # "counts" before gain conversion.
+        self.data_units = "K"
         self.freq = fits['freq'].read()
         combinations = fits['combinations'].read()
         cc = 0
@@ -117,14 +122,14 @@ class Data(Observation):
 
 
         if vwhat == "":
-            return toret
+            return label(toret, units=self.data_units, frame=FRAME_TOPO)
         elif vwhat == "V":
                 ## ffact can be scalar +1 or -1
                 T2V = np.sqrt(self.T2Vsq[i]*self.T2Vsq[j])[freq]
                 if toret.ndim == 1:
-                    return toret*T2V
+                    return label(toret*T2V, units="V", frame=FRAME_TOPO)
                 else:
-                    return toret*T2V[None,:]
+                    return label(toret*T2V[None,:], units="V", frame=FRAME_TOPO)
         else:
             raise NotImplemented
 
