@@ -35,13 +35,22 @@ from pathlib import Path
 import numpy as np
 from scipy.interpolate import CubicSpline
 
-from .LabeledArray import label
+from .LabeledArray import label, asarray, frame_of
 
 # Frequency spacing of the spectrometer's 2048 output bins, in MHz.
 CHANNEL_BIN_MHZ = 0.025
 
-# Physical units of a gain-converted spectrum.
-NV_PER_SQRT_HZ = "nV/sqrt(Hz)"
+# Two spectral-density conventions used in luseepy:
+#   - the gain-model / real-data side works in an amplitude spectral density
+#     (ASD), nV/sqrt(Hz);
+#   - the simulator side (Data["...V"], MonoSkyModels, Throughput.noise) works
+#     in a power spectral density (PSD), V^2/Hz.
+# They differ by a square and the nV<->V scale.  The canonical pairing below is
+# the current choice (pending domain-expert confirmation of which to
+# standardize on); asd_to_psd / psd_to_asd bridge the two.
+NV_PER_SQRT_HZ = "nV/sqrt(Hz)"   # amplitude spectral density (ASD)
+V2_PER_HZ = "V^2/Hz"             # power spectral density (PSD)
+_NV_IN_V = 1e-9                  # 1 nV expressed in volts
 
 GAIN_LEVELS = ("L", "M", "H")
 
@@ -91,6 +100,56 @@ def counts_to_nv_cross(counts, gain_a, gain_b):
     valid = np.isfinite(X) & np.isfinite(g_geom) & (g_geom > 0.0)
     out[valid] = np.sign(X[valid]) * np.sqrt(np.abs(X[valid]) / g_geom[valid])
     return out
+
+
+def asd_to_psd(x):
+    """Convert an amplitude spectral density to a power spectral density.
+
+    From nV/sqrt(Hz) (the gain-model convention) to V^2/Hz (the simulator
+    convention)::
+
+        PSD[V^2/Hz] = (ASD[nV/sqrt(Hz)] * 1e-9)^2
+
+    The sign is preserved (so signed cross-correlation Re/Im components round
+    trip through psd_to_asd).  Operates on real arrays -- a complex spectrum
+    should be converted component by component; passing one raises ValueError.
+
+    :param x: ASD values (array or LabeledArray); any units label is ignored,
+        the input is assumed to be in nV/sqrt(Hz).
+    :returns: LabeledArray in V^2/Hz (the input's frame label is preserved).
+    """
+    a = np.asarray(asarray(x))
+    if np.iscomplexobj(a):
+        raise ValueError("asd_to_psd operates on real arrays; convert the real "
+                         "and imaginary components separately")
+    a = a.astype(float)
+    psd = np.sign(a) * (np.abs(a) * _NV_IN_V) ** 2
+    return label(psd, units=V2_PER_HZ, frame=frame_of(x))
+
+
+def psd_to_asd(x):
+    """Convert a power spectral density to an amplitude spectral density.
+
+    From V^2/Hz (the simulator convention) to nV/sqrt(Hz) (the gain-model
+    convention)::
+
+        ASD[nV/sqrt(Hz)] = sqrt(PSD[V^2/Hz]) / 1e-9
+
+    The sign is preserved (inverse of asd_to_psd).  Operates on real arrays --
+    a complex spectrum should be converted component by component; passing one
+    raises ValueError.
+
+    :param x: PSD values (array or LabeledArray); any units label is ignored,
+        the input is assumed to be in V^2/Hz.
+    :returns: LabeledArray in nV/sqrt(Hz) (the input's frame label is preserved).
+    """
+    p = np.asarray(asarray(x))
+    if np.iscomplexobj(p):
+        raise ValueError("psd_to_asd operates on real arrays; convert the real "
+                         "and imaginary components separately")
+    p = p.astype(float)
+    asd = np.sign(p) * np.sqrt(np.abs(p)) / _NV_IN_V
+    return label(asd, units=NV_PER_SQRT_HZ, frame=frame_of(x))
 
 
 class SpectrometerGain:

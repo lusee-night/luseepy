@@ -5,9 +5,11 @@ import pytest
 import lusee
 from lusee.GainModel import (
     SpectrometerGain, counts_to_nv_auto, counts_to_nv_cross,
-    bin_frequencies, CHANNEL_BIN_MHZ, NV_PER_SQRT_HZ, CROSS_PRODUCT_CHANNELS,
+    asd_to_psd, psd_to_asd,
+    bin_frequencies, CHANNEL_BIN_MHZ, NV_PER_SQRT_HZ, V2_PER_HZ,
+    CROSS_PRODUCT_CHANNELS,
 )
-from lusee.LabeledArray import LabeledArray
+from lusee.LabeledArray import LabeledArray, label
 
 
 # Telemetry used to capture the golden anchor gains from the reference
@@ -207,6 +209,49 @@ def test_convert_product_cross_uses_correct_channels(sg):
     assert out.units == NV_PER_SQRT_HZ
 
 
+def test_asd_to_psd_scale_and_units():
+    # 2 nV/sqrt(Hz) -> (2e-9)^2 = 4e-18 V^2/Hz
+    out = asd_to_psd(np.array([2.0]))
+    assert isinstance(out, LabeledArray) and out.units == V2_PER_HZ
+    np.testing.assert_allclose(np.asarray(out), [4e-18])
+
+
+def test_psd_to_asd_scale_and_units():
+    # 4e-18 V^2/Hz -> sqrt(4e-18)/1e-9 = 2 nV/sqrt(Hz)
+    out = psd_to_asd(np.array([4e-18]))
+    assert isinstance(out, LabeledArray) and out.units == NV_PER_SQRT_HZ
+    np.testing.assert_allclose(np.asarray(out), [2.0])
+
+
+def test_asd_psd_round_trip_with_sign():
+    asd = np.array([-3.0, 0.0, 5.0, 12.5])
+    back = psd_to_asd(asd_to_psd(asd))
+    assert back.units == NV_PER_SQRT_HZ
+    np.testing.assert_allclose(np.asarray(back), asd)
+    # and the other direction
+    psd = np.array([-4e-18, 0.0, 9e-18])
+    back2 = asd_to_psd(psd_to_asd(psd))
+    np.testing.assert_allclose(np.asarray(back2), psd)
+
+
+def test_asd_psd_preserve_frame_and_accept_labeled():
+    la = label(np.array([2.0]), units=NV_PER_SQRT_HZ, frame="topo")
+    out = asd_to_psd(la)
+    assert out.frame == "topo" and out.units == V2_PER_HZ
+    np.testing.assert_allclose(np.asarray(out), [4e-18])
+    # bare input -> frame None
+    assert asd_to_psd(np.array([1.0])).frame is None
+
+
+def test_asd_psd_reject_complex():
+    with pytest.raises(ValueError):
+        asd_to_psd(np.array([1.0 + 2.0j]))
+    with pytest.raises(ValueError):
+        psd_to_asd(np.array([1.0 + 0.0j]))
+
+
 def test_exported_from_package():
     assert lusee.SpectrometerGain is SpectrometerGain
     assert lusee.NV_PER_SQRT_HZ == "nV/sqrt(Hz)"
+    assert lusee.V2_PER_HZ == "V^2/Hz"
+    assert lusee.asd_to_psd is asd_to_psd and lusee.psd_to_asd is psd_to_asd
