@@ -13,6 +13,10 @@ from .LabeledArray  import (
     describe,
     FRAME_GALACTIC, FRAME_EQUATORIAL, FRAME_MCMF, FRAME_TOPO, FRAME_MEPA,
 )
+from .GainModel     import (
+    SpectrometerGain, counts_to_nv_auto, counts_to_nv_cross,
+    bin_frequencies, CHANNEL_BIN_MHZ, NV_PER_SQRT_HZ,
+)
 from .CachedBeam   import CachedBeam
 from .BeamCouplings import BeamCouplings
 from .DefaultSimulator import TopoNumpySimulator

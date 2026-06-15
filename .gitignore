@@ -2,6 +2,8 @@
 !lusee/*.py
 !lusee/data/*.txt
 !lusee/pre_jax/*.py
+!lusee/data/gain/*.npy
+!lusee/data/gain/*.csv
 !tests/*.py
 !notebooks/*.ipynb
 !notebooks/old/*.ipynb
