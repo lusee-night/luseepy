@@ -8,6 +8,11 @@ from .Beam          import Beam, grid2healpix, grid2healpix_alm_fast
 from .BeamInterpolator import BeamInterpolator
 from .BeamGauss     import BeamGauss
 from .NpWrapper     import NpWrapper
+from .LabeledArray  import (
+    LabeledArray, label, relabel, asarray, units_of, frame_of, is_labeled,
+    describe,
+    FRAME_GALACTIC, FRAME_EQUATORIAL, FRAME_MCMF, FRAME_TOPO, FRAME_MEPA,
+)
 from .CachedBeam   import CachedBeam
 from .BeamCouplings import BeamCouplings
 from .DefaultSimulator import TopoNumpySimulator

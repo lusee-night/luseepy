@@ -2,6 +2,7 @@ from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, rot2eul
+from .LabeledArray import units_of, frame_of
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -108,6 +109,9 @@ class TopoJaxSimulator(SimulatorBase):
         flat = arr.reshape(-1) if arr.shape else arr.reshape(1)
         sample = flat[:max_items].tolist()
         summary = f"{label}: shape={arr.shape} dtype={arr.dtype} size={arr.size}"
+        units, frame = units_of(value), frame_of(value)
+        if units is not None or frame is not None:
+            summary += f" units={units!r} frame={frame!r}"
         if np.issubdtype(arr.dtype, np.number) or np.issubdtype(arr.dtype, np.complexfloating):
             sample_arr = flat[: min(max_items, flat.size)]
             finite_count = int(np.isfinite(sample_arr).sum()) if sample_arr.size else 0
