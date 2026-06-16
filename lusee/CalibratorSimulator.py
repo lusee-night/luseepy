@@ -65,6 +65,14 @@ class CalibratorSimulator:
                 pol = track.polarization[ti]
                 #this phase ramp is the same for all beams at this time index, but changes from time index to time index
                 phase_ramp = 1j*np.random.uniform(0, 2*np.pi)*track.tone_freqs/track.tone_freqs[0]
+                
+                # Plasma phase: same for all beams, depends on time and frequency
+                if not np.all(np.isnan(track.tec)):
+                    alpha = 1.3442967734e-7
+                    plasma_phase = alpha * track.tec[ti] / (track.tone_freqs * 1e6)
+                else:
+                    plasma_phase = 0
+                
                 phase_correction = None
                 for bi, (iEt, iEp) in enumerate(self.interpolators):
                     sim_freqs = self.sim_freqs[bi]
@@ -84,7 +92,7 @@ class CalibratorSimulator:
                     # now phase correction. Phase rotate so that Et is purely real for antenna 0. Need to think this through. [AS]
                     # 
                     if phase_correction is None:
-                        phase_correction = np.exp(-1j * np.angle(Et)+1j*phase_ramp)
+                        phase_correction = np.exp(-1j * np.angle(Et)+1j*(phase_ramp+plasma_phase))
                     pass_result[ti, bi, :] *= phase_correction
                 
 

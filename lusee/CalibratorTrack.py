@@ -20,19 +20,21 @@ class CalibratorTrack:
         one per frequency (must match len(tone_freqs))
     """
 
-    def __init__(self, times, alt, az, polarization, tone_freqs, tone_amplitude):
+    def __init__(self, times, alt, az, polarization, tone_freqs, tone_amplitude, tec):
         times          = np.asarray(times)
         alt            = np.asarray(alt,            dtype=float)
         az             = np.asarray(az,             dtype=float)
         polarization   = np.asarray(polarization,   dtype=float)
         tone_freqs     = np.asarray(tone_freqs,     dtype=float)
         tone_amplitude = np.asarray(tone_amplitude, dtype=complex)
+        tec            = np.asarray(tec,            dtype=float)
 
         n = len(times)
         for name, arr in [
             ("alt",          alt),
             ("az",           az),
             ("polarization", polarization),
+            ("tec",          tec),
         ]:
             if len(arr) != n:
                 raise ValueError(
@@ -52,6 +54,7 @@ class CalibratorTrack:
         self.polarization   = polarization
         self.tone_freqs     = tone_freqs
         self.tone_amplitude = tone_amplitude
+        self.tec            = tec
 
     def __len__(self):
         return len(self.times)
