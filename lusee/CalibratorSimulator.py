@@ -69,7 +69,8 @@ class CalibratorSimulator:
                 # Plasma phase: same for all beams, depends on time and frequency
                 if not np.all(np.isnan(track.tec)):
                     alpha = 1.3442967734e-7
-                    plasma_phase = alpha * track.tec[ti] / (track.tone_freqs * 1e6)
+                    TECU = 1e16
+                    plasma_phase = alpha * track.tec[ti] * TECU / (track.tone_freqs * 1e6)
                 else:
                     plasma_phase = 0
                 

@@ -233,6 +233,12 @@ class ObservedSatellite:
         return m
     
     def load_density_profile(self, csv_path):
+        '''
+        Input: path to lunar ionosphere model.
+        Assumes that altitude column is in km and that
+        Electron Density column is in 10^10 m^-3
+        '''
+        
         df = pd.read_csv(csv_path).sort_values('Altitude')
         return interp1d(df['Altitude'], df['Electron Density'],
                         kind='linear', bounds_error=False, fill_value=0.0)
