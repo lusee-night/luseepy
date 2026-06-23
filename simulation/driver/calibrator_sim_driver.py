@@ -99,6 +99,7 @@ class CalibratorSimDriver(dict):
                 continue
             tracks.append(lusee.CalibratorTrack(
                 times         = obs.times[si:ei],
+                dist          = os_.dist_km()[si:ei],
                 alt           = os_.alt[si:ei],
                 az            = os_.az[si:ei],
                 polarization  = np.zeros(n),

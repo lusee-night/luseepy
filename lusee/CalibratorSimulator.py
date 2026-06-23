@@ -64,7 +64,7 @@ class CalibratorSimulator:
                 az  = track.az[ti]
                 pol = track.polarization[ti]
                 #this phase ramp is the same for all beams at this time index, but changes from time index to time index
-                phase_ramp = 1j*np.random.uniform(0, 2*np.pi)*track.tone_freqs/track.tone_freqs[0]
+                phase_ramp = np.random.uniform(0, 2*np.pi)*track.tone_freqs/track.tone_freqs[0] # don't multiply by ij
                 
                 # Plasma phase: same for all beams, depends on time and frequency
                 if not np.all(np.isnan(track.tec)):
@@ -138,6 +138,12 @@ class CalibratorSimulator:
             times_mjd = np.array([t.mjd for t in track.times])
             times_hdu = astrofits.ImageHDU(times_mjd, name=f'PASS{p}_TIMES')
             hdulist.append(times_hdu)
+            
+            alt_hdu = astrofits.ImageHDU(track.alt, name=f'PASS{p}_ALTS')
+            hdulist.append(alt_hdu)
+            
+            dist_hdu = astrofits.ImageHDU(track.dist, name=f'PASS{p}_DIST')
+            hdulist.append(dist_hdu)
 
             for b in range(NBeam):
                 re_hdu = astrofits.ImageHDU(
