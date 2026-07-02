@@ -3,6 +3,8 @@
 !lusee/pre_jax/*.py
 !tests/*.py
 !notebooks/*.ipynb
+!notebooks/old/*.ipynb
+!notebooks/_regen/*.py
 !**.md 
 !**.yaml
 !**.sh 
