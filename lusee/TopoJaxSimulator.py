@@ -2,7 +2,6 @@ from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, rot2eul
-from .frequencies import interp1d, interp_from_unique
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -164,19 +163,19 @@ class TopoJaxSimulator(SimulatorBase):
         for i, j in self.combinations:
             bi, bj = beams[i], beams[j]
             print(f"  intializing beam combination {bi.id} x {bj.id} ...")
-            gain_i = interp1d(fmap, jnp.asarray(bi.gain_conv))
-            gain_j = interp1d(fmap, jnp.asarray(bj.gain_conv))
+            gain_i = fmap.from_native(jnp.asarray(bi.gain_conv))
+            gain_j = fmap.from_native(jnp.asarray(bj.gain_conv))
             norm = jnp.sqrt(gain_i * gain_j)
             beamreal_native, beamimag_native = bi.get_healpix_alm(
                 self.lmax,
-                freq_ndx=fmap.unique_native_idx,
+                freq_ndx=fmap.source_indices,
                 other=bj,
                 return_I_stokes_only=True,
                 return_complex_components=True,
             )
-            beamreal = jnp.asarray(interp_from_unique(fmap, jnp.asarray(beamreal_native))) * norm[:, None]
+            beamreal = jnp.asarray(fmap.from_unique(jnp.asarray(beamreal_native))) * norm[:, None]
             if beamimag_native is not None:
-                beamimag = jnp.asarray(interp_from_unique(fmap, jnp.asarray(beamimag_native))) * norm[:, None]
+                beamimag = jnp.asarray(fmap.from_unique(jnp.asarray(beamimag_native))) * norm[:, None]
             else:
                 beamimag = None
 
@@ -443,8 +442,8 @@ class TopoJaxSimulator(SimulatorBase):
         if hasattr(self.sky_model, "get_alm_at_freq"):
             sky_base = jnp.asarray(self.sky_model.get_alm_at_freq(self.freq))
         else:
-            sky_native = jnp.asarray(self.sky_model.get_alm(self.freq_map_sky.unique_native_idx))
-            sky_base = interp_from_unique(self.freq_map_sky, sky_native)
+            sky_native = jnp.asarray(self.sky_model.get_alm(self.freq_map_sky.source_indices))
+            sky_base = self.freq_map_sky.from_unique(sky_native)
         sky_base_flm = self._hp_to_full_flm_batch_jax(sky_base)
         self._block_ready(sky_base_flm)
         self._log_timing("simulate.sky_model.get_alm", t0)

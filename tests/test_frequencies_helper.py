@@ -155,6 +155,50 @@ def test_interpolation_is_differentiable_wrt_values():
     assert float(jnp.max(jnp.abs(grad))) > 0.0
 
 
+def test_frequencymap_class_api():
+    # The class methods are the primary API; the free functions are thin
+    # wrappers over them.
+    source = np.linspace(1.0, 50.0, 50)
+    data = np.cos(source)[:, None] * np.arange(1, 4)[None, :]
+    target = np.asarray([12.5, 12.5, 30.0, 50.0])
+    fmap = FrequencyMap.build(target, source)
+
+    assert len(fmap) == len(target)
+    # source_indices is the dedup'd lookup table (12.5 brackets 11/12, 30/50 snap).
+    np.testing.assert_array_equal(np.asarray(fmap.source_indices), [11, 12, 29, 49])
+    np.testing.assert_allclose(fmap.from_native(data), interp1d(fmap, data), atol=0.0)
+    np.testing.assert_allclose(
+        fmap.from_unique(data[fmap.source_indices]), fmap.from_native(data), atol=0.0
+    )
+    assert "n_target=4" in repr(fmap)
+
+
+def test_frequencymap_is_jax_pytree():
+    import jax
+    import jax.numpy as jnp
+
+    source = np.linspace(1.0, 50.0, 50)
+    fmap = FrequencyMap.build(np.asarray([12.5, 30.0]), source)
+
+    leaves, treedef = jax.tree_util.tree_flatten(fmap)
+    rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
+    np.testing.assert_array_equal(np.asarray(rebuilt.alpha), np.asarray(fmap.alpha))
+
+    # Passing the map as a traced argument through jit must work, and gradients
+    # w.r.t. the interpolated values must flow.
+    vals = jnp.asarray(
+        np.random.default_rng(0).standard_normal((fmap.source_indices.shape[0], 2))
+    )
+
+    @jax.jit
+    def loss(m, v):
+        return jnp.sum(m.from_unique(v) ** 2)
+
+    grad = jax.grad(loss, argnums=1)(fmap, vals)
+    assert grad.shape == vals.shape
+    assert bool(jnp.all(jnp.isfinite(grad)))
+
+
 def test_frequencies_from_config_values():
     freq = frequencies_from_config({"values": [10.0, 20.0, 30.0]})
     np.testing.assert_allclose(freq, [10.0, 20.0, 30.0])
