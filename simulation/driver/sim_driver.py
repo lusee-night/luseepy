@@ -27,6 +27,14 @@ class SimDriver:
         import lusee
         self._lusee = lusee
         self.engine = self.normalize_engine()
+        # The JAX engines (Croissant and topo) do s2fft/spherical-harmonic math
+        # that loses significant precision in float32; without this the main
+        # driver path silently runs them in float32. Enable x64 before any
+        # beam/sky JAX arrays are built. Setting it at runtime is fine -- arrays
+        # created afterwards are float64 (jit traces lazily). TOPO_NP is NumPy
+        # and needs nothing.
+        if self.engine in (SimEngine.CRO, SimEngine.TOPO):
+            jax.config.update("jax_enable_x64", True)
         self._parse_base()
         self._parse_sky()
         self._parse_beams()
