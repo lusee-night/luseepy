@@ -6,7 +6,7 @@ from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, get_topo_z_rotation_angles
 from .spice_utils import ensure_lunarsky_moon_frame
-from .frequencies import interp1d
+from .frequencies import interp1d, interp_from_unique
 import numpy as np
 import fitsio
 import sys
@@ -92,9 +92,9 @@ class CroSimulator(SimulatorBase):
                 return_I_stokes_only=True,
                 return_complex_components=True,
             )
-            beamreal = jnp.asarray(interp1d(fmap, jnp.asarray(beamreal_native))) * norm[:, None]
+            beamreal = jnp.asarray(interp_from_unique(fmap, jnp.asarray(beamreal_native))) * norm[:, None]
             if beamimag_native is not None:
-                beamimag = jnp.asarray(interp1d(fmap, jnp.asarray(beamimag_native))) * norm[:, None]
+                beamimag = jnp.asarray(interp_from_unique(fmap, jnp.asarray(beamimag_native))) * norm[:, None]
             else:
                 beamimag = None
 
@@ -169,7 +169,7 @@ class CroSimulator(SimulatorBase):
             sky_gal = jnp.asarray(sky_model.get_alm_at_freq(self.freq))
         else:
             sky_native = sky_model.get_alm(self.freq_map_sky.unique_native_idx)
-            sky_gal = interp1d(self.freq_map_sky, jnp.asarray(sky_native))
+            sky_gal = interp_from_unique(self.freq_map_sky, jnp.asarray(sky_native))
         sky_2d = jnp.stack([
             s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(s_), sim_L)
             for s_ in sky_gal

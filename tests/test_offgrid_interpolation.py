@@ -33,7 +33,11 @@ def _run_numpy_sim(freq):
     obs = _build_obs()
     times = obs.times
     lmax = 8
-    sky_freq = np.asarray([1.0, 25.0, 50.0])  # broad sky grid covering the beam
+    # Sky grid includes 12.0 so the snap-on-match test exercises a frequency
+    # that is on-grid for BOTH the beam and the sky; otherwise the sky path
+    # genuinely interpolates and a 1e-10 target shift perturbs the output at
+    # machine precision, defeating the bit-identical check.
+    sky_freq = np.asarray([1.0, 12.0, 25.0, 50.0])
     sky = lusee.sky.HarmonicPointSourceSky(lmax=lmax, l_deg=0.0, b_deg=0.0,
                                            freq=sky_freq)
     beam = lusee.BeamGauss(alt_deg=90.0, az_deg=0.0, sigma_deg=20.0,

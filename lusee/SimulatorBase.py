@@ -1,7 +1,7 @@
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
-from .frequencies import interp1d, interpolation_weights
+from .frequencies import interp1d, interp_from_unique, interpolation_weights
 
 import numpy as np
 import jax.numpy as jnp
@@ -359,10 +359,10 @@ class SimulatorBase:
                 return_I_stokes_only=True,
                 return_complex_components=True,
             )
-            beamreal = np.asarray(interp1d(fmap, np.asarray(beamreal_native)))
+            beamreal = np.asarray(interp_from_unique(fmap, np.asarray(beamreal_native)))
             beamreal = beamreal * norm[:, None]
             if beamimag_native is not None:
-                beamimag = np.asarray(interp1d(fmap, np.asarray(beamimag_native)))
+                beamimag = np.asarray(interp_from_unique(fmap, np.asarray(beamimag_native)))
                 beamimag = beamimag * norm[:, None]
             else:
                 beamimag = None

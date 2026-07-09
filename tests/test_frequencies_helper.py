@@ -115,6 +115,46 @@ def test_interp1d_multidim_broadcasts_along_first_axis():
     np.testing.assert_allclose(result, expected, atol=1e-12)
 
 
+def test_interp_from_unique_matches_interp1d_on_full_grid():
+    # interp1d(full) and interp_from_unique(full[unique_native_idx]) must agree:
+    # this is the exact split the simulators rely on (cheap full arrays vs
+    # expensive alm products pre-reduced to unique indices).
+    from lusee.frequencies import interp_from_unique
+
+    source = np.linspace(1.0, 50.0, 50)
+    data = np.cos(source)[:, None] * np.arange(1, 4)[None, :]
+    target = np.asarray([12.5, 12.5, 30.0, 50.0])
+    fmap = interpolation_weights(target, source)
+
+    via_full = interp1d(fmap, data)
+    via_unique = interp_from_unique(fmap, data[fmap.unique_native_idx])
+    np.testing.assert_allclose(via_full, via_unique, atol=0.0)
+
+
+def test_interpolation_is_differentiable_wrt_values():
+    # Differentiability is the point of the JAX path: gradients must flow
+    # through the off-grid blend back to the beam/sky values.
+    import jax
+    import jax.numpy as jnp
+    from lusee.frequencies import interp_from_unique
+
+    source = np.linspace(1.0, 50.0, 50)
+    target = np.asarray([12.5, 30.0])  # one genuinely off-grid, one on-grid
+    fmap = interpolation_weights(target, source)
+
+    unique_vals = jnp.asarray(
+        np.random.default_rng(0).standard_normal((fmap.unique_native_idx.size, 3))
+    )
+
+    def loss(vals):
+        return jnp.sum(interp_from_unique(fmap, vals) ** 2)
+
+    grad = jax.grad(loss)(unique_vals)
+    assert grad.shape == unique_vals.shape
+    assert bool(jnp.all(jnp.isfinite(grad)))
+    assert float(jnp.max(jnp.abs(grad))) > 0.0
+
+
 def test_frequencies_from_config_values():
     freq = frequencies_from_config({"values": [10.0, 20.0, 30.0]})
     np.testing.assert_allclose(freq, [10.0, 20.0, 30.0])

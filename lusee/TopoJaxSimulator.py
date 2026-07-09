@@ -2,7 +2,7 @@ from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, rot2eul
-from .frequencies import interp1d
+from .frequencies import interp1d, interp_from_unique
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -174,9 +174,9 @@ class TopoJaxSimulator(SimulatorBase):
                 return_I_stokes_only=True,
                 return_complex_components=True,
             )
-            beamreal = jnp.asarray(interp1d(fmap, jnp.asarray(beamreal_native))) * norm[:, None]
+            beamreal = jnp.asarray(interp_from_unique(fmap, jnp.asarray(beamreal_native))) * norm[:, None]
             if beamimag_native is not None:
-                beamimag = jnp.asarray(interp1d(fmap, jnp.asarray(beamimag_native))) * norm[:, None]
+                beamimag = jnp.asarray(interp_from_unique(fmap, jnp.asarray(beamimag_native))) * norm[:, None]
             else:
                 beamimag = None
 
@@ -444,7 +444,7 @@ class TopoJaxSimulator(SimulatorBase):
             sky_base = jnp.asarray(self.sky_model.get_alm_at_freq(self.freq))
         else:
             sky_native = jnp.asarray(self.sky_model.get_alm(self.freq_map_sky.unique_native_idx))
-            sky_base = interp1d(self.freq_map_sky, sky_native)
+            sky_base = interp_from_unique(self.freq_map_sky, sky_native)
         sky_base_flm = self._hp_to_full_flm_batch_jax(sky_base)
         self._block_ready(sky_base_flm)
         self._log_timing("simulate.sky_model.get_alm", t0)
