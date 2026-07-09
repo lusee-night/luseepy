@@ -195,20 +195,6 @@ class FrequencyMap:
         )
 
 
-# Thin functional wrappers over the FrequencyMap methods. New code should prefer
-# the class API (FrequencyMap.build / .from_native / .from_unique / .source_indices).
-def interpolation_weights(target_freqs, source_freqs, *, atol=1e-6, rtol=1e-9):
-    return FrequencyMap.build(target_freqs, source_freqs, atol=atol, rtol=rtol)
-
-
-def interp1d(freq_map, native_array):
-    return freq_map.from_native(native_array)
-
-
-def interp_from_unique(freq_map, unique_array):
-    return freq_map.from_unique(unique_array)
-
-
 def frequencies_from_config(freq_cfg):
     """Parse a YAML ``freq`` block into a numpy array of MHz values.
 
@@ -257,8 +243,10 @@ def frequencies_from_config(freq_cfg):
     )
 
 
-# Compatibility shims kept for the pre_jax/* modules and a few legacy tests.
-# New code should use ``frequencies_from_config`` and ``interpolation_weights``.
+# Legacy canonical-grid shims kept for the pre_jax/* modules and a few tests.
+# These predate off-grid interpolation and are slated for removal once the
+# notebooks are migrated. New code should use ``frequencies_from_config`` and
+# ``FrequencyMap``.
 
 def canonical_frequency_indices(indices=None, *, start_idx=0, stop_idx=None, step_idx=1):
     if indices is not None:

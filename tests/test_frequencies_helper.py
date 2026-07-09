@@ -4,24 +4,19 @@ import pytest
 from lusee.frequencies import (
     FrequencyMap,
     frequencies_from_config,
-    interp1d,
-    interpolation_weights,
 )
 
 
 def _check_map(fmap, source, expected_target_vals, atol):
-    """Reconstruct interpolated values from the map and compare to expected."""
-    unique_vals = np.asarray(source)[fmap.unique_native_idx]
-    lo_vals = unique_vals[fmap.lo_in_unique]
-    hi_vals = unique_vals[fmap.hi_in_unique]
-    reconstructed = (1.0 - fmap.alpha) * lo_vals + fmap.alpha * hi_vals
+    """Interpolate the source grid through the map and compare to expected."""
+    reconstructed = fmap.from_native(np.asarray(source))
     np.testing.assert_allclose(reconstructed, expected_target_vals, atol=atol)
 
 
 def test_exact_match_snaps_to_alpha_zero():
     source = np.linspace(1.0, 50.0, 50)
     target = np.asarray([1.0, 10.0, 25.0, 50.0])
-    fmap = interpolation_weights(target, source)
+    fmap = FrequencyMap.build(target, source)
 
     assert isinstance(fmap, FrequencyMap)
     assert np.all(fmap.alpha == 0.0)
@@ -34,7 +29,7 @@ def test_near_match_within_atol_snaps():
     # vs np.linspace(1,50,50)[::5]. The map must snap with alpha = 0.0 exactly.
     source = np.linspace(1.0, 50.0, 50)
     target = source + 1e-10
-    fmap = interpolation_weights(target, source, atol=1e-6, rtol=1e-9)
+    fmap = FrequencyMap.build(target, source, atol=1e-6, rtol=1e-9)
 
     assert np.all(fmap.alpha == 0.0)
     assert np.all(fmap.lo_in_unique == fmap.hi_in_unique)
@@ -43,7 +38,7 @@ def test_near_match_within_atol_snaps():
 def test_midpoint_interpolation():
     source = np.linspace(0.0, 10.0, 11)
     target = np.asarray([0.5, 1.5, 9.5])
-    fmap = interpolation_weights(target, source)
+    fmap = FrequencyMap.build(target, source)
 
     np.testing.assert_allclose(fmap.alpha, [0.5, 0.5, 0.5])
     _check_map(fmap, source, target, atol=1e-12)
@@ -53,37 +48,37 @@ def test_out_of_range_raises():
     source = np.linspace(1.0, 50.0, 50)
 
     with pytest.raises(ValueError, match=r"out of range"):
-        interpolation_weights([55.0], source)
+        FrequencyMap.build([55.0], source)
 
     with pytest.raises(ValueError, match=r"out of range"):
-        interpolation_weights([0.5], source)
+        FrequencyMap.build([0.5], source)
 
 
 def test_boundary_snap_at_endpoints():
     source = np.linspace(1.0, 50.0, 50)
 
     # Exactly at endpoints: snap, no error.
-    fmap_lo = interpolation_weights([1.0], source)
-    fmap_hi = interpolation_weights([50.0], source)
+    fmap_lo = FrequencyMap.build([1.0], source)
+    fmap_hi = FrequencyMap.build([50.0], source)
     assert fmap_lo.alpha[0] == 0.0
     assert fmap_hi.alpha[0] == 0.0
     assert fmap_lo.lo_in_unique[0] == fmap_lo.hi_in_unique[0]
     assert fmap_hi.lo_in_unique[0] == fmap_hi.hi_in_unique[0]
-    assert int(fmap_lo.unique_native_idx[fmap_lo.lo_in_unique[0]]) == 0
-    assert int(fmap_hi.unique_native_idx[fmap_hi.lo_in_unique[0]]) == 49
+    assert int(fmap_lo.source_indices[fmap_lo.lo_in_unique[0]]) == 0
+    assert int(fmap_hi.source_indices[fmap_hi.lo_in_unique[0]]) == 49
 
     # Within boundary atol on the outside: snap, no error.
-    fmap_eps = interpolation_weights([50.0 + 1e-12], source, atol=1e-6)
+    fmap_eps = FrequencyMap.build([50.0 + 1e-12], source, atol=1e-6)
     assert fmap_eps.alpha[0] == 0.0
 
 
-def test_unique_native_idx_deduplication():
+def test_source_indices_deduplication():
     source = np.linspace(1.0, 50.0, 50)
     target = np.asarray([10.0, 10.0, 10.0, 20.5])
-    fmap = interpolation_weights(target, source)
+    fmap = FrequencyMap.build(target, source)
 
     # 10.0 snaps to index 9; 20.5 brackets indices 19 and 20.
-    assert sorted(fmap.unique_native_idx.tolist()) == [9, 19, 20]
+    assert sorted(np.asarray(fmap.source_indices).tolist()) == [9, 19, 20]
     # First three targets all reference the snapped index for 10.0.
     assert fmap.lo_in_unique[0] == fmap.lo_in_unique[1] == fmap.lo_in_unique[2]
     assert fmap.alpha[0] == fmap.alpha[1] == fmap.alpha[2] == 0.0
@@ -93,41 +88,40 @@ def test_unique_native_idx_deduplication():
 
 def test_non_increasing_source_raises():
     with pytest.raises(ValueError, match=r"strictly increasing"):
-        interpolation_weights([5.0], np.asarray([10.0, 5.0, 1.0]))
+        FrequencyMap.build([5.0], np.asarray([10.0, 5.0, 1.0]))
 
 
-def test_interp1d_recovers_native_values_on_snap():
+def test_from_native_recovers_native_values_on_snap():
     source = np.linspace(1.0, 50.0, 50)
     data = np.cos(source) + 2.0
-    fmap = interpolation_weights(source, source)
-    result = interp1d(fmap, data)
+    fmap = FrequencyMap.build(source, source)
+    result = fmap.from_native(data)
     np.testing.assert_allclose(result, data, atol=0.0)
 
 
-def test_interp1d_multidim_broadcasts_along_first_axis():
+def test_from_native_multidim_broadcasts_along_first_axis():
     source = np.linspace(0.0, 10.0, 11)
     data = np.arange(11 * 3 * 2, dtype=float).reshape(11, 3, 2)
     target = np.asarray([0.5, 5.5])
-    fmap = interpolation_weights(target, source)
-    result = interp1d(fmap, data)
+    fmap = FrequencyMap.build(target, source)
+    result = fmap.from_native(data)
 
     expected = 0.5 * data[[0, 5], ...] + 0.5 * data[[1, 6], ...]
     np.testing.assert_allclose(result, expected, atol=1e-12)
 
 
-def test_interp_from_unique_matches_interp1d_on_full_grid():
-    # interp1d(full) and interp_from_unique(full[unique_native_idx]) must agree:
-    # this is the exact split the simulators rely on (cheap full arrays vs
-    # expensive alm products pre-reduced to unique indices).
-    from lusee.frequencies import interp_from_unique
-
+def test_from_unique_matches_from_native_on_full_grid():
+    # from_native(full) and from_unique(full[source_indices]) must agree: this
+    # is the exact split the simulators rely on (cheap full arrays via
+    # from_native vs expensive alm products pre-reduced to source_indices via
+    # from_unique).
     source = np.linspace(1.0, 50.0, 50)
     data = np.cos(source)[:, None] * np.arange(1, 4)[None, :]
     target = np.asarray([12.5, 12.5, 30.0, 50.0])
-    fmap = interpolation_weights(target, source)
+    fmap = FrequencyMap.build(target, source)
 
-    via_full = interp1d(fmap, data)
-    via_unique = interp_from_unique(fmap, data[fmap.unique_native_idx])
+    via_full = fmap.from_native(data)
+    via_unique = fmap.from_unique(data[fmap.source_indices])
     np.testing.assert_allclose(via_full, via_unique, atol=0.0)
 
 
@@ -136,18 +130,17 @@ def test_interpolation_is_differentiable_wrt_values():
     # through the off-grid blend back to the beam/sky values.
     import jax
     import jax.numpy as jnp
-    from lusee.frequencies import interp_from_unique
 
     source = np.linspace(1.0, 50.0, 50)
     target = np.asarray([12.5, 30.0])  # one genuinely off-grid, one on-grid
-    fmap = interpolation_weights(target, source)
+    fmap = FrequencyMap.build(target, source)
 
     unique_vals = jnp.asarray(
-        np.random.default_rng(0).standard_normal((fmap.unique_native_idx.size, 3))
+        np.random.default_rng(0).standard_normal((fmap.source_indices.size, 3))
     )
 
     def loss(vals):
-        return jnp.sum(interp_from_unique(fmap, vals) ** 2)
+        return jnp.sum(fmap.from_unique(vals) ** 2)
 
     grad = jax.grad(loss)(unique_vals)
     assert grad.shape == unique_vals.shape
@@ -156,8 +149,6 @@ def test_interpolation_is_differentiable_wrt_values():
 
 
 def test_frequencymap_class_api():
-    # The class methods are the primary API; the free functions are thin
-    # wrappers over them.
     source = np.linspace(1.0, 50.0, 50)
     data = np.cos(source)[:, None] * np.arange(1, 4)[None, :]
     target = np.asarray([12.5, 12.5, 30.0, 50.0])
@@ -166,7 +157,6 @@ def test_frequencymap_class_api():
     assert len(fmap) == len(target)
     # source_indices is the dedup'd lookup table (12.5 brackets 11/12, 30/50 snap).
     np.testing.assert_array_equal(np.asarray(fmap.source_indices), [11, 12, 29, 49])
-    np.testing.assert_allclose(fmap.from_native(data), interp1d(fmap, data), atol=0.0)
     np.testing.assert_allclose(
         fmap.from_unique(data[fmap.source_indices]), fmap.from_native(data), atol=0.0
     )

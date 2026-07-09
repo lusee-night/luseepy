@@ -46,8 +46,6 @@ from .frequencies import (
     canonicalize_frequencies,
     frequencies_from_config,
     frequency_indices_from_values,
-    interp1d,
-    interpolation_weights,
 )
 
 __version__ = '1.3'
