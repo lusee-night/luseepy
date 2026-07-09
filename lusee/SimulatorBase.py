@@ -1,7 +1,7 @@
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
-from .frequencies import interp1d, interp_from_unique, interpolation_weights
+from .frequencies import FrequencyMap
 
 import numpy as np
 import jax.numpy as jnp
@@ -165,14 +165,14 @@ class SimulatorBase:
                     f"beam[0] (id={getattr(beams[0], 'id', None)!r})."
                 )
         try:
-            self.freq_map_beam = interpolation_weights(self.freq, beams[0].freq)
+            self.freq_map_beam = FrequencyMap.build(self.freq, beams[0].freq)
         except ValueError as exc:
             raise ValueError(f"Beam frequency mismatch: {exc}") from exc
         if hasattr(sky_model, "get_alm_at_freq"):
             self.freq_map_sky = None
         else:
             try:
-                self.freq_map_sky = interpolation_weights(self.freq, sky_model.freq)
+                self.freq_map_sky = FrequencyMap.build(self.freq, sky_model.freq)
             except ValueError as exc:
                 raise ValueError(f"Sky-model frequency mismatch: {exc}") from exc
 
@@ -186,7 +186,7 @@ class SimulatorBase:
         external consumers that previously inspected ``freq_ndx_beam`` as a
         list of indices.
         """
-        return self.freq_map_beam.unique_native_idx
+        return self.freq_map_beam.source_indices
 
     @property
     def freq_ndx_sky(self):
@@ -197,7 +197,7 @@ class SimulatorBase:
         """
         if self.freq_map_sky is None:
             return None
-        return self.freq_map_sky.unique_native_idx
+        return self.freq_map_sky.source_indices
 
     def simulate(self, times=None):
         """
@@ -323,8 +323,8 @@ class SimulatorBase:
         fits.write(np.asarray(self.freq), extname='freq')
         fits.write(np.array(self.combinations), extname='combinations')
         for i,b in enumerate(self.beams):
-            ZRe_target = interp1d(self.freq_map_beam, np.asarray(b.ZRe))
-            ZIm_target = interp1d(self.freq_map_beam, np.asarray(b.ZIm))
+            ZRe_target = self.freq_map_beam.from_native(np.asarray(b.ZRe))
+            ZIm_target = self.freq_map_beam.from_native(np.asarray(b.ZIm))
             fits.write(ZRe_target, extname=f'ZRe_{i}')
             fits.write(ZIm_target, extname=f'ZIm_{i}')
 
@@ -349,20 +349,20 @@ class SimulatorBase:
         for i,j in self.combinations:
             bi , bj = beams[i], beams[j]
             print (f"  intializing beam combination {bi.id} x {bj.id} ...")
-            gain_i = interp1d(fmap, np.asarray(bi.gain_conv))
-            gain_j = interp1d(fmap, np.asarray(bj.gain_conv))
+            gain_i = fmap.from_native(np.asarray(bi.gain_conv))
+            gain_j = fmap.from_native(np.asarray(bj.gain_conv))
             norm = np.sqrt(gain_i * gain_j)
             beamreal_native, beamimag_native = bi.get_healpix_alm(
                 self.lmax,
-                freq_ndx=fmap.unique_native_idx,
+                freq_ndx=fmap.source_indices,
                 other=bj,
                 return_I_stokes_only=True,
                 return_complex_components=True,
             )
-            beamreal = np.asarray(interp_from_unique(fmap, np.asarray(beamreal_native)))
+            beamreal = np.asarray(fmap.from_unique(np.asarray(beamreal_native)))
             beamreal = beamreal * norm[:, None]
             if beamimag_native is not None:
-                beamimag = np.asarray(interp_from_unique(fmap, np.asarray(beamimag_native)))
+                beamimag = np.asarray(fmap.from_unique(np.asarray(beamimag_native)))
                 beamimag = beamimag * norm[:, None]
             else:
                 beamimag = None

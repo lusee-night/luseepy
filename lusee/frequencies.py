@@ -1,6 +1,5 @@
-from typing import NamedTuple
-
 import numpy as np
+import jax
 import jax.numpy as jnp
 
 
@@ -21,137 +20,193 @@ ALL_FREQUENCIES_MHZ_NP = np.linspace(
 ALL_FREQUENCIES_MHZ = jnp.asarray(ALL_FREQUENCIES_MHZ_NP)
 
 
-class FrequencyMap(NamedTuple):
-    """Linear-interpolation map from a target grid to a source grid.
+@jax.tree_util.register_pytree_node_class
+class FrequencyMap:
+    """Native-index lookup + linear interpolator from a target grid to a source grid.
 
-    For target frequency i, the interpolated value is
-        val[i] = (1 - alpha[i]) * unique_vals[lo_in_unique[i]]
-               +      alpha[i]  * unique_vals[hi_in_unique[i]]
-    where ``unique_vals = native_array[unique_native_idx]``.
+    A single object bundles the two things every simulator needs to evaluate an
+    off-grid frequency set:
 
-    Snap-on-match semantics: when a target frequency falls within
-    ``(atol, rtol)`` of a source point, the helper sets ``lo == hi`` to
-    that native index and ``alpha == 0.0`` exactly, so plain indexing is
-    recovered with no floating-point garbage.
+    1. **Index lookup** (:attr:`source_indices`): the unique native source-grid
+       indices bracketed by the target frequencies. Expensive per-frequency
+       products (beam and sky a_lm transforms) are evaluated *only* at these
+       indices -- ``get_healpix_alm(freq_ndx=fmap.source_indices)`` and
+       ``sky.get_alm(fmap.source_indices)`` -- so nothing is recomputed at
+       shared bracket endpoints or at exact on-grid hits.
+
+    2. **Interpolator**: linear blend weights mapping either the unique samples
+       (:meth:`from_unique`) or a full native-grid array (:meth:`from_native`)
+       onto the target grid. For target frequency i::
+
+           val[i] = (1 - alpha[i]) * unique_vals[lo_in_unique[i]]
+                  +      alpha[i]  * unique_vals[hi_in_unique[i]]
+
+       where ``unique_vals[k]`` is the value at native index
+       ``source_indices[k]``.
+
+    Snap-on-match: a target within ``(atol, rtol)`` of a source point sets
+    ``lo == hi`` and ``alpha == 0.0`` exactly, so plain indexing is recovered
+    with no floating-point garbage.
+
+    Registered as a JAX pytree (children: the three index arrays and ``alpha``)
+    so an instance can cross ``jit``/``grad``/``vmap`` boundaries. Gradients w.r.t.
+    interpolated *values* flow through :meth:`from_unique`/:meth:`from_native`;
+    the discrete brackets are built on the host in numpy, so there is no gradient
+    w.r.t. the frequencies themselves -- intended, since observing channels are
+    fixed. The two-point linear stencil lives entirely behind these methods, so a
+    higher-order scheme can be swapped in later without touching call sites.
     """
 
-    unique_native_idx: np.ndarray
-    lo_in_unique: np.ndarray
-    hi_in_unique: np.ndarray
-    alpha: np.ndarray
+    def __init__(self, unique_native_idx, lo_in_unique, hi_in_unique, alpha):
+        self.unique_native_idx = unique_native_idx
+        self.lo_in_unique = lo_in_unique
+        self.hi_in_unique = hi_in_unique
+        self.alpha = alpha
+
+    @classmethod
+    def build(cls, target_freqs, source_freqs, *, atol=1e-6, rtol=1e-9):
+        """Construct a map from ``target_freqs`` onto ``source_freqs``.
+
+        :param target_freqs: requested frequencies, 1-D array-like in MHz.
+        :param source_freqs: native frequencies of the data being interpolated,
+            1-D strictly-increasing array-like in MHz.
+        :param atol: absolute tolerance for snap-on-match and boundary checks.
+        :param rtol: relative tolerance for the same.
+        :returns: a :class:`FrequencyMap` with int32 index arrays and float64 alpha.
+        :raises ValueError: if ``source_freqs`` is not strictly increasing, or any
+            target frequency lies outside ``[source.min(), source.max()]`` beyond
+            the tolerance.
+        """
+        target = np.asarray(target_freqs, dtype=np.float64).reshape(-1)
+        source = np.asarray(source_freqs, dtype=np.float64).reshape(-1)
+
+        if source.size < 1:
+            raise ValueError("source_freqs must contain at least one frequency")
+        if source.size >= 2 and not np.all(np.diff(source) > 0):
+            raise ValueError("source_freqs must be strictly increasing")
+
+        src_min = float(source[0])
+        src_max = float(source[-1])
+        boundary_atol = atol + rtol * max(abs(src_min), abs(src_max))
+        too_low = target < (src_min - boundary_atol)
+        too_high = target > (src_max + boundary_atol)
+        out_of_range = too_low | too_high
+        if np.any(out_of_range):
+            offenders = target[out_of_range].tolist()
+            raise ValueError(
+                f"target_freqs out of range [{src_min}, {src_max}] MHz: {offenders}"
+            )
+
+        if source.size == 1:
+            # Degenerate single-point source: every target must snap to index 0.
+            n = target.size
+            zeros = np.zeros(n, dtype=np.int32)
+            return cls(
+                np.asarray([0], dtype=np.int32),
+                zeros,
+                zeros,
+                np.zeros(n, dtype=np.float64),
+            )
+
+        insertion = np.searchsorted(source, target, side="left")
+        hi = np.clip(insertion, 0, source.size - 1)
+        lo = np.clip(insertion - 1, 0, source.size - 1)
+
+        src_lo = source[lo]
+        src_hi = source[hi]
+        lo_match = np.isclose(target, src_lo, atol=atol, rtol=rtol)
+        hi_match = np.isclose(target, src_hi, atol=atol, rtol=rtol) & ~lo_match
+
+        denom = src_hi - src_lo
+        safe_denom = np.where(denom == 0.0, 1.0, denom)
+        alpha = (target - src_lo) / safe_denom
+
+        new_lo = np.where(lo_match, lo, np.where(hi_match, hi, lo))
+        new_hi = np.where(lo_match, lo, np.where(hi_match, hi, hi))
+        new_alpha = np.where(lo_match | hi_match, 0.0, alpha)
+
+        all_idx = np.concatenate([new_lo, new_hi])
+        unique_idx, inverse = np.unique(all_idx, return_inverse=True)
+        lo_in_unique = inverse[: target.size].astype(np.int32)
+        hi_in_unique = inverse[target.size :].astype(np.int32)
+
+        return cls(
+            unique_idx.astype(np.int32),
+            lo_in_unique,
+            hi_in_unique,
+            new_alpha.astype(np.float64),
+        )
+
+    @property
+    def source_indices(self):
+        """Unique native source-grid indices the expensive products must be evaluated at."""
+        return self.unique_native_idx
+
+    def __len__(self):
+        """Number of target frequencies this map produces."""
+        return int(np.asarray(self.alpha).shape[0])
+
+    def from_unique(self, unique_array):
+        """Interpolate an array already reduced to :attr:`source_indices`.
+
+        ``unique_array`` must be indexed positionally by :attr:`source_indices`
+        -- row ``k`` holds the value at native index ``source_indices[k]``. This
+        is exactly what ``get_healpix_alm(freq_ndx=fmap.source_indices)`` and
+        ``sky.get_alm(fmap.source_indices)`` return, so the expensive alm
+        products are computed once per unique bracket endpoint and blended here.
+
+        Numpy or JAX in; return type follows the input. Other axes broadcast.
+        """
+        is_jax = isinstance(unique_array, jnp.ndarray)
+        arr = jnp.asarray(unique_array) if is_jax else np.asarray(unique_array)
+        lo_vals = arr[self.lo_in_unique]
+        hi_vals = arr[self.hi_in_unique]
+        a = jnp.asarray(self.alpha) if is_jax else np.asarray(self.alpha)
+        shape = (a.shape[0],) + (1,) * (lo_vals.ndim - 1)
+        return (1.0 - a.reshape(shape)) * lo_vals + a.reshape(shape) * hi_vals
+
+    def from_native(self, native_array):
+        """Interpolate a full native-grid array (indexed by the source grid).
+
+        Use for cheap arrays already held on the full native grid (gains,
+        impedances, couplings). Selects :attr:`source_indices` then blends, so
+        it is equivalent to ``from_unique(native_array[source_indices])``.
+
+        Numpy or JAX in; return type follows the input. Other axes broadcast.
+        """
+        is_jax = isinstance(native_array, jnp.ndarray)
+        arr = jnp.asarray(native_array) if is_jax else np.asarray(native_array)
+        return self.from_unique(arr[self.unique_native_idx])
+
+    def tree_flatten(self):
+        children = (self.unique_native_idx, self.lo_in_unique, self.hi_in_unique, self.alpha)
+        return children, None
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        return cls(*children)
+
+    def __repr__(self):
+        n_offgrid = int(np.count_nonzero(np.asarray(self.alpha) != 0.0))
+        return (
+            f"FrequencyMap(n_target={len(self)}, "
+            f"n_source_touched={np.asarray(self.unique_native_idx).shape[0]}, "
+            f"n_offgrid={n_offgrid})"
+        )
 
 
+# Thin functional wrappers over the FrequencyMap methods. New code should prefer
+# the class API (FrequencyMap.build / .from_native / .from_unique / .source_indices).
 def interpolation_weights(target_freqs, source_freqs, *, atol=1e-6, rtol=1e-9):
-    """Build a linear-interpolation map from ``target_freqs`` to ``source_freqs``.
-
-    :param target_freqs: requested frequencies, 1-D array-like in MHz.
-    :param source_freqs: native frequencies of the data being interpolated,
-        1-D strictly-increasing array-like in MHz.
-    :param atol: absolute tolerance for snap-on-match and boundary checks.
-    :param rtol: relative tolerance for the same.
-    :returns: a :class:`FrequencyMap` with int32 index arrays and float64 alpha.
-    :raises ValueError: if ``source_freqs`` is not strictly increasing, or any
-        target frequency lies outside ``[source_freqs.min(), source_freqs.max()]``
-        beyond the tolerance.
-    """
-    target = np.asarray(target_freqs, dtype=np.float64).reshape(-1)
-    source = np.asarray(source_freqs, dtype=np.float64).reshape(-1)
-
-    if source.size < 1:
-        raise ValueError("source_freqs must contain at least one frequency")
-    if source.size >= 2 and not np.all(np.diff(source) > 0):
-        raise ValueError("source_freqs must be strictly increasing")
-
-    src_min = float(source[0])
-    src_max = float(source[-1])
-    boundary_atol = atol + rtol * max(abs(src_min), abs(src_max))
-    too_low = target < (src_min - boundary_atol)
-    too_high = target > (src_max + boundary_atol)
-    out_of_range = too_low | too_high
-    if np.any(out_of_range):
-        offenders = target[out_of_range].tolist()
-        raise ValueError(
-            f"target_freqs out of range [{src_min}, {src_max}] MHz: {offenders}"
-        )
-
-    if source.size == 1:
-        # Degenerate single-point source: every target must snap to index 0.
-        n = target.size
-        zeros = np.zeros(n, dtype=np.int32)
-        return FrequencyMap(
-            unique_native_idx=np.asarray([0], dtype=np.int32),
-            lo_in_unique=zeros,
-            hi_in_unique=zeros,
-            alpha=np.zeros(n, dtype=np.float64),
-        )
-
-    insertion = np.searchsorted(source, target, side="left")
-    hi = np.clip(insertion, 0, source.size - 1)
-    lo = np.clip(insertion - 1, 0, source.size - 1)
-
-    src_lo = source[lo]
-    src_hi = source[hi]
-    lo_match = np.isclose(target, src_lo, atol=atol, rtol=rtol)
-    hi_match = np.isclose(target, src_hi, atol=atol, rtol=rtol) & ~lo_match
-
-    denom = src_hi - src_lo
-    safe_denom = np.where(denom == 0.0, 1.0, denom)
-    alpha = (target - src_lo) / safe_denom
-
-    new_lo = np.where(lo_match, lo, np.where(hi_match, hi, lo))
-    new_hi = np.where(lo_match, lo, np.where(hi_match, hi, hi))
-    new_alpha = np.where(lo_match | hi_match, 0.0, alpha)
-
-    all_idx = np.concatenate([new_lo, new_hi])
-    unique_idx, inverse = np.unique(all_idx, return_inverse=True)
-    lo_in_unique = inverse[: target.size].astype(np.int32)
-    hi_in_unique = inverse[target.size :].astype(np.int32)
-
-    return FrequencyMap(
-        unique_native_idx=unique_idx.astype(np.int32),
-        lo_in_unique=lo_in_unique,
-        hi_in_unique=hi_in_unique,
-        alpha=new_alpha.astype(np.float64),
-    )
+    return FrequencyMap.build(target_freqs, source_freqs, atol=atol, rtol=rtol)
 
 
 def interp1d(freq_map, native_array):
-    """Apply a :class:`FrequencyMap` to a full native-grid array along axis 0.
-
-    ``native_array`` must be indexed by the *native* source grid (the same grid
-    passed as ``source_freqs`` to :func:`interpolation_weights`). Use this for
-    cheap arrays already held on the full native grid (gains, impedances,
-    couplings). For arrays that were computed only at ``unique_native_idx`` (the
-    expensive beam/sky alm products), use :func:`interp_from_unique` instead.
-
-    ``native_array`` may be numpy or JAX; the return type follows the input.
-    Other axes broadcast unchanged.
-    """
-    is_jax = isinstance(native_array, jnp.ndarray)
-    arr = jnp.asarray(native_array) if is_jax else np.asarray(native_array)
-    unique_vals = arr[freq_map.unique_native_idx]
-    return interp_from_unique(freq_map, unique_vals)
+    return freq_map.from_native(native_array)
 
 
 def interp_from_unique(freq_map, unique_array):
-    """Apply a :class:`FrequencyMap` to an array already reduced to unique indices.
-
-    ``unique_array`` must be indexed positionally by ``freq_map.unique_native_idx``
-    -- i.e. row ``k`` holds the value at native index ``unique_native_idx[k]``.
-    This is exactly what ``get_healpix_alm(freq_ndx=freq_map.unique_native_idx)``
-    and ``sky.get_alm(freq_map.unique_native_idx)`` return, so the expensive alm
-    products are computed once per unique bracket endpoint and blended here.
-
-    ``unique_array`` may be numpy or JAX; the return type follows the input.
-    Other axes broadcast unchanged.
-    """
-    is_jax = isinstance(unique_array, jnp.ndarray)
-    arr = jnp.asarray(unique_array) if is_jax else np.asarray(unique_array)
-    lo_vals = arr[freq_map.lo_in_unique]
-    hi_vals = arr[freq_map.hi_in_unique]
-    a = jnp.asarray(freq_map.alpha) if is_jax else freq_map.alpha
-    shape = (a.shape[0],) + (1,) * (lo_vals.ndim - 1)
-    return (1.0 - a.reshape(shape)) * lo_vals + a.reshape(shape) * hi_vals
+    return freq_map.from_unique(unique_array)
 
 
 def frequencies_from_config(freq_cfg):

@@ -51,20 +51,17 @@ class BeamCouplings:
         :type b1: class
         :param b2: Beam two
         :type b2: class
-        :param freq_map: Interpolation map (see :func:`lusee.frequencies.interpolation_weights`)
+        :param freq_map: Interpolation map (see :class:`lusee.frequencies.FrequencyMap`)
             from the simulator target frequencies to the beams' native frequency grid.
         :type freq_map: lusee.frequencies.FrequencyMap
 
         :returns: Cross power between two input beams at the target frequencies.
         :rtype: numpy array of shape ``(N_target,)``
         """
-        from .frequencies import interp1d
-
         cross_power = self.cross_powers.get((b1.id, b2.id))
-        ntarget = int(freq_map.alpha.shape[0])
         if cross_power is None:
-            return np.zeros(ntarget, dtype=float)
-        return interp1d(freq_map, np.asarray(cross_power))
+            return np.zeros(len(freq_map), dtype=float)
+        return freq_map.from_native(np.asarray(cross_power))
     
         
 
