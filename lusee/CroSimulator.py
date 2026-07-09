@@ -5,6 +5,7 @@ from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, get_topo_z_rotation_angles
+from .spice_utils import ensure_lunarsky_moon_frame
 import numpy as np
 import fitsio
 import sys
@@ -59,6 +60,7 @@ class CroSimulator(SimulatorBase):
                   lmax = 128, cross_power = None,
                   extra_opts = {}):
         super().__init__(obs, beams, sky_model, Tground, combinations, freq)
+        ensure_lunarsky_moon_frame()
         self.lmax = lmax
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()

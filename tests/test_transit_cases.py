@@ -23,6 +23,7 @@ Usage
 import os
 import sys
 import numpy as np
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -40,6 +41,8 @@ CASES = [
     dict(name="v",   beam_dec=60, beam_phi=0,   ecl_lon=70, ecl_lat=30),
     dict(name="vi",  beam_dec=60, beam_phi=180, ecl_lon=70, ecl_lat=-30),
 ]
+
+pytestmark = pytest.mark.manual
 
 TIME_START   = "2025-03-01 00:00:00"
 TIME_END     = "2025-03-29 00:00:00"
@@ -67,8 +70,7 @@ def test_transit_cases():
     matplotlib.use("Agg")
 
     if lusee.CroSimulator is None:
-        import pytest
-        pytest.skip("croissant not installed")
+        pytest.skip("croissant-sim, s2fft, and spiceypy are not installed")
 
     obs = lusee.Observation(
         f"{TIME_START} to {TIME_END}",

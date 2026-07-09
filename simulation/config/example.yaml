@@ -1,5 +1,5 @@
 # Starter config aligned with sim_choice_realistic.yaml / run_Cro_sim.py pipeline.
-# Engine: croissant (requires croissant-sim + s2fft; see pyproject optional deps).
+# Engine: croissant (requires croissant-sim + s2fft + spiceypy; see pyproject optional deps).
 paths:
   lusee_drive_dir: $LUSEE_DRIVE_DIR
   sky_dir: Simulations/SkyModels

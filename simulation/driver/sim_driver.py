@@ -221,8 +221,9 @@ class SimDriver:
         if self.engine is SimEngine.CRO:
             if lusee.CroSimulator is None:
                 raise RuntimeError(
-                    "CroSimulator requires optional dependency 'croissant' (and s2fft). "
-                    "Install with: pip install croissant s2fft"
+                    "CroSimulator requires optional dependencies croissant-sim, "
+                    "s2fft, and spiceypy. Install with: pip install croissant-sim "
+                    "s2fft spiceypy"
                 )
             print("  setting up Croissant Simulation object...")
             S = lusee.CroSimulator(
