@@ -116,7 +116,13 @@ def interpolation_weights(target_freqs, source_freqs, *, atol=1e-6, rtol=1e-9):
 
 
 def interp1d(freq_map, native_array):
-    """Apply a :class:`FrequencyMap` to a native-grid array along its first axis.
+    """Apply a :class:`FrequencyMap` to a full native-grid array along axis 0.
+
+    ``native_array`` must be indexed by the *native* source grid (the same grid
+    passed as ``source_freqs`` to :func:`interpolation_weights`). Use this for
+    cheap arrays already held on the full native grid (gains, impedances,
+    couplings). For arrays that were computed only at ``unique_native_idx`` (the
+    expensive beam/sky alm products), use :func:`interp_from_unique` instead.
 
     ``native_array`` may be numpy or JAX; the return type follows the input.
     Other axes broadcast unchanged.
@@ -124,13 +130,26 @@ def interp1d(freq_map, native_array):
     is_jax = isinstance(native_array, jnp.ndarray)
     arr = jnp.asarray(native_array) if is_jax else np.asarray(native_array)
     unique_vals = arr[freq_map.unique_native_idx]
-    lo_vals = unique_vals[freq_map.lo_in_unique]
-    hi_vals = unique_vals[freq_map.hi_in_unique]
-    if is_jax:
-        a = jnp.asarray(freq_map.alpha)
-        shape = (a.shape[0],) + (1,) * (lo_vals.ndim - 1)
-        return (1.0 - a.reshape(shape)) * lo_vals + a.reshape(shape) * hi_vals
-    a = freq_map.alpha
+    return interp_from_unique(freq_map, unique_vals)
+
+
+def interp_from_unique(freq_map, unique_array):
+    """Apply a :class:`FrequencyMap` to an array already reduced to unique indices.
+
+    ``unique_array`` must be indexed positionally by ``freq_map.unique_native_idx``
+    -- i.e. row ``k`` holds the value at native index ``unique_native_idx[k]``.
+    This is exactly what ``get_healpix_alm(freq_ndx=freq_map.unique_native_idx)``
+    and ``sky.get_alm(freq_map.unique_native_idx)`` return, so the expensive alm
+    products are computed once per unique bracket endpoint and blended here.
+
+    ``unique_array`` may be numpy or JAX; the return type follows the input.
+    Other axes broadcast unchanged.
+    """
+    is_jax = isinstance(unique_array, jnp.ndarray)
+    arr = jnp.asarray(unique_array) if is_jax else np.asarray(unique_array)
+    lo_vals = arr[freq_map.lo_in_unique]
+    hi_vals = arr[freq_map.hi_in_unique]
+    a = jnp.asarray(freq_map.alpha) if is_jax else freq_map.alpha
     shape = (a.shape[0],) + (1,) * (lo_vals.ndim - 1)
     return (1.0 - a.reshape(shape)) * lo_vals + a.reshape(shape) * hi_vals
 
