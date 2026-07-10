@@ -168,7 +168,10 @@ class CroSimulator(SimulatorBase):
             s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(s_), sim_L)
             for s_ in sky_gal
         ])
-        et = cro.rotations.jd_to_et(times[0].jd)
+        # Use the observation's TDB epoch when defining the MEPA reference frame.
+        # Using the generic .jd value here introduces a ~69 s UTC/TDB offset, which
+        # is large enough to create geometry-dependent Croissant drift on short windows.
+        et = cro.rotations.jd_to_et(times[0].tdb.jd)
         sky_mepa = cro.rotations.gal2mepa(sky_2d, et=et)
         delta_t_sec = np.arange(len(times), dtype=float) * self.obs.deltaT_sec
         phases = cro.simulator.rot_alm_z(self.lmax, times=delta_t_sec)

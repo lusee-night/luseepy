@@ -43,6 +43,17 @@ def _env_positive_float(name, default):
     return value
 
 
+def _env_nonnegative_float(name, default):
+    raw = os.environ.get(name, str(default))
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a non-negative float, got {raw!r}") from exc
+    if value < 0.0:
+        raise ValueError(f"{name} must be >= 0, got {value!r}")
+    return value
+
+
 def _time_range_from_days(start_text, days):
     start = datetime.fromisoformat(start_text)
     end = start + timedelta(days=days)
@@ -50,14 +61,24 @@ def _time_range_from_days(start_text, days):
 
 
 _LUNAR_REGRESSION_DAYS = _env_positive_float("LUSEE_LUNAR_DAY_REGRESSION_DAYS", 0.25)
+_LUNAR_REGRESSION_START_OFFSET_DAYS = _env_nonnegative_float(
+    "LUSEE_LUNAR_DAY_REGRESSION_START_OFFSET_DAYS",
+    0.0,
+)
 
 
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    "days",
-    [pytest.param(_LUNAR_REGRESSION_DAYS, id=f"{_LUNAR_REGRESSION_DAYS:g}d")],
+    ("days", "start_offset_days"),
+    [
+        pytest.param(
+            _LUNAR_REGRESSION_DAYS,
+            _LUNAR_REGRESSION_START_OFFSET_DAYS,
+            id=f"{_LUNAR_REGRESSION_DAYS:g}d_offset{_LUNAR_REGRESSION_START_OFFSET_DAYS:g}",
+        )
+    ],
 )
-def test_lunar_day_28_single_source(days):
+def test_lunar_day_28_single_source(days, start_offset_days):
     """run sim for 28 days, for a single pixel source.
 
     Note: Output is the same at every frequency because (1) SingleSourceHealpixSky
@@ -67,8 +88,11 @@ def test_lunar_day_28_single_source(days):
     frequency-dependent sky.
 
     Default CI/local regression length is controlled by
-    ``LUSEE_LUNAR_DAY_REGRESSION_DAYS`` and defaults to 0.25 days. Run the full
-    original 28-day case with ``LUSEE_LUNAR_DAY_REGRESSION_DAYS=28``.
+    ``LUSEE_LUNAR_DAY_REGRESSION_DAYS`` and defaults to 0.25 days.
+
+    The start offset is controlled by
+    ``LUSEE_LUNAR_DAY_REGRESSION_START_OFFSET_DAYS`` and defaults to 0.
+    Run the original 28-day case with ``LUSEE_LUNAR_DAY_REGRESSION_DAYS=28``.
     """
     import lusee
     import matplotlib
@@ -80,10 +104,12 @@ def test_lunar_day_28_single_source(days):
     ra_deg, dec_deg = c.icrs.ra.deg, c.icrs.dec.deg
     l_deg, b_deg = c.galactic.l.deg, c.galactic.b.deg
 
-    time_start = "2025-03-01 00:00:00"
+    time_start = datetime.fromisoformat("2025-03-01 00:00:00") + timedelta(
+        days=start_offset_days
+    )
     deltaT_sec = 7200.0  # 2 hours
     obs = lusee.Observation(
-        _time_range_from_days(time_start, days),
+        _time_range_from_days(time_start.strftime("%Y-%m-%d %H:%M:%S"), days),
         deltaT_sec=deltaT_sec,
         lun_lat_deg=0.0,
         lun_long_deg=0.0,
@@ -160,6 +186,7 @@ def test_lunar_day_28_single_source(days):
 
     print(
         f"days={days:g} "
+        f"start_offset_days={start_offset_days:g} "
         f"n_times={len(times)} "
         f"default_sec={def_time:.3f} "
         f"jaxsim_sec={jax_time:.3f} "
