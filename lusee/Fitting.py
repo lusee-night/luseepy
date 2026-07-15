@@ -649,6 +649,46 @@ class GaussianLogPrior:
         return -0.5 * jnp.sum(((jnp.asarray(x) - self.mu) / self.sigma) ** 2)
 
 
+@dataclass
+class GraphSmoothnessPrior:
+    """Gaussian Markov random field (GMRF) prior on a pixel-space block.
+
+    A spatially-varying smoothness + anchor prior for a real per-pixel field
+    (e.g. a spectral-index map).  With an undirected neighbour graph it is
+
+        -2 log p(x) = sum_<ij> w_ij (x_i - x_j)^2  +  sum_i a_i (x_i - mu)^2
+
+    the first term (smoothness) couples neighbours -- large ``w`` forces them to
+    agree (locally coarse), small ``w`` lets the field vary pixel-to-pixel
+    (locally fine).  The second (anchor/ridge) pulls the field toward ``mu``;
+    making ``a_i`` large where the data are uninformative (low instrument
+    coverage) pins the field there and removes degeneracy fuel, while ``a_i``
+    small elsewhere lets the data drive it.
+
+    This is the discrete Matern/SPDE field of Lindgren-Rue-Lindqvist (2011),
+    precision ``Q = diag(a) + W L_graph``; its smoothing length is
+    ``xi_i = sqrt(w_i / a_i)`` pixels (effective resolution
+    ``n_eff = Nside / xi``).  The same ``Q`` can feed an HMC log-posterior.
+
+    Edges are stored as parallel index arrays ``(i, j)`` with per-edge weights
+    ``we``; the model-specific builder
+    (:func:`lusee.SpectralSky.build_beta_smoothness_prior`) assembles them from a
+    healpix neighbour graph and a coverage map.  All arrays are captured as jit
+    constants, so the prior is JAX-traceable as a plain callable.
+    """
+    i: Any           # (n_edges,) edge endpoint indices
+    j: Any           # (n_edges,) other endpoint
+    we: Any          # (n_edges,) symmetric edge weights w_ij
+    a: Any           # (n_pix,) per-pixel anchor weights
+    mu: float        # anchor target
+
+    def __call__(self, x):
+        x = jnp.asarray(x)
+        smooth = jnp.sum(jnp.asarray(self.we) * (x[self.i] - x[self.j]) ** 2)
+        ridge = jnp.sum(jnp.asarray(self.a) * (x - self.mu) ** 2)
+        return -0.5 * (smooth + ridge)
+
+
 class Module:
     """Base class for a model component (Layer 2)."""
     name = "module"
@@ -746,3 +786,29 @@ class Experiment:
         """Run the shared VarPro driver over this experiment's parameters."""
         return profile_optimize(self.predict, self.paramset,
                                 self.data, self.N_inv, **kw)
+
+    def linear_solve(self, *, method="cg", inner_maxiter=2000, inner_tol=1e-10):
+        """Single Wiener/CG solve of the linear block (no non-linear params).
+
+        Used when the model has been made purely linear -- e.g. a fixed-``beta``
+        sky -- so the forward ``m = A @ flux`` has no outer loop.  Returns the
+        linear block as ``{name: natural alm}`` (like ``optimize()['linear']``).
+        """
+        ps = self.paramset
+        if ps.nonlinear:
+            raise ValueError("linear_solve requires a model with no free "
+                             "non-linear parameters (got "
+                             f"{[p.name for p in ps.nonlinear]}).")
+        d = jnp.asarray(self.data).ravel()
+        N_inv = jnp.asarray(self.N_inv).ravel()
+        S_inv = ps.Sinv_linear()
+        n = ps.n_linear
+        A = lambda theta: self.predict(ps.unpack_linear(theta), {})
+        if method == "dense":
+            theta = linear_solve_dense(A, n, N_inv, S_inv, d)
+        elif method == "cg":
+            theta = linear_solve_cg(A, n, N_inv, S_inv, d,
+                                    maxiter=inner_maxiter, tol=inner_tol)
+        else:
+            raise ValueError("method must be 'cg' or 'dense'")
+        return ps.unpack_linear(theta)

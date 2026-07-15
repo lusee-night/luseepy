@@ -191,19 +191,105 @@ class SpectralHealpixSky:
 
 # The fitting adapter for this model lives next to the model (it depends on the
 # generic registry in lusee.Fitting, not the other way around).
-from .Fitting import Param, RealAlmBlock, ClPrior, Module  # noqa: E402
+from .Fitting import (Param, RealAlmBlock, ClPrior, Module,  # noqa: E402
+                      GraphSmoothnessPrior)
+
+
+def coverage_map(sim, *, lmax, Nside, freq, f_fid=25.0, beta=-2.5,
+                 n_probe=32, seed=0):
+    """Per-direction instrument sensitivity ``diag(A^T A)`` for the flux block.
+
+    ``A`` is the (linear, at fixed ``beta``) forward map from a flux *pixel* map
+    to the raveled data.  Its per-pixel sensitivity ``diag(A^T A)_p = sum_d
+    A_{dp}^2`` is the coverage: large where the instrument responds to flux in
+    direction ``p`` over the observation, ~0 in never-observed directions.
+
+    Estimated by Hutchinson on the *adjoint* only -- ``E_v[(A^T v)_p^2] =
+    (A^T A)_{pp}`` for ``v ~ N(0, I)`` -- so it uses reverse-mode ``jax.vjp``
+    exclusively (forward-mode is forbidden through ``s2fft``'s ``custom_vjp``).
+    ``A`` is linear, so the VJP closure is built once and reused for every probe.
+
+    :returns: RING-ordered float coverage map of length ``12*Nside**2``.
+    """
+    npix = 12 * Nside ** 2
+    beta_const = jnp.full(npix, float(beta))
+
+    def Apix(flux_map):
+        flux_alm = SpectralHealpixSky.flux_alm_from_map(flux_map, lmax, Nside)
+        sky = SpectralHealpixSky(flux_alm, beta_const, Nside=Nside, lmax=lmax,
+                                 freq=freq, f_fid=f_fid, beta_nside=Nside)
+        return sim.simulate(sky=sky).ravel()
+
+    x0 = jnp.zeros(npix)
+    y0, vjp = jax.vjp(Apix, x0)            # A is linear -> vjp independent of x0
+    ndata = int(y0.shape[0])
+    key = jax.random.PRNGKey(seed)
+    acc = jnp.zeros(npix)
+    for s in range(int(n_probe)):
+        v = jax.random.normal(jax.random.fold_in(key, s), (ndata,))
+        acc = acc + vjp(v)[0] ** 2
+    return np.asarray(acc / float(n_probe))
+
+
+def build_beta_smoothness_prior(beta_nside, *, n_center=16, n_far=2,
+                                d0_deg=20.0, center_lonlat=(0.0, 0.0),
+                                mu=-2.5, smooth=1.0, anchor=1e-4):
+    """Purely angular GMRF smoothness prior on the ``beta`` map.
+
+    Builds a :class:`~lusee.Fitting.GraphSmoothnessPrior` on the ``beta_nside``
+    healpix grid whose *effective resolution* ramps from ``n_center`` near the
+    galactic centre to ``n_far`` far from it (Gaussian in angular distance, scale
+    ``d0_deg``).  It is **not** coverage-aware: it knows nothing about which
+    directions the instrument sees.  Where the data are uninformative (the
+    never-observed patch), ``beta`` is simply tied to its neighbours by the
+    smoothness term and floats with them -- a graceful "we don't know here, so
+    keep it smooth" behaviour rather than any hole-specific pinning.
+
+    The smoothing weight is ``w_i = smooth * xi_i^2`` with
+    ``xi_i = beta_nside / n_eff(theta_i)`` the local smoothing length in pixels;
+    a weak *uniform* ``anchor`` ridge toward ``mu`` keeps the field proper
+    (fixes the otherwise-free DC) without targeting any region.  Both ``smooth``
+    and ``anchor`` are absolute ``-2logL`` weights and should be tuned so the
+    smoothness is sub-dominant to the per-pixel beta likelihood curvature where
+    the data are informative (too strong freezes ``beta`` and forces the flux to
+    absorb the spectral mismatch).
+    """
+    npix = 12 * beta_nside ** 2
+
+    # target effective resolution vs angular distance from the galactic centre
+    vec = np.asarray(hp.pix2vec(beta_nside, np.arange(npix)))         # (3,npix)
+    cen = hp.ang2vec(np.radians(90.0 - center_lonlat[1]),
+                     np.radians(center_lonlat[0]))
+    d = np.degrees(np.arccos(np.clip(cen @ vec, -1.0, 1.0)))
+    g = np.exp(-(d / d0_deg) ** 2)                                    # 1->0
+    n_eff = n_far + (n_center - n_far) * g
+    xi = beta_nside / np.maximum(n_eff, 1e-6)                         # pixels
+    w = float(smooth) * xi ** 2                                       # smoothing
+    a = np.full(npix, float(anchor))                                 # weak ridge
+
+    nb = hp.get_all_neighbours(beta_nside, np.arange(npix))          # (8,npix)
+    i = np.repeat(np.arange(npix), nb.shape[0])
+    j = nb.T.ravel()
+    keep = j >= 0
+    i, j = i[keep], j[keep]
+    we = 0.5 * (w[i] + w[j])
+    return GraphSmoothnessPrior(jnp.asarray(i), jnp.asarray(j),
+                                jnp.asarray(we), jnp.asarray(a), float(mu))
 
 
 class SpectralSkyModule(Module):
     """Sky port: ``sky(params) -> SpectralHealpixSky``.
 
-    Declares ``sky.flux`` (linear, ``C_l`` prior) and ``sky.beta`` (non-linear,
-    flat box prior).
+    Declares ``sky.flux`` (linear, ``C_l`` prior) and ``sky.beta`` (non-linear).
+    ``beta`` carries a flat box prior by default, or a supplied ``beta_prior``
+    callable (e.g. a :class:`~lusee.Fitting.GraphSmoothnessPrior` from
+    :func:`build_beta_smoothness_prior`) for spatially-varying smoothness.
     """
     name = "sky"
 
     def __init__(self, *, lmax, Nside, freq, f_fid, beta_nside, cl_flux,
-                 beta_bounds=(-4.0, -1.5), beta_init=-2.5, frame="galactic"):
+                 beta_bounds=(-4.0, -1.5), beta_init=-2.5, frame="galactic",
+                 beta_prior=None, beta_fixed=None):
         self.lmax = lmax
         self.Nside = Nside
         self.freq = freq
@@ -213,18 +299,29 @@ class SpectralSkyModule(Module):
         self.beta_bounds = beta_bounds
         self.beta_init = beta_init
         self.frame = frame
+        self.beta_prior = beta_prior
+        # When ``beta_fixed`` is given, beta is held at this map (length
+        # 12*beta_nside**2) and dropped from the free parameters -- the model is
+        # then purely linear in flux (a single Wiener/CG solve, no outer loop).
+        self.beta_fixed = (None if beta_fixed is None
+                           else jnp.asarray(beta_fixed))
         self.n_beta = 12 * beta_nside ** 2
 
     def params(self):
+        flux = Param("sky.flux", "linear", reparam=RealAlmBlock(self.lmax),
+                     prior=ClPrior(self.cl_flux))
+        if self.beta_fixed is not None:
+            return [flux]
         return [
-            Param("sky.flux", "linear", reparam=RealAlmBlock(self.lmax),
-                  prior=ClPrior(self.cl_flux)),
+            flux,
             Param("sky.beta", "nonlinear", shape=(self.n_beta,),
-                  init=self.beta_init, bounds=self.beta_bounds),
+                  init=self.beta_init, bounds=self.beta_bounds,
+                  prior=self.beta_prior),
         ]
 
     def sky(self, p):
+        beta = self.beta_fixed if self.beta_fixed is not None else p["sky.beta"]
         return SpectralHealpixSky(
-            p["sky.flux"], p["sky.beta"], Nside=self.Nside, lmax=self.lmax,
+            p["sky.flux"], beta, Nside=self.Nside, lmax=self.lmax,
             freq=self.freq, f_fid=self.f_fid, beta_nside=self.beta_nside,
             frame=self.frame)

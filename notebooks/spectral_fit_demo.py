@@ -104,7 +104,10 @@ def run(lmax=31, Nside=16, beta_nside=8,
         inner_method="auto", dense_threshold=512, fisher_method="auto",
         fit_gain=False, truth="powerlaw", target_snr=1e4, compute_fisher=False,
         sample=False, num_samples=300, num_warmup=300, hmc_engine="nuts",
-        hmc_num_integration_steps=10, noise_seed=42, outfile=None):
+        hmc_num_integration_steps=10, noise_seed=42, outfile=None,
+        beta_smooth=False, beta_n_center=16, beta_n_far=2, beta_d0=20.0,
+        beta_smooth_w=1.0, beta_anchor=1e-4,
+        fix_beta=None, beta_const=-2.5):
 
     if not DRIVE:
         raise SystemExit("LUSEE_DRIVE_DIR must be set (beam + ULSA data files).")
@@ -152,6 +155,35 @@ def run(lmax=31, Nside=16, beta_nside=8,
     # Flux prior C_l from the true flux power spectrum (oracle prior).
     cl_flux = hp.alm2cl(np.asarray(flux_true))
 
+    # ---- Optional purely-angular GMRF smoothness prior on beta ----------------
+    # Lets beta be fine near the galactic centre and smooth far away.  It is NOT
+    # coverage-aware: where the data are uninformative (the never-observed patch)
+    # beta is simply tied to its neighbours and floats with them -- a graceful
+    # "we don't know here" behaviour, no hole-specific term.
+    beta_prior = None
+    beta_bounds = (-4.5, 0.0) if beta_smooth else (-4.0, -1.5)
+    if beta_smooth:
+        from lusee.SpectralSky import build_beta_smoothness_prior
+        beta_prior = build_beta_smoothness_prior(
+            beta_nside, n_center=beta_n_center, n_far=beta_n_far,
+            d0_deg=beta_d0, mu=beta_const, smooth=beta_smooth_w,
+            anchor=beta_anchor)
+        print(f"beta GMRF smoothness prior: n_eff {beta_n_center}->"
+              f"{beta_n_far} over d0={beta_d0:g} deg (smooth={beta_smooth_w:g})")
+
+    # ---- Optional fixed-beta mode: purely linear in flux (single CG/dense) -----
+    beta_fixed = None
+    if fix_beta is not None:
+        n_beta = 12 * beta_nside ** 2
+        if fix_beta == "const":
+            beta_fixed = np.full(n_beta, float(beta_const))
+        elif fix_beta == "truth":
+            beta_fixed = np.asarray(beta_true)
+        else:
+            raise SystemExit("fix_beta must be None, 'const', or 'truth'")
+        print(f"\n=== FIXED-beta mode ('{fix_beta}'): flux is the only free "
+              f"parameter (linear) ===")
+
     # ---- Assemble the model from modules (Layer 2) and wire them (Layer 3) ----
     from lusee.SpectralSky import SpectralSkyModule
     from lusee.Fitting import BeamModule, InstrumentModule, Experiment
@@ -159,7 +191,8 @@ def run(lmax=31, Nside=16, beta_nside=8,
         sim,
         sky=SpectralSkyModule(lmax=lmax, Nside=Nside, freq=freq, f_fid=f_fid,
                               beta_nside=beta_nside, cl_flux=cl_flux,
-                              beta_bounds=(-4.0, -1.5), beta_init=-2.5),
+                              beta_bounds=beta_bounds, beta_init=-2.5,
+                              beta_prior=beta_prior, beta_fixed=beta_fixed),
         beam=BeamModule(),                      # no free params (baseline)
         instrument=InstrumentModule(gain=fit_gain),  # optional bilinear gain
         data=data, N_inv=N_inv)
@@ -168,17 +201,29 @@ def run(lmax=31, Nside=16, beta_nside=8,
         print(f"  {p.name:12s} {p.kind:9s} "
               f"{'n='+str(12*beta_nside**2) if p.name=='sky.beta' else ''}")
 
-    # ---- Fit (shared driver) ----
+    # ---- Fit (shared driver, or a single linear solve when beta is fixed) -----
     t0 = time.time()
-    out = exp.optimize(maxiter=maxiter, inner_maxiter=inner_maxiter,
-                       inner_method=inner_method,
-                       dense_threshold=dense_threshold)
+    if beta_fixed is not None:
+        lin = exp.linear_solve(method=("dense" if inner_method == "dense"
+                                       else "cg"),    # CG by default: fast linear
+                               inner_maxiter=inner_maxiter)
+        r = jnp.asarray(data).ravel() - exp.predict(lin, {})
+        S_inv = exp.paramset.Sinv_linear()
+        theta = exp.paramset.pack_linear(lin)
+        chi2 = float(jnp.sum(N_inv.ravel() * r ** 2) + jnp.sum(S_inv * theta ** 2))
+        out = {"linear": lin, "nonlinear": {"sky.beta": beta_fixed},
+               "chi2": chi2, "nfev": 1,
+               "chi2_history": np.array([chi2]), "converged": True}
+    else:
+        out = exp.optimize(maxiter=maxiter, inner_maxiter=inner_maxiter,
+                           inner_method=inner_method,
+                           dense_threshold=dense_threshold)
     fit = {"flux_alm": out["linear"]["sky.flux"],
            "beta_pix": out["nonlinear"]["sky.beta"],
            "chi2": out["chi2"], "nfev": out["nfev"]}
     print(f"Fit in {time.time()-t0:.1f}s  ({fit['nfev']} evals, "
           f"final chi2={fit['chi2']:.4e})")
-    if fit_gain:
+    if fit_gain and "inst.gain" in out["nonlinear"]:
         print(f"  recovered inst.gain = {float(out['nonlinear']['inst.gain']):.4f} "
               f"(truth 1.0)")
 
@@ -302,6 +347,25 @@ def main(argv=None):
                    help="n_linear threshold where --inner-method auto selects dense")
     p.add_argument("--fit-gain", action="store_true", dest="fit_gain",
                    help="fit a broadband instrument gain (bilinear with flux)")
+    p.add_argument("--beta-smooth", action="store_true", dest="beta_smooth",
+                   help="purely-angular GMRF smoothness prior on beta (fine near "
+                        "gal. centre, smooth far away; hole handled gracefully)")
+    p.add_argument("--beta-n-center", type=int, default=16, dest="beta_n_center",
+                   help="target effective beta Nside at the galactic centre")
+    p.add_argument("--beta-n-far", type=int, default=2, dest="beta_n_far",
+                   help="target effective beta Nside far from the centre")
+    p.add_argument("--beta-d0", type=float, default=20.0, dest="beta_d0",
+                   help="Gaussian scale (deg) of the centre->far resolution ramp")
+    p.add_argument("--beta-smooth-w", type=float, default=1.0, dest="beta_smooth_w",
+                   help="overall smoothness weight (absolute -2logL units)")
+    p.add_argument("--beta-anchor", type=float, default=1e-4, dest="beta_anchor",
+                   help="weak uniform ridge toward beta_const (properness)")
+    p.add_argument("--fix-beta", choices=["const", "truth"], default=None,
+                   dest="fix_beta",
+                   help="hold beta fixed and fit only the (linear) flux: "
+                        "'const' = beta_const everywhere, 'truth' = the true map")
+    p.add_argument("--beta-const", type=float, default=-2.5, dest="beta_const",
+                   help="beta value for --fix-beta const and the prior/anchor mu")
     p.add_argument("--fisher", action="store_true", dest="compute_fisher",
                    help="compute the Fisher / Wiener-weighted flux recovery")
     p.add_argument("--fisher-method", choices=["auto", "dense", "loop"],
@@ -333,7 +397,11 @@ def main(argv=None):
         sample=a.sample, hmc_engine=a.hmc_engine,
         hmc_num_integration_steps=a.hmc_num_integration_steps,
         num_samples=a.num_samples, num_warmup=a.num_warmup,
-        noise_seed=a.noise_seed, outfile=a.outfile)
+        noise_seed=a.noise_seed, outfile=a.outfile,
+        beta_smooth=a.beta_smooth, beta_n_center=a.beta_n_center,
+        beta_n_far=a.beta_n_far, beta_d0=a.beta_d0,
+        beta_smooth_w=a.beta_smooth_w, beta_anchor=a.beta_anchor,
+        fix_beta=a.fix_beta, beta_const=a.beta_const)
 
 
 if __name__ == "__main__":
