@@ -57,14 +57,14 @@ def load_config(config_path):
 
 def setup_simulation(cfg, lusee):
     """Build Observation, beams, sky from config (same as SimDriver)."""
-    from lusee.frequencies import canonical_frequencies, frequency_indices_from_config
+    from lusee.frequencies import frequencies_from_config
 
     root = cfg["_root"]
     od = cfg["observation"]
     dt = od["dt"]
     if isinstance(dt, str):
         dt = eval(dt)
-    freq = canonical_frequencies(frequency_indices_from_config(od["freq"]))
+    freq = frequencies_from_config(od["freq"])
     lmax = od["lmax"]
 
     # Sky
@@ -192,7 +192,7 @@ def run_comparison(config_path=None):
     print("\n" + "=" * 60)
     print("STEP 1: Sky model (get_alm, galactic frame)")
     print("=" * 60)
-    sky_alm_raw = setup["sky"].get_alm(def_sim.freq_ndx_sky, freq)
+    sky_alm_raw = def_sim.sky_alm_at_freq(setup["sky"])
     print("  Sky alms: same for both (galactic).")
 
     # Step 2: Beams
