@@ -161,6 +161,28 @@ class FrequencyMap:
         """Unique native source-grid indices the expensive products must be evaluated at."""
         return self.unique_native_idx
 
+    def per_target_indices(self):
+        """One native source-grid index per target frequency, in target order.
+
+        The pre-interpolation index contract: duplicates preserved, aligned
+        with the target grid. Only defined when every target snaps to a
+        single native bin.
+
+        :returns: int32 numpy array of length ``len(self)``.
+        :raises ValueError: if any target is genuinely interpolated between
+            two native bins.
+        """
+        lo = np.asarray(self.lo_in_unique)
+        hi = np.asarray(self.hi_in_unique)
+        if not np.array_equal(lo, hi):
+            n_off = int(np.count_nonzero(lo != hi))
+            raise ValueError(
+                f"{n_off} target frequencies are off-grid (interpolated between "
+                "two native bins), so per-target indices are undefined; use "
+                "from_native/from_unique instead"
+            )
+        return np.asarray(self.unique_native_idx)[lo]
+
     def __len__(self):
         """Number of target frequencies this map produces."""
         return int(np.asarray(self.alpha).shape[0])

@@ -80,6 +80,37 @@ def test_out_of_range_raises():
         _run_numpy_sim([55.0])
 
 
+def test_freq_ndx_compat_shims_per_target_contract():
+    """freq_ndx_beam/freq_ndx_sky keep the old per-target contract on-grid
+    (order and duplicates preserved) and raise for off-grid targets."""
+    import lusee
+
+    obs = _build_obs()
+    lmax = 8
+    sky_freq = np.asarray([1.0, 12.0, 25.0, 50.0])
+    sky = lusee.sky.HarmonicPointSourceSky(lmax=lmax, l_deg=0.0, b_deg=0.0,
+                                           freq=sky_freq)
+    beam = lusee.BeamGauss(alt_deg=90.0, az_deg=0.0, sigma_deg=20.0,
+                           one_over_freq_scaling=False, id="shim")
+
+    def build(freq):
+        return lusee.TopoNumpySimulator(
+            obs, [lusee.NpWrapper(beam)], lusee.NpWrapper(sky),
+            Tground=0.0, combinations=[(0, 0)],
+            freq=np.asarray(freq, dtype=float), lmax=lmax,
+        )
+
+    sim = build([25.0, 12.0, 12.0])
+    np.testing.assert_array_equal(sim.freq_ndx_beam, [24, 11, 11])
+    np.testing.assert_array_equal(sim.freq_ndx_sky, [2, 1, 1])
+
+    sim_off = build([12.5, 25.0])
+    with pytest.raises(ValueError, match=r"off-grid"):
+        sim_off.freq_ndx_beam
+    with pytest.raises(ValueError, match=r"off-grid"):
+        sim_off.freq_ndx_sky
+
+
 def test_cro_simulate_sky_override_uses_override_grid():
     """simulate(sky=...) must interpolate the OVERRIDE sky on its own grid.
 
