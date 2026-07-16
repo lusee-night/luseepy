@@ -336,7 +336,9 @@ class Beam:
             self.f_ground = jnp.asarray(fits['f_ground'].read())
         elif version==2:
             self.gain_conv = jnp.asarray(fits['gain_conv'].read())
-            self.freq = jnp.asarray(fits['freq'].read(), dtype=jnp.float64)
+            # native grid stays host-side numpy: jnp would silently truncate
+            # to float32 without x64, defeating FrequencyMap's tolerances
+            self.freq = np.asarray(fits['freq'].read(), dtype=np.float64)
             
         self.freq_min = float(header['FREQ_MIN'])
         self.freq_max = float(header['FREQ_MAX'])
@@ -349,7 +351,7 @@ class Beam:
         self.Nphi = int(header['PHI_N'])
         self.header = header
         if version==1:
-            self.freq = jnp.linspace(self.freq_min, self.freq_max, self.Nfreq)
+            self.freq = np.linspace(self.freq_min, self.freq_max, self.Nfreq, dtype=np.float64)
         self.theta_deg = jnp.linspace(self.theta_min, self.theta_max,self.Ntheta)
         self.phi_deg = jnp.linspace(self.phi_min, self.phi_max,self.Nphi)
         self.theta = self.theta_deg/180*jnp.pi
@@ -420,7 +422,7 @@ class Beam:
         beam.gain = gain
         beam.gain_conv = gain_conv
         beam.f_ground = f_ground
-        beam.freq = jnp.asarray(freq_tuple)
+        beam.freq = np.asarray(freq_tuple, dtype=np.float64)
         beam.freq_min = freq_min
         beam.freq_max = freq_max
         beam.Nfreq = Nfreq

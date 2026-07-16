@@ -54,6 +54,28 @@ def test_simulator_runs_at_70_mhz():
     assert np.isfinite(result).all()
 
 
+def test_native_grids_are_float64():
+    """Native beam/sky grids must stay float64 regardless of JAX x64 state.
+
+    A float32 grid loses ~4e-6 MHz above 64 MHz, pushing non-integer
+    boundary frequencies outside FrequencyMap's atol=1e-6 snap tolerance.
+    """
+    import lusee
+    from lusee.frequencies import FrequencyMap
+
+    beam = lusee.BeamGauss(alt_deg=90.0, az_deg=0.0, sigma_deg=20.0,
+                           one_over_freq_scaling=False, id="dtype",
+                           freq_min=1.0, freq_max=74.95, Nfreq=75)
+    assert np.asarray(beam.freq).dtype == np.float64
+    fmap = FrequencyMap.build([74.95], beam.freq)
+    assert fmap.alpha[0] == 0.0
+
+    sky = lusee.sky.HarmonicPointSourceSky(lmax=4, l_deg=0.0, b_deg=0.0,
+                                           freq=[1.0, 74.95])
+    assert np.asarray(sky.freq).dtype == np.float64
+
+
 if __name__ == "__main__":
     test_simulator_runs_at_70_mhz()
+    test_native_grids_are_float64()
     print("test_extended_freq_range: passed.")
