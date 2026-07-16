@@ -149,7 +149,6 @@ def run_comparison(config_path=None):
         return
 
     import croissant as cro
-    import croissant.jax as crojax
     from functools import partial
     import s2fft
 
@@ -227,13 +226,15 @@ def run_comparison(config_path=None):
     R = np.array([xhat, yhat, zhat]).T
     a, b, g = rot2eul(R)
     rot = hp.rotator.Rotator(rot=(g, -b, a), deg=False, eulertype="XYZ", inv=False)
-    sky_rot_default = [rot.rotate_alm(s_) for s_ in sky_alm_raw]
+    # healpy expects a 1D complex alm vector of size Alm.getsize(lmax).
+    # Ensure we pass a NumPy complex array (JAX arrays / complex64 can trip rotate_alm).
+    sky_rot_default = [rot.rotate_alm(np.asarray(s_, dtype=np.complex128)) for s_ in sky_alm_raw]
     sky_rot0_mono = np.array([s[hp.sphtfunc.Alm.getidx(lmax, 0, 0)] for s in sky_rot_default])
     # Cro: sky in MEPA (same as CroSimulator gal2mepa); at t=0 phases[0] is applied in convolve
     sky_2d = np.stack([hp_packed_alm_to_flm_2d(s_) for s_ in sky_alm_raw])
     sky_2d_j = jnp.array(sky_2d)
     et = cro.rotations.jd_to_et(times[0].jd)
-    eul_gal, dl_gal = crojax.rotations.generate_euler_dl(
+    eul_gal, dl_gal = cro.rotations.generate_euler_dl(
         lmax, "galactic", "mepa", et=et
     )
     gal2mepa = partial(
@@ -255,7 +256,7 @@ def run_comparison(config_path=None):
         for br_, sr_ in zip(beamreal, sky_rot_default)
     ])
     sky_2d_rot = np.stack([hp_packed_alm_to_flm_2d(s_) for s_ in sky_rot_default])
-    vis_raw = crojax.simulator.convolve(
+    vis_raw = cro.simulator.convolve(
         jnp.array(beam_2d), jnp.array(sky_2d_rot),
         jnp.ones((1, 2 * lmax + 1), dtype=jnp.complex128),
     )

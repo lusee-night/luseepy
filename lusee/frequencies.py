@@ -7,12 +7,16 @@ CANONICAL_FREQ_STOP_MHZ = 50.0
 CANONICAL_FREQ_COUNT = 50
 
 ALL_FREQUENCY_INDICES = jnp.arange(CANONICAL_FREQ_COUNT, dtype=jnp.int32)
-ALL_FREQUENCIES_MHZ = jnp.linspace(
+# Reference grid in float64 NumPy so FITS/header MHz values (e.g. 12.0) match
+# even when JAX uses float32 by default; `np.asarray(jnp.linspace(...))` can
+# be ~1e-6 MHz off integer MHz and fail tight isclose checks.
+ALL_FREQUENCIES_MHZ_NP = np.linspace(
     CANONICAL_FREQ_START_MHZ,
     CANONICAL_FREQ_STOP_MHZ,
     CANONICAL_FREQ_COUNT,
+    dtype=np.float64,
 )
-ALL_FREQUENCIES_MHZ_NP = np.asarray(ALL_FREQUENCIES_MHZ)
+ALL_FREQUENCIES_MHZ = jnp.asarray(ALL_FREQUENCIES_MHZ_NP)
 
 
 def canonical_frequency_indices(indices=None, *, start_idx=0, stop_idx=None, step_idx=1):
@@ -34,18 +38,34 @@ def canonical_frequencies(indices=None, *, as_jax=False):
     return ALL_FREQUENCIES_MHZ_NP[idx]
 
 
-def frequency_indices_from_values(freq_values, *, atol=1e-8, rtol=1e-8):
-    freq_arr = np.asarray(freq_values, dtype=float).reshape(-1)
+def frequency_indices_from_values(
+    freq_values, *, atol=1e-5, rtol=1e-5, nearest_max_mhz=0.05
+):
+    """Map MHz values to canonical indices (0..49).
+
+    Defaults tolerate small float noise from FITS headers and ``np.arange``.
+    If no ``isclose`` hit, the nearest canonical bin is used when within
+    ``nearest_max_mhz`` MHz (otherwise ``ValueError``).
+    """
+    freq_arr = np.asarray(freq_values, dtype=np.float64).reshape(-1)
     indices = []
     for value in freq_arr:
         matches = np.nonzero(
             np.isclose(ALL_FREQUENCIES_MHZ_NP, value, atol=atol, rtol=rtol)
         )[0]
-        if matches.size == 0:
+        if matches.size > 0:
+            indices.append(int(matches[0]))
+            continue
+        j = int(np.argmin(np.abs(ALL_FREQUENCIES_MHZ_NP - value)))
+        err_mhz = float(abs(ALL_FREQUENCIES_MHZ_NP[j] - value))
+        if err_mhz <= nearest_max_mhz:
+            indices.append(j)
+        else:
             raise ValueError(
-                f"Frequency {value} MHz is not on the canonical simulator grid"
+                f"Frequency {value} MHz is not on the canonical simulator grid "
+                f"(nearest bin {float(ALL_FREQUENCIES_MHZ_NP[j]):.6f} MHz is "
+                f"{err_mhz:.6f} MHz away; limit {nearest_max_mhz} MHz)."
             )
-        indices.append(int(matches[0]))
     return np.asarray(indices, dtype=np.int32)
 
 
