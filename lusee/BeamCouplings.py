@@ -34,6 +34,20 @@ class BeamCouplings:
             sign = sd['sign']
             combs = sd['combinations']
             b1, b2 = combs[0]
+            # cross_power mixes gain_conv arrays elementwise and is reused for
+            # every pair in combs, which is only meaningful when the two-port
+            # measurement shares all coupling beams' native frequency grid;
+            # grids used to coincide by forced canonicalization at load, so
+            # check explicitly now
+            two_port_freq = np.asarray(two_port_beam.freq, dtype=float)
+            for bid in {bid for c in combs for bid in c}:
+                beam_freq = np.asarray(self.beamd[bid].freq, dtype=float)
+                if two_port_freq.shape != beam_freq.shape or not np.allclose(two_port_freq, beam_freq):
+                    raise ValueError(
+                        f"coupling '{n}': two-port beam {sd['two_port']!r} has a "
+                        f"different native frequency grid than beam {bid!r}; "
+                        "cross powers cannot be combined across grids"
+                    )
             gain_conv = np.sqrt(self.beamd[b1].gain_conv * self.beamd[b2].gain_conv)
             dgain_conv = two_port_beam.gain_conv
             cross_power = -sign + sign*gain_conv/(2*dgain_conv)
