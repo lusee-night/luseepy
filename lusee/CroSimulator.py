@@ -164,11 +164,9 @@ class CroSimulator(SimulatorBase):
             rotation=eul_topo,
             dl_array=dl_topo,
         )
-        if hasattr(sky_model, "get_alm_at_freq"):
-            sky_gal = jnp.asarray(sky_model.get_alm_at_freq(self.freq))
-        else:
-            sky_native = sky_model.get_alm(self.freq_map_sky.source_indices)
-            sky_gal = self.freq_map_sky.from_unique(jnp.asarray(sky_native))
+        # dispatch + map for the EFFECTIVE sky: sky_model may be a simulate(sky=...)
+        # override on a different native grid than the constructor sky model
+        sky_gal = self.sky_alm_at_freq(sky_model, xp=jnp)
         sky_2d = jnp.stack([
             s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(s_), sim_L)
             for s_ in sky_gal

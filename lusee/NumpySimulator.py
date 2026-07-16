@@ -94,11 +94,7 @@ class TopoNumpySimulator(SimulatorBase):
         else:
             raise NotImplementedError
 
-        if hasattr(self.sky_model, "get_alm_at_freq"):
-            sky_target = np.asarray(self.sky_model.get_alm_at_freq(self.freq))
-        else:
-            sky_native = self.sky_model.get_alm(self.freq_map_sky.source_indices)
-            sky_target = self.freq_map_sky.from_unique(np.asarray(sky_native))
+        sky_target = self.sky_alm_at_freq(self.sky_model)
         sky_base = [np.asarray(s_, dtype=np.complex128) for s_ in sky_target]
         wfall = []
         Nt = len (times)

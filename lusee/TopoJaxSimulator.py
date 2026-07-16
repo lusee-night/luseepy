@@ -439,11 +439,7 @@ class TopoJaxSimulator(SimulatorBase):
 
         Nt = len(times)
         t0 = time.perf_counter()
-        if hasattr(self.sky_model, "get_alm_at_freq"):
-            sky_base = jnp.asarray(self.sky_model.get_alm_at_freq(self.freq))
-        else:
-            sky_native = jnp.asarray(self.sky_model.get_alm(self.freq_map_sky.source_indices))
-            sky_base = self.freq_map_sky.from_unique(sky_native)
+        sky_base = self.sky_alm_at_freq(self.sky_model, xp=jnp)
         sky_base_flm = self._hp_to_full_flm_batch_jax(sky_base)
         self._block_ready(sky_base_flm)
         self._log_timing("simulate.sky_model.get_alm", t0)
