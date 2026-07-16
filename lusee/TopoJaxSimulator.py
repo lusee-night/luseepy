@@ -74,16 +74,16 @@ class TopoJaxSimulator(SimulatorBase):
         self._setup_simulation_kernels()
         self._log_timing("__init__._setup_simulation_kernels", t0)
         if self._debug_enabled:
-            nfreq_sky_str = "closed-form" if self.freq_ndx_sky is None else len(self.freq_ndx_sky)
+            sky_map_str = "closed-form" if self.freq_map_sky is None else repr(self.freq_map_sky)
             self._debug_print(
                 f"init summary: frame={self.sky_model.frame} lmax={self.lmax} "
-                f"nfreq={len(self.freq)} nfreq_sky={nfreq_sky_str} "
-                f"nfreq_beam={len(self.freq_ndx_beam)} ncomb={len(self.combinations)}"
+                f"nfreq={len(self.freq)} sky_map={sky_map_str} "
+                f"beam_map={self.freq_map_beam!r} ncomb={len(self.combinations)}"
             )
             self._debug_array_summary("freq", self.freq)
-            if self.freq_ndx_sky is not None:
-                self._debug_array_summary("freq_ndx_sky", self.freq_ndx_sky)
-            self._debug_array_summary("freq_ndx_beam", self.freq_ndx_beam)
+            if self.freq_map_sky is not None:
+                self._debug_array_summary("freq_map_sky.source_indices", self.freq_map_sky.source_indices)
+            self._debug_array_summary("freq_map_beam.source_indices", self.freq_map_beam.source_indices)
             self._debug_array_summary("_output_beams", self._output_beams)
             self._debug_array_summary("_output_ground", self._output_ground)
         self._log_timing("__init__.total", t_init0)

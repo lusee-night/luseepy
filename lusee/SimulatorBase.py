@@ -206,24 +206,32 @@ class SimulatorBase:
 
     @property
     def freq_ndx_beam(self):
-        """Compat shim: unique native beam indices touched by self.freq.
+        """Compat shim: one native beam-grid index per entry of ``self.freq``.
 
-        Prefer ``self.freq_map_beam`` for new code; this property exists for
-        external consumers that previously inspected ``freq_ndx_beam`` as a
-        list of indices.
+        Preserves the pre-interpolation contract (target order, duplicates
+        kept), which is only defined when every target frequency snaps to a
+        native bin; raises ValueError for off-grid targets. Prefer
+        ``self.freq_map_beam`` for new code.
         """
-        return self.freq_map_beam.source_indices
+        try:
+            return self.freq_map_beam.per_target_indices()
+        except ValueError as exc:
+            raise ValueError(f"freq_ndx_beam: {exc} (see freq_map_beam)") from exc
 
     @property
     def freq_ndx_sky(self):
-        """Compat shim: unique native sky indices touched by self.freq.
+        """Compat shim: one native sky-grid index per entry of ``self.freq``.
 
         Returns ``None`` if the sky model provides ``get_alm_at_freq`` (no
-        index mapping needed in that case).
+        index mapping exists then); otherwise same contract as
+        ``freq_ndx_beam``. Prefer ``self.freq_map_sky`` for new code.
         """
         if self.freq_map_sky is None:
             return None
-        return self.freq_map_sky.source_indices
+        try:
+            return self.freq_map_sky.per_target_indices()
+        except ValueError as exc:
+            raise ValueError(f"freq_ndx_sky: {exc} (see freq_map_sky)") from exc
 
     def simulate(self, times=None):
         """

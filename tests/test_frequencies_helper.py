@@ -87,6 +87,20 @@ def test_source_indices_deduplication():
     np.testing.assert_allclose(fmap.alpha[3], 0.5)
 
 
+def test_per_target_indices_on_grid():
+    source = np.linspace(1.0, 50.0, 50)
+    target = np.asarray([25.0, 12.0, 12.0])  # unsorted, duplicated
+    fmap = FrequencyMap.build(target, source)
+    np.testing.assert_array_equal(fmap.per_target_indices(), [24, 11, 11])
+
+
+def test_per_target_indices_offgrid_raises():
+    source = np.linspace(1.0, 50.0, 50)
+    fmap = FrequencyMap.build([12.5, 25.0], source)
+    with pytest.raises(ValueError, match=r"off-grid"):
+        fmap.per_target_indices()
+
+
 def test_non_increasing_source_raises():
     with pytest.raises(ValueError, match=r"strictly increasing"):
         FrequencyMap.build([5.0], np.asarray([10.0, 5.0, 1.0]))
