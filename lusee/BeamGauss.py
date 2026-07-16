@@ -1,4 +1,5 @@
 from .Beam import Beam
+import numpy as np
 import jax
 import jax.numpy as jnp
 
@@ -71,7 +72,8 @@ class BeamGauss(Beam):
         self.ZRe=jnp.zeros(self.Nfreq) #Need this for lusee.Simulator.write()
         self.ZIm=jnp.zeros(self.Nfreq) #Need this for lusee.Simulator.write()
 
-        self.freq = jnp.linspace(self.freq_min, self.freq_max, self.Nfreq)
+        # native grid stays host-side numpy float64 (see Beam.freq)
+        self.freq = np.linspace(self.freq_min, self.freq_max, self.Nfreq, dtype=np.float64)
         self.theta_deg = jnp.linspace(self.theta_min, self.theta_max,self.Ntheta)
         self.phi_deg = jnp.linspace(self.phi_min, self.phi_max,self.Nphi)
         self.theta = self.theta_deg*jnp.pi/180.

@@ -17,6 +17,10 @@ ALL_FREQUENCIES_MHZ_NP = np.linspace(
     CANONICAL_FREQ_COUNT,
     dtype=np.float64,
 )
+# sky models alias this array as their default native grid; freeze it so an
+# in-place edit (e.g. sky.freq *= 1e6) fails loudly instead of corrupting
+# the canonical grid process-wide
+ALL_FREQUENCIES_MHZ_NP.setflags(write=False)
 ALL_FREQUENCIES_MHZ = jnp.asarray(ALL_FREQUENCIES_MHZ_NP)
 
 

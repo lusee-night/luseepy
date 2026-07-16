@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from .MonoSkyModels import T_C, T_DarkAges, T_DarkAges_Scaled
-from .frequencies import ALL_FREQUENCIES_MHZ
+from .frequencies import ALL_FREQUENCIES_MHZ_NP
 
 @jax.tree_util.register_pytree_node_class
 class ConstSky:
@@ -42,7 +42,7 @@ class ConstSky:
             Tmap = jnp.where(theta>0.75*jnp.pi, 0.0, Tmap)
         self.mapalm = jnp.asarray(hp.map2alm(np.asarray(Tmap), lmax=lmax))
         self.frame = "MCMF"
-        self.freq = None if freq is None else jnp.asarray(freq, dtype=jnp.float64)
+        self.freq = None if freq is None else np.asarray(freq, dtype=np.float64)
 
     def tree_flatten(self):
         children = (self.mapalm, self._T)
@@ -63,7 +63,7 @@ class ConstSky:
         sky.mapalm = mapalm
         sky._T = T
         sky.frame = frame
-        sky.freq = None if freq is None else jnp.asarray(freq)
+        sky.freq = None if freq is None else np.asarray(freq, dtype=np.float64)
         return sky
 
     def T (self,ndx):
@@ -108,7 +108,7 @@ class ConstSkyCane1979(ConstSky):
     :type freq: list
     """
     def __init__(self, Nside, lmax, freq=None):
-        self.freq = ALL_FREQUENCIES_MHZ if freq is None else jnp.asarray(freq, dtype=jnp.float64)
+        self.freq = ALL_FREQUENCIES_MHZ_NP if freq is None else np.asarray(freq, dtype=np.float64)
         T = T_C(self.freq).value
         ConstSky.__init__(self, Nside, lmax, T, self.freq)
 
@@ -143,7 +143,7 @@ class DarkAgesMonopole(ConstSky):
     """
     def __init__(self, Nside, lmax, scaled = True, nu_min = 16.4,
                      nu_rms = 14.0, A = 0.04, freq=None):
-        self.freq = ALL_FREQUENCIES_MHZ if freq is None else jnp.asarray(freq, dtype=jnp.float64)
+        self.freq = ALL_FREQUENCIES_MHZ_NP if freq is None else np.asarray(freq, dtype=np.float64)
         self._scaled = scaled
         self._nu_min = nu_min
         self._nu_rms = nu_rms
@@ -192,7 +192,7 @@ class GalCenter (ConstSky):
         Tmap = jnp.exp(-(phi)**2/0.1-(theta-jnp.pi/2)**2/0.1)
         self.mapalm = jnp.asarray(hp.map2alm(np.asarray(Tmap), lmax = lmax))
         self.frame = "galactic"
-        self.freq = None if freq is None else jnp.asarray(freq, dtype=jnp.float64)
+        self.freq = None if freq is None else np.asarray(freq, dtype=np.float64)
 
 
 @jax.tree_util.register_pytree_node_class
@@ -224,8 +224,8 @@ class HealpixSky:
         self.Npix = Nside**2 * 12
         self.maps = jnp.asarray(maps)
         if freq is None:
-            freq = ALL_FREQUENCIES_MHZ[jnp.asarray([24], dtype=jnp.int32)]
-        self.freq = jnp.asarray(freq, dtype=jnp.float64)
+            freq = ALL_FREQUENCIES_MHZ_NP[[24]]
+        self.freq = np.asarray(freq, dtype=np.float64)
         assert (len(maps)==len(freq))
         self.mapalm = jnp.asarray([hp.map2alm(np.asarray(m),lmax = lmax) for m in self.maps])
         self.frame  = frame
@@ -247,7 +247,7 @@ class HealpixSky:
         sky.Nside = Nside
         sky.Npix = Nside**2 * 12
         sky.maps = None
-        sky.freq = jnp.asarray(freq)
+        sky.freq = np.asarray(freq, dtype=np.float64)
         sky.mapalm = mapalm
         sky.frame = frame
         return sky
@@ -284,10 +284,9 @@ class FitsSky (HealpixSky):
         fstart      = header['freq_start']
         fend        = header['freq_end']
         fstep       = header['freq_step']
-        freq = jnp.asarray(
-            np.arange(fstart, fend + 0.5 * fstep, fstep, dtype=float),
-            dtype=jnp.float64,
-        )
+        # the file's own grid: freq_end is its last channel, hence the
+        # half-step slop to keep it despite float arange rounding
+        freq = np.arange(fstart, fend + 0.5 * fstep, fstep, dtype=np.float64)
         super().__init__(Nside=hp.npix2nside(maps.shape[1]), lmax=lmax, maps=maps, freq=freq, frame="galactic")
         
 
@@ -309,8 +308,8 @@ class SingleSourceHealpixSky (HealpixSky):
                  ra_deg=None, dec_deg=None, l_deg=None, b_deg=None):
         # convert ra, dec to galactic coordinates and then to pixel number
         if freq is None:
-            freq = ALL_FREQUENCIES_MHZ[jnp.asarray([24], dtype=jnp.int32)]
-        self.freq = jnp.asarray(freq, dtype=jnp.float64)
+            freq = ALL_FREQUENCIES_MHZ_NP[[24]]
+        self.freq = np.asarray(freq, dtype=np.float64)
         T = jnp.atleast_1d(jnp.asarray(T, dtype=float))
         if T.size == 1:
             T = jnp.broadcast_to(T, len(self.freq))
@@ -369,7 +368,7 @@ class HarmonicPointSourceSky:
     def __init__(self, lmax, freq, T=1.0, *,
                  ra_deg=None, dec_deg=None, l_deg=None, b_deg=None):
         self.lmax = lmax
-        self.freq = jnp.asarray(freq, dtype=jnp.float64)
+        self.freq = np.asarray(freq, dtype=np.float64)
         T = jnp.atleast_1d(jnp.asarray(T, dtype=float))
         if T.size == 1:
             T = jnp.broadcast_to(T, len(self.freq))
@@ -416,7 +415,7 @@ class HarmonicPointSourceSky:
         alm, T = children
         sky = cls.__new__(cls)
         sky.lmax = lmax
-        sky.freq = jnp.asarray(freq)
+        sky.freq = np.asarray(freq, dtype=np.float64)
         sky.frame = frame
         sky._alm = alm
         sky._T = T

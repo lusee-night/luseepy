@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from lusee.frequencies import (
+    ALL_FREQUENCIES_MHZ_NP,
     FrequencyMap,
     frequencies_from_config,
 )
@@ -107,6 +108,13 @@ def test_empty_target_raises():
 
     with pytest.raises(ValueError, match=r"target_freqs is empty"):
         FrequencyMap.build([], source)
+
+
+def test_canonical_grid_is_frozen():
+    # sky models alias this array as their default native grid; mutating it
+    # must fail loudly rather than corrupt the grid process-wide
+    with pytest.raises(ValueError):
+        ALL_FREQUENCIES_MHZ_NP[0] = 0.0
 
 
 def test_non_finite_frequencies_raise():
