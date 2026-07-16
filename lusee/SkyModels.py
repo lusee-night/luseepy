@@ -122,6 +122,7 @@ class ConstSkyCane1979(ConstSky):
         T_at = jnp.asarray(T_C(target).value)
         return self.mapalm[None, :] * T_at[:, None]
 
+@jax.tree_util.register_pytree_node_class
 class DarkAgesMonopole(ConstSky):
     """
     Class that constructs a monopole sky temperature map using the Dark Ages monopole model. Uses ConstSky class to initialize map. Can optionally generate maps from the monopole model scaled to specified nu_min, nu_rms, and A, or from an explicit list of temperatures, T, as a function of frequency. Scaled model given by lusee.MonoSkyModels.T_DarkAges_Scaled, non-scaled by lusee.MonoSkyModels.T_DarkAges.
@@ -166,6 +167,22 @@ class DarkAgesMonopole(ConstSky):
         else:
             T_at = jnp.asarray(T_DarkAges(target))
         return self.mapalm[None, :] * T_at[:, None]
+
+    def tree_flatten(self):
+        # extend the ConstSky aux with the spectrum params so a reconstructed
+        # instance can still evaluate get_alm_at_freq
+        children, base_aux = ConstSky.tree_flatten(self)
+        return children, (base_aux, (self._scaled, self._nu_min, self._nu_rms, self._A))
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        base_aux, (scaled, nu_min, nu_rms, A) = aux_data
+        sky = super().tree_unflatten(base_aux, children)
+        sky._scaled = scaled
+        sky._nu_min = nu_min
+        sky._nu_rms = nu_rms
+        sky._A = A
+        return sky
 
 @jax.tree_util.register_pytree_node_class
 class GalCenter (ConstSky):
