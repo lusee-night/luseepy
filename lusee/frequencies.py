@@ -216,8 +216,13 @@ def frequencies_from_config(freq_cfg):
     Accepted forms::
 
         freq: { values: [10.0, 20.0, 30.0] }
-        freq: { start: 1.0, end: 50.0, step: 1.0 }   # inclusive end
-        freq: { start: 1.0, end: 75.0, n: 75 }       # linspace(start, end, n)
+        freq: { start: 1.0, end: 50.0, step: 1.0 }   # arange: end is EXCLUSIVE
+        freq: { start: 1.0, end: 75.0, n: 75 }       # linspace: end is inclusive
+
+    The ``step`` form follows numpy.arange semantics (half-open interval,
+    matching the pre-interpolation parser). Float steps inherit arange's
+    endpoint rounding caveats; for a grid that must contain the endpoint,
+    prefer the ``n`` (linspace) or ``values`` forms.
 
     Legacy index-based forms (``indices``, ``start_idx``/``stop_idx``/``step_idx``)
     are no longer supported and produce a :class:`ValueError` naming the new keys.
@@ -230,32 +235,35 @@ def frequencies_from_config(freq_cfg):
             "Use 'values', 'start/end/step', or 'start/end/n' in MHz units."
         )
 
-    if "values" in freq_cfg:
-        return np.asarray(freq_cfg["values"], dtype=float)
-
     has_start = "start" in freq_cfg
     has_end = "end" in freq_cfg
     has_step = "step" in freq_cfg
     has_n = "n" in freq_cfg
-    if has_start and has_end and has_step and has_n:
+    if "values" in freq_cfg:
+        freq = np.asarray(freq_cfg["values"], dtype=float)
+    elif has_start and has_end and has_step and has_n:
         raise ValueError("freq config: specify 'step' or 'n', not both")
-    if has_start and has_end and has_step:
+    elif has_start and has_end and has_step:
         a = float(freq_cfg["start"])
         b = float(freq_cfg["end"])
         s = float(freq_cfg["step"])
         if s <= 0:
             raise ValueError("freq config: 'step' must be positive")
-        return np.arange(a, b + 0.5 * s, s, dtype=float)
-    if has_start and has_end and has_n:
-        return np.linspace(
+        freq = np.arange(a, b, s, dtype=float)
+    elif has_start and has_end and has_n:
+        freq = np.linspace(
             float(freq_cfg["start"]),
             float(freq_cfg["end"]),
             int(freq_cfg["n"]),
         )
-    raise ValueError(
-        "freq config must be one of {values: [...]}, {start, end, step}, "
-        f"or {{start, end, n}}. Got keys: {sorted(freq_cfg.keys())}"
-    )
+    else:
+        raise ValueError(
+            "freq config must be one of {values: [...]}, {start, end, step}, "
+            f"or {{start, end, n}}. Got keys: {sorted(freq_cfg.keys())}"
+        )
+    if freq.size == 0:
+        raise ValueError(f"freq config produced an empty frequency grid: {freq_cfg}")
+    return freq
 
 
 # Legacy canonical-grid shims kept for the pre_jax/* modules and a few tests.

@@ -225,9 +225,10 @@ def test_frequencies_from_config_values():
     np.testing.assert_allclose(freq, [10.0, 20.0, 30.0])
 
 
-def test_frequencies_from_config_start_end_step_inclusive():
+def test_frequencies_from_config_start_end_step_exclusive():
+    # arange semantics: the end point is not included
     freq = frequencies_from_config({"start": 1.0, "end": 5.0, "step": 1.0})
-    np.testing.assert_allclose(freq, [1.0, 2.0, 3.0, 4.0, 5.0])
+    np.testing.assert_allclose(freq, [1.0, 2.0, 3.0, 4.0])
 
 
 def test_frequencies_from_config_start_end_n():
@@ -261,3 +262,12 @@ def test_frequencies_from_config_empty_raises():
     with pytest.raises(ValueError, match=r"one of"):
         frequencies_from_config({"foo": "bar"})
 
+
+def test_frequencies_from_config_empty_grid_raises():
+    # swapped start/end or an empty values list must fail loudly, not
+    # produce a zero-frequency simulation
+    with pytest.raises(ValueError, match=r"empty"):
+        frequencies_from_config({"start": 5.0, "end": 1.0, "step": 1.0})
+
+    with pytest.raises(ValueError, match=r"empty"):
+        frequencies_from_config({"values": []})
