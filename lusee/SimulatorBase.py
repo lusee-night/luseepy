@@ -168,15 +168,41 @@ class SimulatorBase:
             self.freq_map_beam = FrequencyMap.build(self.freq, beams[0].freq)
         except ValueError as exc:
             raise ValueError(f"Beam frequency mismatch: {exc}") from exc
-        if hasattr(sky_model, "get_alm_at_freq"):
-            self.freq_map_sky = None
-        else:
-            try:
-                self.freq_map_sky = FrequencyMap.build(self.freq, sky_model.freq)
-            except ValueError as exc:
-                raise ValueError(f"Sky-model frequency mismatch: {exc}") from exc
+        self.freq_map_sky = None
+        self.freq_map_sky = self.sky_freq_map(sky_model)
 
         self.Nfreq = len(self.freq)
+
+    def sky_freq_map(self, sky_model):
+        """FrequencyMap from ``self.freq`` onto ``sky_model``'s native grid.
+
+        Returns None when the model implements ``get_alm_at_freq`` (closed-form
+        evaluation needs no map). The map built at construction is reused when
+        ``sky_model`` is the constructor sky model; an override sky passed to
+        ``simulate(sky=...)`` gets a map built for its own native grid.
+        """
+        if hasattr(sky_model, "get_alm_at_freq"):
+            return None
+        if sky_model is self.sky_model and self.freq_map_sky is not None:
+            return self.freq_map_sky
+        try:
+            return FrequencyMap.build(self.freq, getattr(sky_model, "freq", None))
+        except ValueError as exc:
+            raise ValueError(f"Sky-model frequency mismatch: {exc}") from exc
+
+    def sky_alm_at_freq(self, sky_model, *, xp=np):
+        """Sky alm rows evaluated at ``self.freq`` for the given sky model.
+
+        Dispatches on the model itself: closed-form models evaluate exactly via
+        ``get_alm_at_freq``; gridded models are interpolated with the map from
+        :meth:`sky_freq_map`. ``xp`` (numpy or jax.numpy) selects the array
+        namespace; pass ``jnp`` to keep traced values traceable.
+        """
+        fmap = self.sky_freq_map(sky_model)
+        if fmap is None:
+            return xp.asarray(sky_model.get_alm_at_freq(self.freq))
+        native = sky_model.get_alm(fmap.source_indices)
+        return fmap.from_unique(xp.asarray(native))
 
     @property
     def freq_ndx_beam(self):

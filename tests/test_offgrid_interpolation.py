@@ -80,6 +80,43 @@ def test_out_of_range_raises():
         _run_numpy_sim([55.0])
 
 
+def test_cro_simulate_sky_override_uses_override_grid():
+    """simulate(sky=...) must interpolate the OVERRIDE sky on its own grid.
+
+    Regression: the sky dispatch checked get_alm_at_freq on the effective sky
+    but interpolated with the constructor sky's FrequencyMap -- crashing with
+    AttributeError when the constructor sky was closed-form (freq_map_sky is
+    None) and misinterpolating when the override grid differed.
+    """
+    import lusee
+
+    if lusee.CroSimulator is None:
+        pytest.skip("CroSimulator requires optional croissant and s2fft dependencies")
+
+    obs = _build_obs()
+    lmax = 8
+    target_freq = np.asarray([10.0, 20.0])
+    beam = lusee.BeamGauss(alt_deg=90.0, az_deg=0.0, sigma_deg=20.0,
+                           one_over_freq_scaling=False, id="ovr")
+    # constructor sky is closed-form (has get_alm_at_freq, so freq_map_sky is
+    # None); the override sky is gridded, galactic, and off-grid for the targets
+    base_sky = lusee.sky.ConstSkyCane1979(16, lmax=lmax)
+    override_sky = lusee.sky.HarmonicPointSourceSky(
+        lmax=lmax, l_deg=0.0, b_deg=0.0,
+        freq=np.asarray([5.0, 15.0, 25.0]), T=np.asarray([1.0, 3.0, 5.0]),
+    )
+
+    sim = lusee.CroSimulator(obs, [beam], base_sky, Tground=0.0,
+                             combinations=[(0, 0)], freq=target_freq, lmax=lmax)
+    res_override = np.asarray(sim.simulate(times=obs.times, sky=override_sky))
+    assert np.isfinite(res_override).all()
+
+    sim_direct = lusee.CroSimulator(obs, [beam], override_sky, Tground=0.0,
+                                    combinations=[(0, 0)], freq=target_freq, lmax=lmax)
+    res_direct = np.asarray(sim_direct.simulate(times=obs.times))
+    np.testing.assert_allclose(res_override, res_direct, rtol=1e-12, atol=0.0)
+
+
 if __name__ == "__main__":
     test_snap_on_match_is_bit_identical()
     test_offgrid_run_produces_finite_output()
