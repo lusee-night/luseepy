@@ -73,13 +73,28 @@ class FrequencyMap:
         :param atol: absolute tolerance for snap-on-match and boundary checks.
         :param rtol: relative tolerance for the same.
         :returns: a :class:`FrequencyMap` with int32 index arrays and float64 alpha.
-        :raises ValueError: if ``source_freqs`` is not strictly increasing, or any
-            target frequency lies outside ``[source.min(), source.max()]`` beyond
-            the tolerance.
+        :raises ValueError: if either grid is None or contains non-finite values,
+            ``source_freqs`` is not strictly increasing, or any target frequency
+            lies outside ``[source.min(), source.max()]`` beyond the tolerance.
         """
+        if target_freqs is None:
+            raise ValueError("target_freqs is None; expected a 1-D array of MHz values")
+        if source_freqs is None:
+            raise ValueError(
+                "source_freqs is None; the data being interpolated has no native "
+                "frequency grid (a sky model without one must implement get_alm_at_freq)"
+            )
         target = np.asarray(target_freqs, dtype=np.float64).reshape(-1)
         source = np.asarray(source_freqs, dtype=np.float64).reshape(-1)
 
+        if target.size == 0:
+            raise ValueError("target_freqs is empty; expected at least one frequency")
+        if not np.all(np.isfinite(target)):
+            offenders = target[~np.isfinite(target)].tolist()
+            raise ValueError(f"target_freqs contains non-finite values: {offenders}")
+        if not np.all(np.isfinite(source)):
+            offenders = source[~np.isfinite(source)].tolist()
+            raise ValueError(f"source_freqs contains non-finite values: {offenders}")
         if source.size < 1:
             raise ValueError("source_freqs must contain at least one frequency")
         if source.size >= 2 and not np.all(np.diff(source) > 0):

@@ -91,6 +91,37 @@ def test_non_increasing_source_raises():
         FrequencyMap.build([5.0], np.asarray([10.0, 5.0, 1.0]))
 
 
+def test_none_grids_raise():
+    source = np.linspace(1.0, 50.0, 50)
+
+    with pytest.raises(ValueError, match=r"target_freqs is None"):
+        FrequencyMap.build(None, source)
+
+    # e.g. a sky model constructed with freq=None and no get_alm_at_freq
+    with pytest.raises(ValueError, match=r"source_freqs is None"):
+        FrequencyMap.build([5.0], None)
+
+
+def test_empty_target_raises():
+    source = np.linspace(1.0, 50.0, 50)
+
+    with pytest.raises(ValueError, match=r"target_freqs is empty"):
+        FrequencyMap.build([], source)
+
+
+def test_non_finite_frequencies_raise():
+    source = np.linspace(1.0, 50.0, 50)
+
+    with pytest.raises(ValueError, match=r"non-finite"):
+        FrequencyMap.build([np.nan], source)
+
+    with pytest.raises(ValueError, match=r"non-finite"):
+        FrequencyMap.build([np.inf], source)
+
+    with pytest.raises(ValueError, match=r"non-finite"):
+        FrequencyMap.build([5.0], np.asarray([1.0, np.nan, 50.0]))
+
+
 def test_from_native_recovers_native_values_on_snap():
     source = np.linspace(1.0, 50.0, 50)
     data = np.cos(source) + 2.0
@@ -229,3 +260,4 @@ def test_frequencies_from_config_invalid_step():
 def test_frequencies_from_config_empty_raises():
     with pytest.raises(ValueError, match=r"one of"):
         frequencies_from_config({"foo": "bar"})
+
