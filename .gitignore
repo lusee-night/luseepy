@@ -12,5 +12,6 @@
 !.github/* 
 !docker/*
 !simulation/driver/*.py
+!examples/*.py
 !setup_env.sh
 setup_env.local.sh
