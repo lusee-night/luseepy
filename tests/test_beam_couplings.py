@@ -15,18 +15,28 @@ import pytest
 
 
 BEAM_DIR = "Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith"
+ONE_PORT = "hfss_lbl_3m_75deg.fits"
+TWO_PORT = "hfss_lbl_3m_75deg.2port.fits"
 
 
-def test_two_port_grid_mismatch_raises(drive_dir):
+def test_two_port_grid_check(drive_dir):
+    """Grid-check logic, runnable on the minimal CI tarball.
+
+    The one-port beam stands in as its own two-port file: the check only
+    needs a loadable FITS beam with .freq and .gain_conv.
+    """
     import lusee
 
-    broot = os.path.join(drive_dir, BEAM_DIR)
-    b_n = lusee.Beam(os.path.join(broot, "hfss_lbl_2m_45deg.fits"), id="N")
-    b_s = lusee.Beam(os.path.join(broot, "hfss_lbl_2m_45deg.fits"), id="S")
+    one_port = os.path.join(drive_dir, BEAM_DIR, ONE_PORT)
+    if not os.path.isfile(one_port):
+        pytest.skip("beam file not present in this Drive checkout")
+
+    b_n = lusee.Beam(one_port, id="N")
+    b_s = lusee.Beam(one_port, id="S")
     couplings = {
-        "opposite": {
+        "standin": {
             "combinations": [["N", "S"]],
-            "two_port": os.path.join(broot, "hfss_lbl_2m_45deg.2port.fits"),
+            "two_port": one_port,
             "sign": -1,
         }
     }
@@ -39,3 +49,31 @@ def test_two_port_grid_mismatch_raises(drive_dir):
     b_s.freq = np.asarray(b_s.freq, dtype=float) + 0.1
     with pytest.raises(ValueError, match=r"different native frequency grid"):
         lusee.BeamCouplings([b_n, b_s], from_yaml_dict=couplings)
+
+
+def test_two_port_real_pair_loads(drive_dir):
+    """Same load path against a genuine two-port measurement file.
+
+    The CI Drive tarball ships no .2port.fits files, so this runs only
+    on a full Drive checkout.
+    """
+    import lusee
+
+    one_port = os.path.join(drive_dir, BEAM_DIR, ONE_PORT)
+    two_port = os.path.join(drive_dir, BEAM_DIR, TWO_PORT)
+    if not (os.path.isfile(one_port) and os.path.isfile(two_port)):
+        pytest.skip("two-port beam pair not present in this Drive checkout")
+
+    b_n = lusee.Beam(one_port, id="N")
+    b_s = lusee.Beam(one_port, id="S")
+    couplings = {
+        "opposite": {
+            "combinations": [["N", "S"]],
+            "two_port": two_port,
+            "sign": -1,
+        }
+    }
+    bc = lusee.BeamCouplings([b_n, b_s], from_yaml_dict=couplings)
+    cp = np.asarray(bc.cross_powers[("N", "S")])
+    assert cp.shape == np.asarray(b_n.freq).shape
+    assert np.all(np.isfinite(cp))
