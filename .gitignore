@@ -20,6 +20,8 @@
 !docker/*
 !simulation/driver/*.py
 !examples/*.py
+!examples/ingest/
+!examples/ingest/*.py
 !setup_env.sh
 setup_env.local.sh
 # local scratch stage and symlink to the sibling uncrater checkout
