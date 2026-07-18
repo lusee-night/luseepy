@@ -233,7 +233,9 @@ def run_comparison(config_path=None):
     # Cro: sky in MEPA (same as CroSimulator gal2mepa); at t=0 phases[0] is applied in convolve
     sky_2d = np.stack([hp_packed_alm_to_flm_2d(s_) for s_ in sky_alm_raw])
     sky_2d_j = jnp.array(sky_2d)
-    et = cro.rotations.jd_to_et(times[0].jd)
+    # SPICE et is TDB-based; a raw .jd would be in the Time's own (UTC)
+    # scale and introduce a ~69 s epoch offset (see CroSimulator)
+    et = cro.rotations.jd_to_et(times[0].tdb.jd)
     eul_gal, dl_gal = cro.rotations.generate_euler_dl(
         lmax, "galactic", "mepa", et=et
     )
