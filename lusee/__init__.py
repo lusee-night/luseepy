@@ -14,9 +14,12 @@ from .LabeledArray  import (
     FRAME_GALACTIC, FRAME_EQUATORIAL, FRAME_MCMF, FRAME_TOPO, FRAME_MEPA,
 )
 from .GainModel     import (
-    SpectrometerGain, counts_to_nv_auto, counts_to_nv_cross,
+    SpectrometerGain, set_models, get_models,
+    counts_to_nv_auto, counts_to_nv_cross,
+    counts_to_nv2_auto, counts_to_nv2_cross,
     asd_to_psd, psd_to_asd,
-    bin_frequencies, CHANNEL_BIN_MHZ, NV_PER_SQRT_HZ, V2_PER_HZ,
+    bin_frequencies, CHANNEL_BIN_MHZ,
+    NV_PER_SQRT_HZ, NV2_PER_HZ, V2_PER_HZ,
 )
 from .CachedBeam   import CachedBeam
 from .BeamCouplings import BeamCouplings
@@ -44,7 +47,7 @@ from . import SkyModels     as sky
 from . import MapMaker      as mapmaker
 
 
-from . import MonoSkyModels as monosky 
+from . import MonoSkyModels as monosky
 from .PCAanalyzer import PCAanalyzer, CompositePCAanalyzer
 from .Throughput import Throughput
 from .frequencies import (

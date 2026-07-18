@@ -5,8 +5,10 @@ import pytest
 import lusee
 from lusee.GainModel import (
     SpectrometerGain, counts_to_nv_auto, counts_to_nv_cross,
+    counts_to_nv2_auto, counts_to_nv2_cross,
     asd_to_psd, psd_to_asd,
-    bin_frequencies, CHANNEL_BIN_MHZ, NV_PER_SQRT_HZ, V2_PER_HZ,
+    bin_frequencies, CHANNEL_BIN_MHZ,
+    NV_PER_SQRT_HZ, NV2_PER_HZ, V2_PER_HZ,
     CROSS_PRODUCT_CHANNELS,
 )
 from lusee.LabeledArray import LabeledArray, label
@@ -145,6 +147,19 @@ def test_counts_to_nv_cross_broadcasts():
                                [[2.0, -2.0]])
 
 
+def test_counts_to_nv2_helpers_are_linear_and_mask_invalid_auto():
+    auto = counts_to_nv2_auto(
+        np.array([8.0, -1.0, 4.0]), np.array([2.0, 2.0, 0.0])
+    )
+    assert auto[0] == 4.0
+    assert np.isnan(auto[1]) and np.isnan(auto[2])
+
+    cross = counts_to_nv2_cross(
+        np.array([8.0, -8.0]), np.array([2.0, 2.0]), np.array([8.0, 8.0])
+    )
+    np.testing.assert_array_equal(cross, [2.0, -2.0])
+
+
 def test_convert_row_matches_per_product_and_reuses_gains(sg):
     nbins = 50
     rng = np.random.default_rng(0)
@@ -171,6 +186,68 @@ def test_convert_row_matches_per_product_and_reuses_gains(sg):
     finally:
         sg.predict_gain = orig
     assert calls["n"] == 4
+
+
+def test_vectorized_batch_chunking_and_psd_match_scalar_rows(sg):
+    rng = np.random.default_rng(42)
+    nrow = 5
+    freqs = np.asarray(ANCHOR_FREQS)
+    spectra = rng.normal(size=(nrow, 16, freqs.size))
+    spectra[:, :4] = np.abs(spectra[:, :4])
+    levels = np.asarray([
+        list("HHHH"), list("LMHL"), list("MMLH"),
+        list("LLMM"), list("HMLH"),
+    ], dtype=object)
+    telemetry = {
+        key: np.linspace(value, value + 0.2, nrow)
+        for key, value in TELE.items()
+    }
+
+    scalar = np.stack([
+        np.asarray(sg.convert_row(
+            spectra[row],
+            {key: value[row] for key, value in telemetry.items()},
+            levels[row],
+            freqs_mhz=freqs,
+        ))
+        for row in range(nrow)
+    ])
+    full = sg.convert_batch(
+        label(spectra, units="SDU", frame="topo"),
+        telemetry,
+        levels,
+        freqs_mhz=freqs,
+    )
+    chunked = sg.convert_batch(
+        spectra, telemetry, levels, freqs_mhz=freqs, chunk_size=2
+    )
+
+    assert full.units == NV_PER_SQRT_HZ and full.frame == "topo"
+    np.testing.assert_allclose(np.asarray(full), scalar, rtol=2e-13, atol=2e-13)
+    np.testing.assert_array_equal(np.asarray(chunked), np.asarray(full))
+
+    native_psd = sg.convert_batch_psd(
+        spectra, telemetry, levels, freqs_mhz=freqs, units=NV2_PER_HZ,
+        chunk_size=2,
+    )
+    si_psd = sg.convert_batch_psd(
+        spectra, telemetry, levels, freqs_mhz=freqs, chunk_size=3
+    )
+    assert native_psd.units == NV2_PER_HZ
+    assert si_psd.units == V2_PER_HZ
+    np.testing.assert_allclose(
+        np.asarray(si_psd), np.asarray(native_psd) * 1e-18,
+        rtol=2e-15, atol=0.0, equal_nan=True,
+    )
+    np.testing.assert_allclose(
+        np.asarray(si_psd), np.asarray(asd_to_psd(full)),
+        rtol=2e-15, atol=0.0, equal_nan=True,
+    )
+
+    with pytest.raises(ValueError, match="chunk_size"):
+        sg.convert_batch(spectra, telemetry, levels, freqs_mhz=freqs, chunk_size=0)
+    with pytest.raises(ValueError, match="chunk_size"):
+        sg.convert_batch(spectra, telemetry, levels, freqs_mhz=freqs, chunk_size=True)
 
 
 def test_bin_frequencies():
@@ -254,4 +331,7 @@ def test_exported_from_package():
     assert lusee.SpectrometerGain is SpectrometerGain
     assert lusee.NV_PER_SQRT_HZ == "nV/sqrt(Hz)"
     assert lusee.V2_PER_HZ == "V^2/Hz"
+    assert lusee.NV2_PER_HZ == "nV^2/Hz"
+    assert lusee.counts_to_nv2_auto is counts_to_nv2_auto
+    assert lusee.counts_to_nv2_cross is counts_to_nv2_cross
     assert lusee.asd_to_psd is asd_to_psd and lusee.psd_to_asd is psd_to_asd
