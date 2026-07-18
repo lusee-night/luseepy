@@ -134,10 +134,10 @@ class Data(Observation):
                 else:
                     return label(toret*T2V[None,:], units="V^2/Hz", frame=FRAME_TOPO)
         else:
-            raise NotImplemented
+            raise NotImplementedError
 
         # Should not get here.
-        raise NotImplemented
+        raise NotImplementedError
 
 
             
