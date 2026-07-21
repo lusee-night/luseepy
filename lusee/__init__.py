@@ -13,6 +13,7 @@ from .BeamCouplings import BeamCouplings
 from .DefaultSimulator import TopoNumpySimulator
 from .TopoJaxSimulator import TopoJaxSimulator
 from .CalibratorSimulator import CalibratorSimulator
+from .CalibratorWaveform import return_calibrator_waveform_coefficients
 from .NumpySimulator import NumpySimulator
 try:
     from .CroSimulator import CroSimulator

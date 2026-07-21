@@ -16,23 +16,27 @@ class CalibratorTrack:
     :param polarization: Spin-2 polarization angle in radians
         (0 = pure E_theta, pi/2 = pure E_phi)
     :param tone_freqs: Tone frequencies in MHz — NFreq values, independent of NTime
-    :param tone_amplitude: Tone amplitudes (same units as sky temperature),
+    :param tone_amplitude: Complex tone amplitudes (same units as sky temperature),
         one per frequency (must match len(tone_freqs))
     """
 
-    def __init__(self, times, alt, az, polarization, tone_freqs, tone_amplitude):
+    def __init__(self, times, dist, alt, az, polarization, tone_freqs, tone_amplitude, tec):
         times          = np.asarray(times)
+        dist           = np.asarray(dist,           dtype=float)
         alt            = np.asarray(alt,            dtype=float)
         az             = np.asarray(az,             dtype=float)
         polarization   = np.asarray(polarization,   dtype=float)
         tone_freqs     = np.asarray(tone_freqs,     dtype=float)
-        tone_amplitude = np.asarray(tone_amplitude, dtype=float)
+        tone_amplitude = np.asarray(tone_amplitude, dtype=complex)
+        tec            = np.asarray(tec,            dtype=float)
 
         n = len(times)
         for name, arr in [
+            ("dist",         dist),
             ("alt",          alt),
             ("az",           az),
             ("polarization", polarization),
+            ("tec",          tec),
         ]:
             if len(arr) != n:
                 raise ValueError(
@@ -47,11 +51,13 @@ class CalibratorTrack:
             )
 
         self.times          = times
+        self.dist           = dist
         self.alt            = alt
         self.az             = az
         self.polarization   = polarization
         self.tone_freqs     = tone_freqs
         self.tone_amplitude = tone_amplitude
+        self.tec            = tec
 
     def __len__(self):
         return len(self.times)
