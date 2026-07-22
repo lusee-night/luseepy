@@ -90,7 +90,7 @@ The driver selects the back end from the YAML **engine** keyword. You may set ei
 | `luseepy` | Built-in `lusee.DefaultSimulator` |
 | `default`, `lusee`, `numpy` | Same as `luseepy` (aliases) |
 
-Croissant requires compatible installs of `croissant-sim` and `s2fft` (see `pyproject.toml`). Example:
+Croissant requires compatible installs of `croissant-sim`, `s2fft`, and `spiceypy` (see `pyproject.toml`). `luseepy` now furnishes the Moon frame kernels bundled with `lunarsky` automatically during Croissant runs. Example:
 
 ```yaml
 simulation:

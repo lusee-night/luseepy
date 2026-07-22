@@ -11,8 +11,8 @@ import pytest
 
 import lusee.MonoSkyModels as monosky
 import lusee.SkyModels as sky
-import lusee.pre_jax.MonoSkyModels as pre_monosky
-import lusee.pre_jax.SkyModels as pre_sky
+import pre_jax.MonoSkyModels as pre_monosky
+import pre_jax.SkyModels as pre_sky
 from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
 
 

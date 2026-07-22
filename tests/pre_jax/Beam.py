@@ -12,23 +12,23 @@ from scipy.ndimage import gaussian_filter
 from scipy.interpolate import RegularGridInterpolator
 from pyshtools.legendre import legendre
 import os
-from ..frequencies import canonicalize_frequencies
+from lusee.frequencies import canonicalize_frequencies
 
 
 def getLegendre(lmax, theta):
     """
     Function that calculates Legendre polynomial functions up to specified degree
-    
+
     :param lmax: Maximum degree of Legendre functions
     :type lmax: int
     :param theta: Argument of Legendre function
     :type theta: float
-    
+
     :returns: 2D array of Legendre functions, array indices are l and m
     :rtype: numpy array
-    
+
     """
-    
+
     L=legendre(lmax,np.cos(theta),normalization='ortho')
     L[:,1:]/=np.sqrt(2) # m>0 divide by sqrt(2)
     L[:,1::2]*=-1 # * (-1)**m
@@ -51,7 +51,7 @@ def grid2healpix_alm_reference(theta,phi, img, lmax):
     :returns: 2D a_lm spherical harmonic array
     :rtype: numpy array
     """
-    
+
     lmax = lmax + 1 ## different conventions
     dphi = phi[1]-phi[0]
     dtheta = theta[1]-theta[0]
@@ -62,7 +62,7 @@ def grid2healpix_alm_reference(theta,phi, img, lmax):
     mmax = lmax
     alm = []
     for m in range(lmax):
-        for l in range(m,lmax):        
+        for l in range(m,lmax):
             harm = sph_harm_y (l, m, theta_list, phi_list)
             assert(not np.any(np.isnan(harm)))
             alm.append((img*harm.T*dA_theta[:,None]).sum())
@@ -86,7 +86,7 @@ def grid2healpix_alm_fast(theta,phi, img, lmax):
     :returns: 2D a_lm spherical harmonic array
     :rtype: numpy array
     """
-    
+
     # lmax has different definitions
     dtheta = theta[1]-theta[0]
     dA_theta = np.sin(theta)*dtheta
@@ -127,7 +127,7 @@ def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
     :returns: Healpix map of size Nside
     :rtype: numpy array
     """
-    
+
     if fast:
         alm = grid2healpix_alm_fast(theta,phi,img,lmax)
     else:
@@ -138,7 +138,7 @@ def grid2healpix(theta,phi, img, lmax, Nside, fast=True):
 
 def project_to_theta_phi(theta_rad,phi_rad, E):
     """
-    Function that projects E_theta and E_phi components of instrument beam from E field in cartesian coordinates, E(x, y, z) 
+    Function that projects E_theta and E_phi components of instrument beam from E field in cartesian coordinates, E(x, y, z)
 
     :param theta: Input spherical angle coordinates
     :type theta: numpy array
@@ -150,7 +150,7 @@ def project_to_theta_phi(theta_rad,phi_rad, E):
     :returns: [Etheta, Ephi], Theta and phi components of electric field at [theta, phi] coordinates
     :rtype: numpy array
     """
-    
+
     #create projection matrices
     theta = theta
     phi= phi
@@ -200,7 +200,7 @@ class Beam:
     :type gain_conv: numpy array
     :param freq: Frequency list
     :type freq: numpy array
-    :param freq_min: Minimum frequency    
+    :param freq_min: Minimum frequency
     :type freq_min: float
     :param freq_max: Maximum frequency
     :type freq_max: float
@@ -229,7 +229,7 @@ class Beam:
     :param phi: Array of phi bins in radians
     :type phi: numpy array
     """
-    
+
     def __init__ (self, fname = None, id = None):
         if fname is None:
             fname = base = os.environ['LUSEE_DRIVE_DIR']+"Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
@@ -251,7 +251,7 @@ class Beam:
         elif version==2:
             self.gain_conv = fits['gain_conv'].read()
             self.freq = canonicalize_frequencies(fits['freq'].read())
-            
+
         self.freq_min = header['FREQ_MIN']
         self.freq_max = header['FREQ_MAX']
         self.Nfreq = header['FREQ_N']
@@ -273,24 +273,24 @@ class Beam:
         if (self.phi_max != 360) or (self.phi_min != 0):
             print("Code might implicitly assume phi wraparound ... use with care.")
         assert (self.Etheta.shape == (self.Nfreq,self.Ntheta,self.Nphi))
-        
+
     def rotate(self,deg):
         """
         Function that rotates the beam around the zenith (turntable rotation)
 
         :param deg: Rotational angle in degrees
         :type deg: float
-        
+
         :returns: Rotated beam as copy of beam object
         :rtype: class
         """
-        
+
         dphi = self.phi_deg[1]-self.phi_deg[0]
         assert (deg%dphi<1e-5)
         if self.phi_max != 360:
             print ("This really only works in you have full phi circle with repetition at the end")
             raise NotImplemented
-        
+
         if deg==0:
             return self.copy_beam()
         rad = deg/180*np.pi
@@ -315,15 +315,15 @@ class Beam:
 
 
         return self.copy_beam(Etheta=Etheta, Ephi=Ephi)
-     
+
     def flip_over_yz(self):
         """
         Function that flips beams across yz plane
-        
+
         :returns: Flipped beam as copy of beam object
         :rtype: class
         """
-        
+
         assert (False)
         m = int(90 // self.phi_step)
         n = int(180 // self.phi_step)
@@ -335,11 +335,11 @@ class Beam:
     def power(self):
         """
         Function that calculates the beam power of a single beam
-        
+
         :returns: Beam power
         :rtype: float
         """
-        
+
         P = np.abs(self.Etheta**2)+np.abs(self.Ephi**2)
         return P
 
@@ -349,11 +349,11 @@ class Beam:
 
         :param cross: Optional second beam object. If present, function will compute cross-power between the two beams given by "self" and "cross". If absent, defaults to computing auto-power for "self" beam object.
         :type cross: class
-        
+
         :returns: [I, Q, U, V]
         :rtype: list[float]
         """
-        
+
         if cross is None:
             I = np.abs(self.Etheta*self.Etheta)+np.abs(self.Ephi*self.Ephi)
             Q = np.abs(self.Etheta**2)-np.abs(self.Ephi**2)
@@ -367,18 +367,18 @@ class Beam:
             V = +1j*(self.Etheta*np.conj(cross.Ephi)-self.Ephi*np.conj(cross.Etheta))
         return [I,Q,U,V]
 
-    
+
     def cross_power(self, other):
         """
         Function that calculates the cross-power between two beams
 
         :param other: Second beam object for cross-power
         :type other: class
-        
+
         :returns: Cross power
         :rtype: float
         """
-        
+
         xP = self.Etheta*np.conj(other.Etheta) + self.Ephi*np.conj(other.Ephi)
         return xP
 
@@ -386,14 +386,14 @@ class Beam:
     def sky_fraction(self, cross = None):
         """
         Function that calculates the fraction of beam power that terminates on the sky (sky fraction), for a single beam or two crossed beams
-        
-        :param cross: Optional second beam object 
+
+        :param cross: Optional second beam object
         :type cross: class
-        
+
         :returns: Sky fraction
         :rtype: float
         """
-        
+
         if self.version<2:
             print ("Cannot do this on v1 files.")
         xP=self.power() if cross is None else self.cross_power(cross)
@@ -403,23 +403,23 @@ class Beam:
         dA_theta = np.sin(self.theta)*dtheta*dphi
         f_sky = np.array([(dA_theta[:,None]*gain[i,:,:-1]).sum()/(4*np.pi) for i in range(self.Nfreq)])
         return f_sky
-    
+
     def ground_fraction(self, cross = None):
         """
         Function that calculates the fraction of beam power that terminates on the ground (ground fraction), for a single beam or two crossed beams
 
-        :param cross: Optional second beam object 
+        :param cross: Optional second beam object
         :type cross: class
-        
+
         :returns: Ground fraction
         :rtype: float
         """
-        
+
         f_ground = 1.0 - self.sky_fraction(cross)
-            
+
         return f_ground
-        
-    
+
+
     def power_hp(self, ellmax, Nside, freq_ndx=None, theta_tapr=None, cross=None, stokes=False):
         """
         Function that calculates the healpix rendering of the beam power
@@ -436,11 +436,11 @@ class Beam:
         :type cross: class
         :param stokes: Whether to compute Stokes parameters
         :type stokes: bool
-        
+
         :returns: Healpix map containing beam power
         :rtype: numpy array or list(numpy array) if type(freq_ndx) is not int
         """
-        
+
         if not stokes:
             P = self.power() if cross is None else self.power_cross(cross)
             P = [P] # lets' make it a list
@@ -450,13 +450,13 @@ class Beam:
         if theta_tapr is not None:
             P *= theta_tapr[None,:,None]
         take_zero = False
-        
+
         flist = range(self.Nfreq) if freq_ndx is None else np.atleast_1d(freq_ndx)
         if cross is None:
-            result =  [[grid2healpix(self.theta,self.phi[:-1], P_[i,:,:-1], ellmax, Nside) 
+            result =  [[grid2healpix(self.theta,self.phi[:-1], P_[i,:,:-1], ellmax, Nside)
                     for i in flist] for P_ in P]
         else:
-            result =  [[grid2healpix(self.theta,self.phi[:-1], np.real(P_[i,:,:-1]), ellmax, Nside) 
+            result =  [[grid2healpix(self.theta,self.phi[:-1], np.real(P_[i,:,:-1]), ellmax, Nside)
                 +1j*grid2healpix(self.theta,self.phi[:-1], np.imag(P_[i,:,:-1]), ellmax, Nside)
                     for i in flist] for P_ in P]
 
@@ -479,11 +479,11 @@ class Beam:
         :type Etheta: numpy array[complex]
         :param Ephi: Optional new phi component of E-field
         :type Ephi: numpy array[complex]
-        
+
         :returns: Beam copy
         :rtype: class
         """
-        
+
         ret = copy.deepcopy(self)
         if Etheta is not None:
             ret.Etheta = Etheta
@@ -538,7 +538,7 @@ class Beam:
             the broadcast shape of the inputs.
         :rtype: tuple(callable, callable)
         """
-        
+
 
         scale = np.sqrt(self.gain_conv)[:, None, None]          # (Nfreq, 1, 1)
         Et = (self.Etheta * scale).transpose(1, 2, 0)           # (Ntheta, Nphi, Nfreq)
@@ -582,17 +582,17 @@ class Beam:
         :type toplot: list[np.array[complex]]
         :param noabs: Whether to plot absolute value of E-field.
         :type noabs: bool
-        
+
         :returns: None
         """
-        
+
         plt.figure(figsize=(15,10))
         for i in range(2):
             plt.subplot(1,2,i+1)
             ax = plt.gca()
             plt.title (['theta','phi'][i])
             toshow = toplot[i] if toplot is not None else [self.Etheta,self.Ephi][i]
-            toshow = np.real(toshow[freqndx,:,:,i]) if noabs else np.abs(toshow[freqndx,:,:,i]) 
+            toshow = np.real(toshow[freqndx,:,:,i]) if noabs else np.abs(toshow[freqndx,:,:,i])
             im=ax.imshow(toshow,interpolation='nearest',extent=[0,360,180,0],origin='upper')
             divider = make_axes_locatable(ax)
             cax = divider.append_axes("right", size="5%", pad=0.05)

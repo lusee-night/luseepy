@@ -17,8 +17,12 @@ from .NumpySimulator import NumpySimulator
 try:
     from .CroSimulator import CroSimulator
 except (ModuleNotFoundError, ImportError) as e:
-    if "croissant" in str(e).lower() or "s2fft" in str(e).lower():
-        CroSimulator = None  # optional: install croissant (and s2fft) to use CroSimulator
+    if (
+        "croissant" in str(e).lower()
+        or "s2fft" in str(e).lower()
+        or "spiceypy" in str(e).lower()
+    ):
+        CroSimulator = None  # optional: install croissant/s2fft/spiceypy to use CroSimulator
     else:
         raise
 
