@@ -9,8 +9,8 @@ import pytest
 
 from lusee.Beam import Beam
 from lusee.BeamGauss import BeamGauss
-from lusee.pre_jax.Beam import Beam as PreJaxBeam
-from lusee.pre_jax.BeamGauss import BeamGauss as PreJaxBeamGauss
+from pre_jax.Beam import Beam as PreJaxBeam
+from pre_jax.BeamGauss import BeamGauss as PreJaxBeamGauss
 
 
 RTOL = 1e-9

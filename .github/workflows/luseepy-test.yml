@@ -20,6 +20,7 @@ jobs:
       JAX_ENABLE_X64: "True"
       MPLCONFIGDIR: /tmp/matplotlib
       UV_CACHE_DIR: /tmp/uv-cache
+      LUSEE_LUNAR_DAY_REGRESSION_DAYS: "0.5"
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y curl wget gfortran build-essential pkg-config cmake libopenblas-dev libfftw3-dev
@@ -28,6 +29,7 @@ jobs:
       - run: uv sync
       - run: wget "https://drive.google.com/uc?export=download&id=1PbU432IYAFSzOjWRrKMoGFR6F1M3dmaV" -O drive.tgz
       - run: tar zxvf drive.tgz
-      - run: uv run pytest tests/ -v
+      - run: uv run pytest tests/ -v -m "not manual and not slow"
+      - run: uv run pytest tests/test_lunar_28day_Cro_vs_default.py -v
       - run: cd simulation; ln -s ../Drive .; mkdir -p output; uv run python driver/run_sim.py config/example.yaml; ls -l output
       - run: uv run python tests/SimReadTest.py simulation/output/sim_example.fits
