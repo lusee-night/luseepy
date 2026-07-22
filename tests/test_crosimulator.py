@@ -48,3 +48,44 @@ def test_crosimulator_runs_and_returns_expected_shape():
     assert result.shape == (len(obs.times), 1, len(freq))
     assert np.all(np.isfinite(result))
     assert np.any(np.abs(result) > 0.0)
+
+
+def test_crosimulator_batched_matches_loop_path():
+    if lusee.CroSimulator is None:
+        pytest.skip("croissant/s2fft not installed")
+
+    nside = 8
+    lmax = 7
+    freq = canonical_frequencies(frequency_indices_from_values([10.0, 15.0]))
+    npix = 12 * nside * nside
+    maps = [np.ones(npix, dtype=float), 2.0 * np.ones(npix, dtype=float)]
+    sky = lusee.sky.HealpixSky(nside, lmax, maps, freq=freq, frame="galactic")
+    beam = lusee.BeamGauss(
+        alt_deg=90.0,
+        az_deg=0.0,
+        sigma_deg=20.0,
+        one_over_freq_scaling=False,
+        id="beam",
+    )
+    obs = lusee.Observation(
+        "2025-03-01 00:00:00 to 2025-03-01 04:00:00",
+        deltaT_sec=7200.0,
+        lun_lat_deg=0.0,
+        lun_long_deg=0.0,
+    )
+    sim = lusee.CroSimulator(
+        obs,
+        [beam, beam],
+        sky,
+        Tground=0.0,
+        combinations=[(0, 0), (0, 1)],
+        freq=freq,
+        lmax=lmax,
+    )
+
+    batched = sim.simulate(times=obs.times)
+    loop = sim._simulate_croissant_mepa_loop(
+        obs.times, len(obs.times), float(obs.deltaT_sec), sky_model=sky
+    )
+
+    np.testing.assert_allclose(np.asarray(batched), np.asarray(loop), rtol=1e-10)

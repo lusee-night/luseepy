@@ -30,8 +30,13 @@ from .SkyModels     import FitsSky
 from .SkyModels     import GalCenter
 from .SkyModels     import HarmonicPointSourceSky
 
+from .SkyModels     import HealpixSky
+from .SpectralSky   import SpectralHealpixSky, SpectralSkyModule
+from .SeparableSky  import SeparableHealpixSky, SeparableSkyModule
+
 from . import SkyModels     as sky
 from . import MapMaker      as mapmaker
+from . import Fitting       as fitting
 
 
 from . import MonoSkyModels as monosky 
