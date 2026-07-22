@@ -37,6 +37,7 @@ from . import MapMaker      as mapmaker
 from . import MonoSkyModels as monosky 
 from .PCAanalyzer import PCAanalyzer, CompositePCAanalyzer
 from .Throughput import Throughput
+from .SpectrometerResponse import spectrometer_response, spectrometer_response_zoom
 from .frequencies import (
     ALL_FREQUENCIES_MHZ,
     ALL_FREQUENCY_INDICES,

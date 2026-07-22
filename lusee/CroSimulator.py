@@ -1,4 +1,5 @@
 from functools import partial
+from importlib.resources import files
 import warnings
 
 from .Observation import Observation
@@ -15,6 +16,7 @@ import croissant as cro
 from croissant.multipair import multi_convolve
 import jax
 from lunarsky import LunarTopo
+import spiceypy as spice
 import s2fft
 
 """
@@ -25,6 +27,31 @@ and antenna location come from the observation object (config). Croissant
 handles single polarization / single dipole per beam; effective beams are
 still one combination each, batched at the convolution step.
 """
+
+
+_SPICE_LUNAR_KERNELS_LOADED = False
+
+
+def _ensure_spice_lunar_frames():
+    """Load Lunarsky's bundled lunar frame definitions for Croissant.
+
+    Lunarsky 1.x evaluates its own coordinate transforms and no longer loads
+    these SPICE kernels as an import side effect.  Croissant still uses SPICE
+    directly for its ``MOON_ME`` to ``J2000`` transform, so register the
+    packaged frame and orientation kernels before asking it for rotations.
+    """
+    global _SPICE_LUNAR_KERNELS_LOADED
+    if _SPICE_LUNAR_KERNELS_LOADED:
+        return
+
+    kernel_root = files("lunarsky.data")
+    for relative_path in (
+        "fk/satellites/moon_080317.tf",
+        "fk/satellites/moon_assoc_me.tf",
+        "pck/moon_pa_de421_1900-2050.bpc",
+    ):
+        spice.furnsh(str(kernel_root.joinpath(relative_path)))
+    _SPICE_LUNAR_KERNELS_LOADED = True
 
 
 class CroSimulator(SimulatorBase):
@@ -148,6 +175,7 @@ class CroSimulator(SimulatorBase):
                                     sky_model=None, efbeams=None):
         """MEPA pipeline: sky gal→MEPA once (epoch-aware), beam topo(t0)→MEPA once,
         rot_alm_z(dt) for time evolution, then convolve."""
+        _ensure_spice_lunar_frames()
         if sky_model is None:
             sky_model = self.sky_model
         if efbeams is None:

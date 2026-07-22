@@ -1,5 +1,6 @@
 **/*.*
 !lusee/*.py
+!lusee/data/*.txt
 !lusee/pre_jax/*.py
 !tests/*.py
 !notebooks/*.ipynb
