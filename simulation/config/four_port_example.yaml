@@ -1,0 +1,32 @@
+paths:
+  lusee_drive_dir: $LUSEE_DRIVE_DIR
+  output_dir: $LUSEE_OUTPUT_DIR
+
+response:
+  file: responses/lusee_four_port_v3.fits
+  rotation_deg: 0
+  require_validated: true
+
+receiver:
+  model: jfet
+  channel_map: [fmpre0, fmpre2, fmpre5, fmpre7]
+  params: {}
+
+observation:
+  time_range: "2028-01-01 00:00:00 to 2028-01-02 00:00:00"
+  dt: 900
+  lat: -23.814
+  long: 182.258
+  height_m: 0
+  lmax: 128
+  T_moon: 250.0
+  products: all
+  freq:
+    values: [12.5, 17.3, 12.5, 25.0]
+
+sky:
+  type: Cane1979
+
+simulation:
+  engine: croissant
+  output: four_port_covariance.fits

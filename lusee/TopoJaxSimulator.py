@@ -48,6 +48,21 @@ class TopoJaxSimulator(SimulatorBase):
     :type extra_opts: dict
     """
 
+    def __new__(cls, obs, beams, sky_model, *args, **kwargs):
+        from .InstrumentResponse import InstrumentResponse
+
+        if cls is TopoJaxSimulator and isinstance(beams, InstrumentResponse):
+            from .FullStokesSimulator import FullStokesTopoJaxSimulator
+
+            return FullStokesTopoJaxSimulator(
+                obs,
+                beams,
+                sky_model,
+                *args,
+                **kwargs,
+            )
+        return super().__new__(cls)
+
     def __init__ (self, obs, beams, sky_model, Tground = 200.0,
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None,
                   lmax = 128, cross_power = None,
