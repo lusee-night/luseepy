@@ -315,8 +315,34 @@ class Beam:
     :type phi: numpy array
     """
     is_jax_pytree_beam = True
+
+    def __new__(cls, *args, **kwargs):
+        """Dispatch public FITS-v3 construction to the four-port response."""
+        if cls is not Beam:
+            return super().__new__(cls)
+
+        fname = kwargs.get("fname", args[0] if args else None)
+        require_validated = kwargs.get("require_validated", True)
+        if fname is not None and os.path.isfile(fname):
+            try:
+                version = int(dict(fitsio.read_header(fname)).get("VERSION", -1))
+            except (OSError, ValueError, TypeError):
+                version = -1
+            if version == 3:
+                from .InstrumentResponse import InstrumentResponse
+
+                return InstrumentResponse(
+                    fname,
+                    require_validated=require_validated,
+                )
+        return super().__new__(cls)
     
-    def __init__ (self, fname = None, id = None):
+    def __init__(
+        self,
+        fname=None,
+        id=None,
+        require_validated=True,
+    ):
         if fname is None:
             fname = base = os.environ['LUSEE_DRIVE_DIR']+"Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
         if not (os.path.isfile (fname) and os.access(fname, os.R_OK)):

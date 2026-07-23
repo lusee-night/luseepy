@@ -2,7 +2,6 @@
 import os
 from enum import StrEnum
 
-import numpy as np
 import jax
 
 
@@ -37,7 +36,11 @@ class SimDriver:
             jax.config.update("jax_enable_x64", True)
         self._parse_base()
         self._parse_sky()
-        self._parse_beams()
+        self.new_response_schema = "response" in self.cfg
+        if self.new_response_schema:
+            self._parse_response()
+        else:
+            self._parse_beams()
 
     def _resolve_simulation_paths(self):
         """Turn plot_dir paths relative to the luseepy checkout into absolute paths.
@@ -65,8 +68,6 @@ class SimDriver:
             return value.strip().lower() in {"1", "true", "yes", "y", "on"}
         return bool(value)
 
-        import jax
-
     def _parse_base(self):
         from lusee.frequencies import frequencies_from_config
 
@@ -82,7 +83,11 @@ class SimDriver:
         self.dt = od["dt"]
         if isinstance(self.dt, str):
             self.dt = eval(self.dt)
-        self.freq = frequencies_from_config(od["freq"])
+        self.freq = (
+            frequencies_from_config(od["freq"])
+            if "freq" in od
+            else None
+        )
 
     def _parse_sky(self):
         lusee = self._lusee
@@ -119,6 +124,44 @@ class SimDriver:
             raise ValueError(f"Unknown sky.type={sky_type!r}")
         if requires_numpy_wrapper(self.engine):
             self.sky = lusee.NpWrapper(self.sky)
+
+    def _parse_response(self):
+        lusee = self._lusee
+        response_cfg = self.cfg["response"]
+        filename = response_cfg["file"]
+        if isinstance(filename, str) and filename.startswith("$"):
+            variable, _, suffix = filename[1:].partition("/")
+            filename = os.path.join(os.environ[variable], suffix)
+        elif not os.path.isabs(filename):
+            filename = os.path.join(self.root, filename)
+        print("Loading four-port response:", filename)
+        self.response = lusee.InstrumentResponse(
+            filename,
+            require_validated=self._to_bool(
+                response_cfg.get("require_validated", True)
+            ),
+        )
+        rotation = float(response_cfg.get("rotation_deg", 0.0))
+        if rotation:
+            self.response = self.response.rotate(rotation)
+        self.receiver = lusee.receiver_from_config(
+            self.cfg.get("receiver", {"model": "jfet"})
+        )
+        if self.freq is None:
+            from lusee.FullStokesSimulator import (
+                default_target_frequencies,
+            )
+
+            self.freq, removed_by_input = default_target_frequencies(
+                self.response,
+                self.sky,
+                self.receiver,
+            )
+            for name, removed in removed_by_input.items():
+                print(
+                    "  default frequency intersection removed response "
+                    f"channels outside {name}: {removed.tolist()}"
+                )
 
     def _parse_beams(self):
         lusee = self._lusee
@@ -198,16 +241,60 @@ class SimDriver:
         lusee = self._lusee
         print("Starting simulation:")
         od = self.cfg["observation"]
-        O = lusee.Observation(
-            od["lunar_day"],
+        time_range = od.get("time_range", od.get("lunar_day"))
+        if time_range is None:
+            raise ValueError(
+                "observation requires time_range (or legacy lunar_day)."
+            )
+        observation = lusee.Observation(
+            time_range,
             deltaT_sec=self.dt,
             lun_lat_deg=od["lat"],
             lun_long_deg=od["long"],
+            lun_height_m=od.get("height_m", 0.0),
         )
         print(
-            f"  Using observation: lat={O.lun_lat_deg} deg, lon={O.lun_long_deg} deg, "
-            f"time_range={O.time_range}, N_times={len(O.times)}"
+            f"  Using observation: lat={observation.lun_lat_deg} deg, "
+            f"lon={observation.lun_long_deg} deg, "
+            f"time_range={observation.time_range}, "
+            f"N_times={len(observation.times)}"
         )
+        if self.new_response_schema:
+            products = od.get("products", "all")
+            simulator_class = (
+                lusee.FullStokesCroSimulator
+                if self.engine is SimEngine.CRO
+                else lusee.FullStokesTopoJaxSimulator
+            )
+            if self.engine is SimEngine.TOPO_NP:
+                raise ValueError(
+                    "The four-port response schema supports only "
+                    "'croissant' and 'topo' engines."
+                )
+            S = simulator_class(
+                observation,
+                self.response,
+                self.sky,
+                self.receiver,
+                T_moon=od.get("T_moon", 250.0),
+                products=products,
+                freq=self.freq,
+                lmax=self.lmax,
+            )
+            print(
+                f"  Simulating {len(observation.times)} timesteps x physical "
+                f"four-port covariance x {len(self.freq)} frequency bins..."
+            )
+            S.simulate(times=observation.times)
+            out_base = self.cfg["simulation"].get(
+                "output",
+                f"sim_{self.engine}_covariance.fits",
+            )
+            fname = os.path.join(self.outdir, out_base)
+            print("Writing to", fname)
+            S.write_fits(fname)
+            return S
+
         print("  setting up combinations...")
         combs = od["combinations"]
         if isinstance(combs, str) and combs == "all":
@@ -226,7 +313,7 @@ class SimDriver:
                 )
             print("  setting up Croissant Simulation object...")
             S = lusee.CroSimulator(
-                O,
+                observation,
                 self.beams,
                 self.sky,
                 Tground=od["Tground"],
@@ -239,7 +326,7 @@ class SimDriver:
         elif self.engine is SimEngine.TOPO_NP:
             print("  setting up Default (NumPy) Simulation object...")
             S = lusee.TopoNumpySimulator(
-                O,
+                observation,
                 self.beams,
                 self.sky,
                 Tground=od["Tground"],
@@ -252,7 +339,7 @@ class SimDriver:
         elif self.engine is SimEngine.TOPO:
             print("  setting up JAX Simulation object...")
             S = lusee.TopoJaxSimulator(
-                O,
+                observation,
                 self.beams,
                 self.sky,
                 Tground=od["Tground"],
@@ -266,11 +353,12 @@ class SimDriver:
             raise ValueError(f"Unknown engine: {self.engine}")
 
         print(
-            f"  Simulating {len(O.times)} timesteps (from observation) x {len(combs)} "
+            f"  Simulating {len(observation.times)} timesteps "
+            f"(from observation) x {len(combs)} "
             f"data products x {len(self.freq)} frequency bins..."
         )
         print("  Simulating...")
-        S.simulate(times=O.times)
+        S.simulate(times=observation.times)
 
         out_base = self.cfg["simulation"].get("output", f"sim_{self.engine}_output.fits")
         fname = os.path.join(self.outdir, out_base)

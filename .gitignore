@@ -5,6 +5,7 @@
 !lusee/pre_jax/*.py
 !lusee/data/gain/*.npy
 !lusee/data/gain/*.csv
+!beam_conversion/*.py
 !tests/*.py
 !tests/ingest/
 !tests/ingest/*.py
