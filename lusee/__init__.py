@@ -41,9 +41,11 @@ from .SpectrometerResponse import spectrometer_response, spectrometer_response_z
 from .frequencies import (
     ALL_FREQUENCIES_MHZ,
     ALL_FREQUENCY_INDICES,
+    FrequencyMap,
     canonical_frequencies,
     canonical_frequency_indices,
-    frequency_indices_from_config,
+    canonicalize_frequencies,
+    frequencies_from_config,
     frequency_indices_from_values,
 )
 

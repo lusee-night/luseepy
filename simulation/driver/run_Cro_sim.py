@@ -9,7 +9,7 @@ if __name__ == "__main__":
     import  yaml
     from    sim_driver import SimEngine, requires_numpy_wrapper
     from    yaml.loader import SafeLoader
-    from    lusee.frequencies import canonical_frequencies, frequency_indices_from_config
+    from    lusee.frequencies import frequencies_from_config
     import jax
     jax.config.update("jax_enable_x64", True)
 
@@ -59,8 +59,7 @@ class SimDriver(dict):
         self.dt = od['dt']
         if type(self.dt)==str:
             self.dt = eval(od['dt'])
-        self.freq_indices = frequency_indices_from_config(od['freq'])
-        self.freq = canonical_frequencies(self.freq_indices)
+        self.freq = frequencies_from_config(od['freq'])
 
     def _parse_sky(self):
         engine = self._normalize_engine(self)

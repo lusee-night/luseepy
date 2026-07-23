@@ -34,6 +34,20 @@ class BeamCouplings:
             sign = sd['sign']
             combs = sd['combinations']
             b1, b2 = combs[0]
+            # cross_power mixes gain_conv arrays elementwise and is reused for
+            # every pair in combs, which is only meaningful when the two-port
+            # measurement shares all coupling beams' native frequency grid;
+            # grids used to coincide by forced canonicalization at load, so
+            # check explicitly now
+            two_port_freq = np.asarray(two_port_beam.freq, dtype=float)
+            for bid in {bid for c in combs for bid in c}:
+                beam_freq = np.asarray(self.beamd[bid].freq, dtype=float)
+                if two_port_freq.shape != beam_freq.shape or not np.allclose(two_port_freq, beam_freq):
+                    raise ValueError(
+                        f"coupling '{n}': two-port beam {sd['two_port']!r} has a "
+                        f"different native frequency grid than beam {bid!r}; "
+                        "cross powers cannot be combined across grids"
+                    )
             gain_conv = np.sqrt(self.beamd[b1].gain_conv * self.beamd[b2].gain_conv)
             dgain_conv = two_port_beam.gain_conv
             cross_power = -sign + sign*gain_conv/(2*dgain_conv)
@@ -43,7 +57,7 @@ class BeamCouplings:
                 self.cross_powers[(c[1],c[0])] = cross_power
 
                 
-    def Ex_coupling (self, b1, b2, freq_ndx):
+    def Ex_coupling (self, b1, b2, freq_map):
         """
         Function that obtains E field cross coupling power for two input beams, b1 and b2
 
@@ -51,22 +65,17 @@ class BeamCouplings:
         :type b1: class
         :param b2: Beam two
         :type b2: class
-        :param freq_ndx: Frequency bin index at which to find cross power.
-        :type freq_ndx: int
+        :param freq_map: Interpolation map (see :class:`lusee.frequencies.FrequencyMap`)
+            from the simulator target frequencies to the beams' native frequency grid.
+        :type freq_map: lusee.frequencies.FrequencyMap
 
-        :returns: Cross power between two input beams 
-        :rtype: float
+        :returns: Cross power between two input beams at the target frequencies.
+        :rtype: numpy array of shape ``(N_target,)``
         """
-        
-        cross_power = self.cross_powers.get((b1.id,b2.id))
-        freq_ndx_arr = np.asarray(freq_ndx, dtype=np.int32)
+        cross_power = self.cross_powers.get((b1.id, b2.id))
         if cross_power is None:
-            cross_power = np.zeros_like(freq_ndx_arr, dtype=float)
-        else:
-            # JAX arrays do not allow list-based advanced indexing; normalize the
-            # frequency selection once at the boundary so both NumPy and JAX work.
-            cross_power = cross_power[freq_ndx_arr]
-        return cross_power
+            return np.zeros(len(freq_map), dtype=float)
+        return freq_map.from_native(np.asarray(cross_power))
     
         
 
