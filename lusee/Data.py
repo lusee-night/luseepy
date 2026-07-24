@@ -36,10 +36,14 @@ class Data(Observation):
     
     def __init__(self, filename, throughput=None):
         header = dict(fitsio.read_header(filename))
-        version = header['VERSION']
-        if float(version) >= 3:
+        version = float(header['VERSION'])
+        if version == 3.0:
             self._init_covariance_fits(filename, header)
             return
+        if version > 3.0:
+            raise ValueError(
+                f"Unsupported future simulation FITS VERSION={version}."
+            )
         lunar_day    = header['LUNAR_DAY']
         lun_lat_deg  = header['LUN_LAT_DEG']
         lun_long_deg = header['LUN_LONG_DEG']
@@ -155,7 +159,26 @@ class Data(Observation):
         if not time_scale:
             raise ValueError("Covariance time HDU is missing TIMESYS.")
         time_values = np.asarray(fits["time"].read(), dtype=np.float64)
-        exact_times = Time(time_values, format="mjd", scale=time_scale)
+        time_format = str(time_header.get("TIMEFMT", "MJD")).strip().upper()
+        if time_format == "JD1+JD2":
+            if time_values.ndim != 2 or time_values.shape[1] != 2:
+                raise ValueError(
+                    "JD1+JD2 time HDU must have shape (Ntime, 2)."
+                )
+            exact_times = Time(
+                time_values[:, 0],
+                time_values[:, 1],
+                format="jd",
+                scale=time_scale,
+            )
+        elif time_format == "MJD":
+            if time_values.ndim != 1:
+                raise ValueError("MJD time HDU must be one-dimensional.")
+            exact_times = Time(time_values, format="mjd", scale=time_scale)
+        else:
+            raise ValueError(
+                f"Unsupported covariance TIMEFMT={time_format!r}."
+            )
         if exact_times.isscalar:
             exact_times = Time([exact_times])
 
@@ -184,7 +207,13 @@ class Data(Observation):
         self.data = fits["data"].read()
         self.data_units = data_units
         self.freq = np.asarray(fits["freq"].read(), dtype=np.float64)
-        product_data = fits["products"].read()
+        product_hdu = fits["products"]
+        product_header = dict(product_hdu.read_header())
+        if str(product_header.get("TUNIT1", "")).strip() != "1":
+            raise ValueError(
+                "Covariance products label column must have TUNIT1='1'."
+            )
+        product_data = product_hdu.read()
         if product_data.dtype.fields and "label" in product_data.dtype.fields:
             raw_labels = product_data["label"]
         else:

@@ -5,6 +5,7 @@ import fitsio
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 import croissant as cro
 import lusee
@@ -15,6 +16,7 @@ from lusee.Data import Data
 from lusee.FullStokesSimulator import (
     FullStokesCroSimulator,
     FullStokesTopoJaxSimulator,
+    prepare_polarized_sky_alms,
 )
 from lusee.FullStokesCalibrator import FullStokesCalibratorSimulator
 from lusee.GainModel import V2_PER_HZ
@@ -120,6 +122,12 @@ def make_galactic_anisotropic_sky():
         + 20.0 * np.cos(tt)[None]
         + 8.0 * np.sin(tt)[None] * np.cos(pp)[None]
     )
+    data[:, 1] = (
+        2.0 * np.sin(tt)[None] ** 2 * np.cos(2 * pp)[None]
+    )
+    data[:, 2] = (
+        -1.5 * np.sin(tt)[None] ** 2 * np.sin(2 * pp)[None]
+    )
     data[:, 3] = 3.0 * np.cos(tt)[None]
     return cro.PolarizedSky(
         data,
@@ -129,6 +137,39 @@ def make_galactic_anisotropic_sky():
         frame="galactic",
         convention="IAU",
     )
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value", "message"),
+    (
+        ("units", "Jy", "units must be 'K'"),
+        ("frequency_units", "Hz", "frequency_units must be 'MHz'"),
+        ("convention", "COSMO", "convention must be canonical IAU"),
+        ("stokes", ("I", "Q", "V", "U"), "Stokes order"),
+        ("tangent_basis", "north-east", "Unsupported tangent basis"),
+        ("frame", "mystery", "Unsupported sky frame"),
+    ),
+)
+def test_polarized_provider_metadata_is_validated(
+    attribute,
+    value,
+    message,
+):
+    class Provider:
+        units = "K"
+        frequency_units = "MHz"
+        convention = "IAU"
+        stokes = ("I", "Q", "U", "V")
+        tangent_basis = "theta-phi"
+        frame = "topo"
+
+        def polarized_alm_at_freq(self, target, lmax):
+            return jnp.zeros((len(target), 4, lmax + 1, 2 * lmax + 1))
+
+    provider = Provider()
+    setattr(provider, attribute, value)
+    with pytest.raises(ValueError, match=message):
+        prepare_polarized_sky_alms(provider, [10.0], 2)
 
 
 def test_cro_simulator_blackbody_off_grid_timestamps_and_boundaries(monkeypatch):
@@ -374,6 +415,9 @@ def test_covariance_fits_data_round_trip_preserves_exact_time_and_units(
     simulator.write_fits(filename)
     with fitsio.FITS(filename) as fits:
         header = fits["data"].read_header()
+        time_header = fits["time"].read_header()
+        time_payload = fits["time"].read()
+        product_header = fits["products"].read_header()
     assert header["RECMODEL"] == "IdealCapacitorReceiver"
     assert header["RECCHANS"] == "0,1,2,3"
     assert header["SKYMODEL"] == "PolarizedSky"
@@ -381,6 +425,9 @@ def test_covariance_fits_data_round_trip_preserves_exact_time_and_units(
     assert header["LUSEEVER"] != ""
     assert header["CROVER"] != ""
     assert header["S2FFTVER"] != ""
+    assert time_header["TIMEFMT"] == "JD1+JD2"
+    assert time_payload.shape == (len(times), 2)
+    assert product_header["TUNIT1"] == "1"
     data = Data(filename)
     assert data.response_provenance["content_hash"] == (
         simulator.result_beam.content_hash
@@ -390,6 +437,8 @@ def test_covariance_fits_data_round_trip_preserves_exact_time_and_units(
     assert data.sky_provenance["frame"] == "topo"
     assert data.software_versions["croissant"]
     assert np.array_equal(data.times.utc.mjd, times.utc.mjd)
+    assert np.array_equal(data.times.jd1, times.jd1)
+    assert np.array_equal(data.times.jd2, times.jd2)
     assert np.array_equal(data.freq, [15.0, 10.0, 15.0])
     raw = data[:, "00R", :]
     assert raw.units == V2_PER_HZ
@@ -409,6 +458,11 @@ def test_covariance_fits_data_round_trip_preserves_exact_time_and_units(
     no_op = data[:, "00RV", :]
     assert no_op.units == V2_PER_HZ
     np.testing.assert_array_equal(no_op.array, raw.array)
+
+    with fitsio.FITS(filename, "rw") as fits:
+        fits[0].write_key("VERSION", 3.1)
+    with pytest.raises(ValueError, match="Unsupported future"):
+        Data(filename)
 
 
 def test_equivalent_utc_and_tdb_instants_match_and_preserve_scale(
@@ -516,6 +570,7 @@ def test_gradients_flow_through_off_grid_sky_and_response_overrides(
         return jnp.sum(simulator.simulate(times, sky=sky))
 
     sky_gradient = jax.grad(sky_loss)(jnp.asarray(1.0))
+    assert simulator.result is None
     assert jnp.isfinite(sky_gradient)
     assert jnp.abs(sky_gradient) > 0
     epsilon = 1e-4
@@ -539,11 +594,14 @@ def test_gradients_flow_through_off_grid_sky_and_response_overrides(
             base_response.ZA,
             base_response.Rsky_native,
             base_response.Rmoon_native,
+            validated=False,
             metadata=base_response.header,
         )
         return jnp.sum(simulator.simulate(times, beam=response))
 
+    state_before_response_grad = simulator.result
     response_gradient = jax.grad(response_loss)(jnp.asarray(1.0))
+    assert simulator.result is state_before_response_grad
     assert jnp.isfinite(response_gradient)
     assert jnp.abs(response_gradient) > 0
     response_finite_difference = (
@@ -554,6 +612,35 @@ def test_gradients_flow_through_off_grid_sky_and_response_overrides(
         response_gradient,
         response_finite_difference,
         rtol=3e-5,
+        atol=1e-24,
+    )
+
+    def impedance_loss(scale):
+        diagonal = jnp.eye(4, dtype=base_response.ZA.dtype)[None]
+        response = InstrumentResponse.from_arrays(
+            base_response.freq,
+            base_response.theta_deg,
+            base_response.phi_deg,
+            base_response.H_theta,
+            base_response.H_phi,
+            base_response.ZA + scale * diagonal,
+            base_response.Rsky_native,
+            base_response.Rmoon_native,
+            validated=False,
+            metadata=base_response.header,
+        )
+        return jnp.sum(simulator.simulate(times, beam=response))
+
+    impedance_gradient = jax.grad(impedance_loss)(jnp.asarray(0.0))
+    impedance_finite_difference = (
+        impedance_loss(epsilon) - impedance_loss(-epsilon)
+    ) / (2 * epsilon)
+    assert jnp.isfinite(impedance_gradient)
+    assert jnp.abs(impedance_gradient) > 0
+    assert jnp.allclose(
+        impedance_gradient,
+        impedance_finite_difference,
+        rtol=4e-5,
         atol=1e-24,
     )
 

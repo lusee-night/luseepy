@@ -328,6 +328,9 @@ def compute_radiometric_noise(data, combinations=None,
     For auto-correlations (real): sigma^2 = T_ii^2 / (df dt).
     For each Re/Im component of a cross-correlation:
         sigma^2 = (T_ii T_jj + |V_ij|^2) / (4 df dt).
+    The latter is half of the complex-sample Eq. 9 variance, assigned to
+    each Cartesian component under the circular-complex-noise convention.
+    Both packed components are therefore required to evaluate |V_ij|^2.
 
     The data itself is used to estimate the system temperatures T_ii(t).
     This is a good approximation when SNR >> 1 (always true for
@@ -357,6 +360,22 @@ def compute_radiometric_noise(data, combinations=None,
                 f"{nchannels}."
             )
         channel_for = {label: index for index, label in enumerate(labels)}
+        cross_pairs = {
+            label[:2]
+            for label in labels
+            if label[0] != label[1]
+        }
+        for pair in cross_pairs:
+            real_label = f"{pair}R"
+            imag_label = f"{pair}I"
+            if (
+                real_label not in channel_for
+                or imag_label not in channel_for
+            ):
+                raise ValueError(
+                    "Radiometric noise requires both packed components "
+                    f"{real_label} and {imag_label}."
+                )
         for label, channel in channel_for.items():
             a, b = int(label[0]), int(label[1])
             auto_a = channel_for.get(f"{a}{a}R")
@@ -374,16 +393,8 @@ def compute_radiometric_noise(data, combinations=None,
             T_bb = np.abs(data_np[:, auto_b, :])
             real_channel = channel_for.get(f"{a}{b}R")
             imag_channel = channel_for.get(f"{a}{b}I")
-            real = (
-                data_np[:, real_channel, :]
-                if real_channel is not None
-                else 0.0
-            )
-            imag = (
-                data_np[:, imag_channel, :]
-                if imag_channel is not None
-                else 0.0
-            )
+            real = data_np[:, real_channel, :]
+            imag = data_np[:, imag_channel, :]
             variance = (
                 T_aa * T_bb + real**2 + imag**2
             ) / (4.0 * delta_f_hz * delta_t_sec)

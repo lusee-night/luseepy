@@ -77,5 +77,5 @@ from .frequencies import (
     frequency_indices_from_values,
 )
 
-__version__ = '1.3'
-__comment__ = '1.3 dev'
+__version__ = "2.0.dev0"
+__comment__ = "four-port full-Stokes response development"
