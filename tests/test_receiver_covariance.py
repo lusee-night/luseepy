@@ -3,6 +3,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from lusee.Covariance import (
     assemble_open_covariance,
@@ -143,3 +144,10 @@ def test_mapmaker_noise_uses_response_v3_product_order():
     cross = np.sqrt((2.0 * 3.0 + 0.4**2 + 0.3**2) / 40.0)
     np.testing.assert_allclose(sigma[:, channel["01R"], :], cross)
     np.testing.assert_allclose(sigma[:, channel["01I"], :], cross)
+
+
+def test_mapmaker_noise_rejects_partial_complex_cross_product():
+    products = ("00R", "11R", "01R")
+    data = np.ones((1, len(products), 1))
+    with pytest.raises(ValueError, match="both packed components"):
+        compute_radiometric_noise(data, products=products)

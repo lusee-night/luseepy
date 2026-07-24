@@ -102,6 +102,16 @@ def test_response_loader_rejects_unvalidated_by_default(tmp_path):
     assert not response.validated
 
 
+def test_response_loader_rejects_fractional_future_version(tmp_path):
+    arrays = make_response_arrays()
+    filename = tmp_path / "future_response.fits"
+    write_response_fits(filename, arrays)
+    with fitsio.FITS(filename, "rw") as fits:
+        fits[0].write_key("VERSION", 3.1)
+    with pytest.raises(ValueError, match="requires FITS VERSION=3"):
+        InstrumentResponse(filename)
+
+
 def test_response_loader_rejects_noncanonical_validated_metadata(tmp_path):
     arrays = make_response_arrays()
     filename = tmp_path / "bad_convention.fits"
@@ -128,23 +138,42 @@ def test_response_loader_rechecks_validated_physical_matrices(tmp_path):
         InstrumentResponse(filename)
 
 
-def test_response_loader_uses_stored_content_hash_without_rehashing(
-    tmp_path,
-    monkeypatch,
-):
+def test_response_loader_verifies_persisted_content_hash(tmp_path):
     arrays = make_response_arrays()
     filename = tmp_path / "content_hash.fits"
     write_response_fits(filename, arrays)
-    import importlib
-
-    module = importlib.import_module("lusee.InstrumentResponse")
-
-    def unexpected_hash(values):
-        raise AssertionError("stored CONTENT must bypass fallback hashing")
-
-    monkeypatch.setattr(module, "_content_hash", unexpected_hash)
     response = InstrumentResponse(filename)
-    assert response.content_hash
+    assert response.content_hash == fitsio.read_header(filename)["CONTENT"]
+    with fitsio.FITS(filename, "rw") as fits:
+        fits["H_theta_real"].write_key("CONTENT", "0" * 64)
+    with pytest.raises(ValueError, match="CONTENT hash"):
+        InstrumentResponse(filename)
+
+
+def test_validated_writer_binds_stored_resistance_to_fields(tmp_path):
+    arrays = make_response_arrays()
+    arrays.Rsky = arrays.Rsky.copy()
+    arrays.Rmoon = arrays.Rmoon.copy()
+    identity = np.eye(4)[None]
+    arrays.Rsky += identity
+    arrays.Rmoon -= identity
+    with pytest.raises(ValueError, match="inconsistent with H_theta"):
+        write_response_fits(tmp_path / "shifted_matrices.fits", arrays)
+
+
+def test_validated_loader_binds_stored_resistance_to_fields(tmp_path):
+    arrays = make_response_arrays()
+    filename = tmp_path / "shifted_matrices.fits"
+    write_response_fits(filename, arrays, dtype="float64")
+    with fitsio.FITS(filename, "rw") as fits:
+        sky = fits["Rsky_real"].read()
+        moon = fits["Rmoon_real"].read()
+        sky += np.eye(4)[None]
+        moon -= np.eye(4)[None]
+        fits["Rsky_real"].write(sky)
+        fits["Rmoon_real"].write(moon)
+    with pytest.raises(ValueError, match="inconsistent with H_theta"):
+        InstrumentResponse(filename)
 
 
 def test_validated_writer_requires_explicit_provenance(tmp_path):
@@ -345,6 +374,31 @@ def test_target_pair_alms_preserve_order_duplicates_and_unique_sht_endpoints():
     assert response.native_transform_count == 2
     response.pair_stokes_alms(2, [10.0])
     assert response.native_transform_count == 2
+
+
+def test_response_transform_chunks_pairs_and_frequencies_under_budget():
+    arrays = make_response_arrays(freq=(10.0, 15.0, 20.0))
+
+    def build():
+        return InstrumentResponse.from_arrays(
+            arrays.freq_mhz,
+            arrays.theta_deg,
+            arrays.phi_deg,
+            arrays.H_theta,
+            arrays.H_phi,
+            arrays.ZA,
+            arrays.Rsky,
+            arrays.Rmoon,
+        )
+
+    reference = build()
+    chunked = build()
+    chunked.transform_memory_budget_bytes = 1
+    assert chunked._transform_chunk_shape(2) == (1, 1)
+    expected = reference.pair_stokes_alms_native(2, [0, 1, 2])
+    actual = chunked.pair_stokes_alms_native(2, [0, 1, 2])
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+    assert chunked.native_transform_count == 3
 
 
 def test_rotation_moves_all_ports_and_keeps_wraparound():

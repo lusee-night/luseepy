@@ -1,7 +1,6 @@
 """Shared conversion and FITS-v3 response utilities."""
 
 from dataclasses import dataclass
-import hashlib
 import json
 from pathlib import Path
 import warnings
@@ -75,34 +74,6 @@ def _as_frequency_grid(freq_mhz):
     return freq
 
 
-def _grid_quadrature(theta_deg, phi_deg):
-    theta = np.radians(np.asarray(theta_deg, dtype=np.float64))
-    phi = np.radians(np.asarray(phi_deg, dtype=np.float64))
-    if theta.ndim != 1 or phi.ndim != 1:
-        raise ValueError("theta and phi must be one-dimensional.")
-    if theta.size < 2 or phi.size < 2:
-        raise ValueError("theta and phi grids require at least two samples.")
-    if not np.all(np.diff(theta) > 0) or not np.all(np.diff(phi) > 0):
-        raise ValueError("theta and phi grids must be strictly increasing.")
-
-    has_wrap = np.isclose(phi[-1] - phi[0], 2 * np.pi)
-    phi_use = phi[:-1] if has_wrap else phi
-    if phi_use.size < 2:
-        raise ValueError("phi grid has too few unique samples.")
-    dphi = 2 * np.pi / phi_use.size if has_wrap else np.mean(np.diff(phi_use))
-    if not np.allclose(np.diff(phi_use), dphi):
-        raise ValueError("Only uniform phi grids are supported.")
-
-    theta_weights = np.empty_like(theta)
-    theta_weights[0] = 0.5 * (theta[1] - theta[0])
-    theta_weights[-1] = 0.5 * (theta[-1] - theta[-2])
-    if theta.size > 2:
-        theta_weights[1:-1] = 0.5 * (theta[2:] - theta[:-2])
-    theta_weights *= np.sin(theta)
-    weights = theta_weights[:, None] * dphi
-    return weights, phi_use.size
-
-
 def compute_sky_moon_resistance(
     freq_mhz,
     theta_deg,
@@ -111,47 +82,17 @@ def compute_sky_moon_resistance(
     H_phi,
     ZA,
 ):
-    """Compute native Rsky and Rmoon with endpoint-aware quadrature."""
-    freq = _as_frequency_grid(freq_mhz)
-    H_theta = np.asarray(H_theta)
-    H_phi = np.asarray(H_phi)
-    ZA = np.asarray(ZA)
-    expected = (4, freq.size, len(theta_deg), len(phi_deg))
-    if H_theta.shape != expected or H_phi.shape != expected:
-        raise ValueError(
-            f"Field arrays must have shape {expected}; got "
-            f"{H_theta.shape} and {H_phi.shape}."
-        )
-    if ZA.shape != (freq.size, 4, 4):
-        raise ValueError(
-            f"ZA must have shape {(freq.size, 4, 4)}; got {ZA.shape}."
-        )
+    """Compute native matrices with the simulator's harmonic operator."""
+    from lusee.ResponsePhysics import compute_sky_moon_resistance as derive
 
-    weights, nphi = _grid_quadrature(theta_deg, phi_deg)
-    Ht = H_theta[..., :nphi]
-    Hp = H_phi[..., :nphi]
-    pair_integral = np.einsum(
-        "aftx,bftx,tx->fab",
-        Ht,
-        Ht.conjugate(),
-        weights,
-        optimize=True,
+    return derive(
+        freq_mhz,
+        theta_deg,
+        phi_deg,
+        H_theta,
+        H_phi,
+        ZA,
     )
-    pair_integral += np.einsum(
-        "aftx,bftx,tx->fab",
-        Hp,
-        Hp.conjugate(),
-        weights,
-        optimize=True,
-    )
-    wavelength_m = c / (freq * 1e6)
-    Rsky = (
-        VACUUM_IMPEDANCE_OHM
-        / (4.0 * wavelength_m**2)
-    )[:, None, None] * pair_integral
-    dissipative = 0.5 * (ZA + np.swapaxes(ZA.conjugate(), -1, -2))
-    Rmoon = dissipative - Rsky
-    return Rsky, Rmoon
 
 
 def embedded_fields_to_bare(
@@ -232,22 +173,24 @@ def convert_fields_to_effective_length(
     return values * scale.reshape(shape)
 
 
-def response_content_hash(response):
-    """Return a stable content hash for cache/provenance keys."""
-    digest = hashlib.sha256()
-    for value in (
-        response.freq_mhz,
-        response.theta_deg,
-        response.phi_deg,
-        response.H_theta,
-        response.H_phi,
-        response.ZA,
-    ):
-        array = np.ascontiguousarray(value)
-        digest.update(str(array.dtype).encode("ascii"))
-        digest.update(np.asarray(array.shape, dtype=np.int64).tobytes())
-        digest.update(array.tobytes())
-    return digest.hexdigest()
+def response_content_hash(response, *, metadata=None, real_dtype=None):
+    """Return the canonical persisted-payload hash."""
+    from lusee.ResponsePhysics import response_payload_hash
+
+    return response_payload_hash(
+        freq=response.freq_mhz,
+        theta_deg=response.theta_deg,
+        phi_deg=response.phi_deg,
+        H_theta=response.H_theta,
+        H_phi=response.H_phi,
+        ZA=response.ZA,
+        Rsky=response.Rsky,
+        Rmoon=response.Rmoon,
+        Vsource=response.Vsource,
+        Zref=response.Zref,
+        metadata=response.metadata if metadata is None else metadata,
+        real_dtype=real_dtype,
+    )
 
 
 def _response_header(response, validated):
@@ -404,6 +347,17 @@ def _validate_response(response, *, validated):
         raise ValueError("Rsky contains non-finite values.")
     if not np.all(np.isfinite(response.Rmoon)):
         raise ValueError("Rmoon contains non-finite values.")
+    if validated:
+        from lusee.ResponsePhysics import validate_response_matrices
+
+        validate_response_matrices(
+            response.ZA,
+            response.Rsky,
+            response.Rmoon,
+            field_rsky=computed_rsky,
+        )
+        return response
+
     dissipative = 0.5 * (
         response.ZA
         + np.swapaxes(response.ZA.conjugate(), -1, -2)
@@ -464,7 +418,11 @@ def write_response_fits(
         raise ValueError("dtype must be 'float32' or 'float64'.")
     real_dtype = np.dtype(dtype)
     header = _response_header(response, validated)
-    header["CONTENT"] = response_content_hash(response)
+    header["CONTENT"] = response_content_hash(
+        response,
+        metadata=header,
+        real_dtype=real_dtype,
+    )
 
     filename = str(Path(filename))
     fits = fitsio.FITS(filename, "rw", clobber=True)

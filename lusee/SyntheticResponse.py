@@ -4,6 +4,7 @@ import numpy as np
 from scipy.constants import c, physical_constants
 
 from .InstrumentResponse import InstrumentResponse
+from .ResponsePhysics import compute_sky_moon_resistance
 
 
 VACUUM_IMPEDANCE_OHM = physical_constants[
@@ -84,9 +85,20 @@ def synthetic_four_port_response(
         5.0 * np.eye(4)[None]
         + 0.25 * gram[None]
     )
-    ZA = radiation + 1j * reactance
-    Rsky = 0.5 * radiation
-    Rmoon = 0.5 * radiation
+    provisional_ZA = radiation + 1j * reactance
+    Rsky, _ = compute_sky_moon_resistance(
+        freq,
+        theta,
+        phi,
+        Htheta,
+        Hphi,
+        provisional_ZA,
+    )
+    # The analytic fixture encloses the response in equal-temperature sky
+    # and ground hemispheres. Tie its dissipative impedance to the exact
+    # harmonic operator used by the simulator.
+    ZA = 2.0 * Rsky + 1j * reactance
+    Rmoon = Rsky.copy()
     return InstrumentResponse.from_arrays(
         freq,
         theta,

@@ -1,7 +1,7 @@
 """Four-port open-circuit instrument response and frequency-aware transforms."""
 
 import copy
-import hashlib
+import os
 from pathlib import Path
 
 import fitsio
@@ -12,12 +12,18 @@ from scipy.constants import c, physical_constants
 
 from .frequencies import FrequencyMap
 from .ReceiverImpedance import loading_matrix
+from .ResponsePhysics import (
+    compute_sky_moon_resistance,
+    response_payload_hash,
+    validate_response_matrices,
+)
 
 
 VACUUM_IMPEDANCE_OHM = physical_constants[
     "characteristic impedance of vacuum"
 ][0]
 PORT_PAIRS = tuple((a, b) for a in range(4) for b in range(a, 4))
+DEFAULT_TRANSFORM_MEMORY_BUDGET_BYTES = 512 * 2**20
 RESPONSE_UNITS = {
     "freq": "MHz",
     "theta": "deg",
@@ -64,6 +70,24 @@ CANONICAL_CONVENTIONS = {
 }
 
 
+def _transform_memory_budget():
+    raw = os.environ.get(
+        "LUSEE_RESPONSE_TRANSFORM_MAX_BYTES",
+        str(DEFAULT_TRANSFORM_MEMORY_BUDGET_BYTES),
+    )
+    try:
+        result = int(raw)
+    except ValueError as error:
+        raise ValueError(
+            "LUSEE_RESPONSE_TRANSFORM_MAX_BYTES must be an integer."
+        ) from error
+    if result <= 0:
+        raise ValueError(
+            "LUSEE_RESPONSE_TRANSFORM_MAX_BYTES must be positive."
+        )
+    return result
+
+
 def _hdu_names(fits):
     return {hdu.get_extname().lower() for hdu in fits}
 
@@ -90,16 +114,6 @@ def _read_complex(fits, name, units):
     return real + 1j * imag
 
 
-def _content_hash(arrays):
-    digest = hashlib.sha256()
-    for value in arrays:
-        array = np.ascontiguousarray(value)
-        digest.update(str(array.dtype).encode("ascii"))
-        digest.update(np.asarray(array.shape, dtype=np.int64).tobytes())
-        digest.update(array.tobytes())
-    return digest.hexdigest()
-
-
 def _validate_provenance(header):
     unknown_values = {"", "unknown", "unspecified", "none"}
     missing = [
@@ -122,40 +136,6 @@ def _validate_provenance(header):
             )
 
 
-def _validate_physical_matrices(ZA, Rsky, Rmoon):
-    ZA = np.asarray(ZA)
-    Rsky = np.asarray(Rsky)
-    Rmoon = np.asarray(Rmoon)
-    for name, value in (("ZA", ZA), ("Rsky", Rsky), ("Rmoon", Rmoon)):
-        if not np.all(np.isfinite(value)):
-            raise ValueError(f"{name} contains non-finite values.")
-    for name, value in (("Rsky", Rsky), ("Rmoon", Rmoon)):
-        if not np.allclose(
-            value,
-            np.swapaxes(value.conjugate(), -1, -2),
-            rtol=1e-7,
-            atol=1e-10,
-        ):
-            raise ValueError(f"{name} must be Hermitian.")
-    dissipative = 0.5 * (ZA + np.swapaxes(ZA.conjugate(), -1, -2))
-    if not np.allclose(
-        Rsky + Rmoon,
-        dissipative,
-        rtol=1e-7,
-        atol=1e-10,
-    ):
-        raise ValueError(
-            "Rsky + Rmoon does not equal the dissipative part of ZA."
-        )
-    scale = max(1.0, float(np.max(np.abs(Rmoon))))
-    minimum = float(np.min(np.linalg.eigvalsh(Rmoon)))
-    if minimum < -1e-8 * scale:
-        raise ValueError(
-            "Rmoon has a negative eigenvalue "
-            f"({minimum:.6g} Ohm); response is not physically validated."
-        )
-
-
 @jax.tree_util.register_pytree_node_class
 class InstrumentResponse:
     """One coupled four-port response loaded from instrument FITS v3."""
@@ -165,8 +145,8 @@ class InstrumentResponse:
     def __init__(self, filename, *, require_validated=True):
         self.filename = str(Path(filename))
         header = dict(fitsio.read_header(self.filename))
-        version = int(header.get("VERSION", -1))
-        if version != 3:
+        version = float(header.get("VERSION", -1))
+        if version != 3.0:
             raise ValueError(
                 f"InstrumentResponse requires FITS VERSION=3; got {version}."
             )
@@ -193,13 +173,22 @@ class InstrumentResponse:
         ZA = _read_complex(fits, "ZA", "Ohm")
         Rsky = _read_complex(fits, "Rsky", "Ohm")
         Rmoon = _read_complex(fits, "Rmoon", "Ohm")
+        names = _hdu_names(fits)
+        Vsource = (
+            _read_complex(fits, "Vsource", "V")
+            if "vsource_real" in names
+            else None
+        )
+        Zref = (
+            _read_unit_checked(fits, "Zref", "Ohm")
+            if "zref" in names
+            else None
+        )
         fits.close()
         if not np.all(np.isfinite(H_theta)):
             raise ValueError("H_theta contains non-finite values.")
         if not np.all(np.isfinite(H_phi)):
             raise ValueError("H_phi contains non-finite values.")
-        if validated:
-            _validate_physical_matrices(ZA, Rsky, Rmoon)
         self.H_theta = jnp.asarray(H_theta)
         self.H_phi = jnp.asarray(H_phi)
         self.ZA = jnp.asarray(ZA)
@@ -220,21 +209,42 @@ class InstrumentResponse:
         self.freq_min = float(self.freq[0])
         self.freq_max = float(self.freq[-1])
         self._validate()
-        if "CONTENT" in header:
-            self.content_hash = str(header["CONTENT"])
-        else:
-            self.content_hash = _content_hash(
-                (
-                    self.freq,
-                    self.theta_deg,
-                    self.phi_deg,
-                    H_theta,
-                    H_phi,
-                    ZA,
-                )
+        if validated:
+            field_rsky, _ = compute_sky_moon_resistance(
+                self.freq,
+                self.theta_deg,
+                self.phi_deg,
+                H_theta,
+                H_phi,
+                ZA,
             )
+            validate_response_matrices(
+                ZA,
+                Rsky,
+                Rmoon,
+                field_rsky=field_rsky,
+            )
+        computed_hash = response_payload_hash(
+            freq=self.freq,
+            theta_deg=self.theta_deg,
+            phi_deg=self.phi_deg,
+            H_theta=H_theta,
+            H_phi=H_phi,
+            ZA=ZA,
+            Rsky=Rsky,
+            Rmoon=Rmoon,
+            Vsource=Vsource,
+            Zref=Zref,
+            metadata=header,
+        )
+        if "CONTENT" in header and str(header["CONTENT"]) != computed_hash:
+            raise ValueError(
+                "Response CONTENT hash does not match the persisted payload."
+            )
+        self.content_hash = computed_hash
         self._alm_cache = {}
         self._transform_count = 0
+        self.transform_memory_budget_bytes = _transform_memory_budget()
 
     @classmethod
     def from_arrays(
@@ -269,15 +279,10 @@ class InstrumentResponse:
         if validated is None:
             validated = bool(obj.header.get("VALIDATED", False))
         obj.header.setdefault("VERSION", 3)
-        obj.header.setdefault("VALIDATED", validated)
+        obj.header["VALIDATED"] = bool(validated)
         obj.validated = bool(validated)
         if obj.validated:
             _validate_provenance(obj.header)
-            _validate_physical_matrices(
-                obj.ZA,
-                obj.Rsky_native,
-                obj.Rmoon_native,
-            )
         obj.id = str(obj.header.get("PORTS", "0123"))
         obj.frame = str(
             obj.header.get("COORDSYS", "instrument-topocentric")
@@ -295,9 +300,9 @@ class InstrumentResponse:
         obj.freq_min = float(obj.freq[0])
         obj.freq_max = float(obj.freq[-1])
         obj._validate()
-        try:
-            obj.content_hash = _content_hash(
-                (
+        if obj.validated:
+            try:
+                field_rsky, _ = compute_sky_moon_resistance(
                     obj.freq,
                     obj.theta_deg,
                     obj.phi_deg,
@@ -305,6 +310,29 @@ class InstrumentResponse:
                     obj.H_phi,
                     obj.ZA,
                 )
+            except jax.errors.TracerArrayConversionError as error:
+                raise ValueError(
+                    "Traced in-memory response overrides must pass "
+                    "validated=False; VALIDATED=True requires host-side "
+                    "field/matrix validation."
+                ) from error
+            validate_response_matrices(
+                obj.ZA,
+                obj.Rsky_native,
+                obj.Rmoon_native,
+                field_rsky=field_rsky,
+            )
+        try:
+            obj.content_hash = response_payload_hash(
+                freq=obj.freq,
+                theta_deg=obj.theta_deg,
+                phi_deg=obj.phi_deg,
+                H_theta=obj.H_theta,
+                H_phi=obj.H_phi,
+                ZA=obj.ZA,
+                Rsky=obj.Rsky_native,
+                Rmoon=obj.Rmoon_native,
+                metadata=obj.header,
             )
         except jax.errors.TracerArrayConversionError:
             # Traced overrides have no stable byte representation. Their
@@ -312,6 +340,7 @@ class InstrumentResponse:
             obj.content_hash = "differentiable-in-memory"
         obj._alm_cache = {}
         obj._transform_count = 0
+        obj.transform_memory_budget_bytes = _transform_memory_budget()
         return obj
 
     @property
@@ -323,6 +352,22 @@ class InstrumentResponse:
         return self.Rmoon_native
 
     def _validate(self):
+        if self.frame.strip().lower() not in {
+            "instrument-topocentric",
+            "topo",
+        }:
+            raise ValueError(
+                "Instrument response frame must be "
+                "'instrument-topocentric' (alias 'topo')."
+            )
+        if self.tangent_basis.strip().lower() not in {
+            "e_theta,e_phi",
+            "theta-phi",
+        }:
+            raise ValueError(
+                "Instrument response tangent basis must be "
+                "'e_theta,e_phi' (alias 'theta-phi')."
+            )
         if self.freq.ndim != 1 or self.freq.size == 0:
             raise ValueError("Response frequency grid must be one-dimensional.")
         if not np.all(np.isfinite(self.freq)):
@@ -399,6 +444,7 @@ class InstrumentResponse:
                 )
             ),
             self.content_hash,
+            self.transform_memory_budget_bytes,
         )
         return children, aux
 
@@ -415,6 +461,7 @@ class InstrumentResponse:
             tangent_basis,
             header_items,
             content_hash,
+            transform_memory_budget_bytes,
         ) = aux
         H_theta, H_phi, ZA, Rsky, Rmoon = children
         obj = cls.__new__(cls)
@@ -433,6 +480,7 @@ class InstrumentResponse:
         obj.tangent_basis = tangent_basis
         obj.header = dict(header_items)
         obj.content_hash = content_hash
+        obj.transform_memory_budget_bytes = transform_memory_budget_bytes
         obj.nports = 4
         obj.pairs = PORT_PAIRS
         obj.theta = jnp.asarray(np.radians(obj.theta_deg))
@@ -472,13 +520,51 @@ class InstrumentResponse:
 
     def all_pair_stokes_maps(self, freq_ndx=None):
         """Return maps with layout pair, frequency, IQUV, theta, phi."""
+        return self.pair_stokes_maps_for_pairs(
+            self.pairs,
+            freq_ndx=freq_ndx,
+        )
+
+    def pair_stokes_maps_for_pairs(self, pairs, freq_ndx=None):
+        """Return maps for an ordered subset of unique port pairs."""
+        pairs = tuple(tuple(pair) for pair in pairs)
         return jnp.stack(
             [
                 self.pair_stokes_maps(a, b, freq_ndx=freq_ndx)
-                for a, b in self.pairs
+                for a, b in pairs
             ],
             axis=0,
         )
+
+    def _transform_chunk_shape(self, lmax):
+        """Choose pair/frequency chunks under the transform memory budget."""
+        full_theta = 2 * (self.Ntheta - 1) + 1
+        unique_phi = self.Nphi - 1
+        map_elements = 4 * full_theta * unique_phi
+        alm_elements = 4 * (int(lmax) + 1) * (2 * int(lmax) + 1)
+        itemsize = np.dtype(self.H_theta.dtype).itemsize
+        # Account for the input, output, spin workspaces, and compiler
+        # temporaries. This is intentionally conservative.
+        estimated_per_pair_frequency = (
+            map_elements + alm_elements
+        ) * itemsize * 6
+        pair_chunk = min(
+            len(self.pairs),
+            max(
+                1,
+                self.transform_memory_budget_bytes
+                // max(estimated_per_pair_frequency, 1),
+            ),
+        )
+        frequency_chunk = min(
+            self.Nfreq,
+            max(
+                1,
+                self.transform_memory_budget_bytes
+                // max(estimated_per_pair_frequency * pair_chunk, 1),
+            ),
+        )
+        return int(pair_chunk), int(frequency_chunk)
 
     def _full_sphere_maps(self, maps):
         phi_has_wrap = np.isclose(
@@ -497,7 +583,10 @@ class InstrumentResponse:
         if not np.allclose(np.diff(self.theta_deg), step):
             raise ValueError("Response theta grid must be uniform.")
         full_count = int(round(180.0 / step)) + 1
-        full = jnp.zeros(maps.shape[:-2] + (full_count, maps.shape[-1]), dtype=maps.dtype)
+        full = jnp.zeros(
+            maps.shape[:-2] + (full_count, maps.shape[-1]),
+            dtype=maps.dtype,
+        )
         return full.at[..., : self.Ntheta, :].set(maps)
 
     def pair_stokes_alms_native(self, lmax, source_indices):
@@ -518,31 +607,60 @@ class InstrumentResponse:
             if (int(lmax), int(index)) not in self._alm_cache
         ]
         if missing:
-            maps = self._full_sphere_maps(
-                self.all_pair_stokes_maps(np.asarray(missing, dtype=np.int32))
-            )
-            pair_beam = cro.PairStokesBeam(
-                maps,
-                self.freq[missing],
-                self.pairs,
-                sampling="mwss",
-                convention="IAU",
-                units="m^2",
-                frame="topo",
-                tangent_basis=self.tangent_basis,
-                horizon=jnp.asarray(
-                    np.linspace(0.0, 180.0, maps.shape[-2])[:, None]
-                    <= 90.0
-                ),
-            )
-            if lmax > pair_beam.lmax:
-                raise ValueError(
-                    f"Requested lmax={lmax} exceeds response limit "
-                    f"{pair_beam.lmax}."
+            pair_chunk, frequency_chunk = self._transform_chunk_shape(lmax)
+            transformed = {}
+            for frequency_start in range(0, len(missing), frequency_chunk):
+                frequency_indices = missing[
+                    frequency_start : frequency_start + frequency_chunk
+                ]
+                for pair_start in range(0, len(self.pairs), pair_chunk):
+                    selected_pairs = self.pairs[
+                        pair_start : pair_start + pair_chunk
+                    ]
+                    maps = self._full_sphere_maps(
+                        self.pair_stokes_maps_for_pairs(
+                            selected_pairs,
+                            np.asarray(frequency_indices, dtype=np.int32),
+                        )
+                    )
+                    pair_beam = cro.PairStokesBeam(
+                        maps,
+                        self.freq[frequency_indices],
+                        selected_pairs,
+                        sampling="mwss",
+                        convention="IAU",
+                        units="m^2",
+                        frequency_units="MHz",
+                        frame="topo",
+                        tangent_basis=self.tangent_basis,
+                        baseline_direction="a<=b",
+                        visibility_definition="<v_a v_b*>",
+                        horizon=jnp.asarray(
+                            np.linspace(0.0, 180.0, maps.shape[-2])[:, None]
+                            <= 90.0
+                        ),
+                    )
+                    if lmax > pair_beam.lmax:
+                        raise ValueError(
+                            f"Requested lmax={lmax} exceeds response limit "
+                            f"{pair_beam.lmax}."
+                        )
+                    alms = pair_beam.compute_alm(lmax=int(lmax))
+                    for frequency_position, native_index in enumerate(
+                        frequency_indices
+                    ):
+                        for pair_position in range(len(selected_pairs)):
+                            transformed[
+                                (native_index, pair_start + pair_position)
+                            ] = alms[pair_position, frequency_position]
+            for native_index in missing:
+                self._alm_cache[(int(lmax), native_index)] = jnp.stack(
+                    [
+                        transformed[(native_index, pair_index)]
+                        for pair_index in range(len(self.pairs))
+                    ],
+                    axis=0,
                 )
-            alms = pair_beam.compute_alm(lmax=int(lmax))
-            for position, native_index in enumerate(missing):
-                self._alm_cache[(int(lmax), native_index)] = alms[:, position]
             self._transform_count += len(missing)
         return jnp.stack(
             [
@@ -607,15 +725,16 @@ class InstrumentResponse:
         result.H_phi = rotate_field(self.H_phi)
         result._alm_cache = {}
         result._transform_count = 0
-        result.content_hash = _content_hash(
-            (
-                result.freq,
-                result.theta_deg,
-                result.phi_deg,
-                np.asarray(result.H_theta),
-                np.asarray(result.H_phi),
-                np.asarray(result.ZA),
-            )
+        result.content_hash = response_payload_hash(
+            freq=result.freq,
+            theta_deg=result.theta_deg,
+            phi_deg=result.phi_deg,
+            H_theta=result.H_theta,
+            H_phi=result.H_phi,
+            ZA=result.ZA,
+            Rsky=result.Rsky_native,
+            Rmoon=result.Rmoon_native,
+            metadata=result.header,
         )
         return result
 

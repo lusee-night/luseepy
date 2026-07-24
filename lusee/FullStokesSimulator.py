@@ -26,13 +26,15 @@ from .LabeledArray import FRAME_TOPO, LabeledArray
 def _as_time_array(times):
     if isinstance(times, Time):
         result = times
+        scale_assumed = False
     else:
         result = Time(times)
+        scale_assumed = True
     if result.isscalar:
         result = Time([result])
     if len(result) == 0:
         raise ValueError("times must contain at least one timestamp.")
-    return result
+    return result, scale_assumed
 
 
 def _frame_name(frame):
@@ -41,6 +43,7 @@ def _frame_name(frame):
         "mcmf": "mcmf",
         "galactic": "galactic",
         "equatorial": "fk5",
+        "fk5": "fk5",
         "icrs": "fk5",
         "topo": "topo",
         "instrument-topocentric": "topo",
@@ -48,6 +51,72 @@ def _frame_name(frame):
     if value not in aliases:
         raise ValueError(f"Unsupported sky frame {frame!r}.")
     return aliases[value]
+
+
+def _canonical_tangent_basis(value):
+    aliases = {
+        "theta-phi": "theta-phi",
+        "e_theta,e_phi": "theta-phi",
+    }
+    normalized = str(value).strip().lower()
+    if normalized not in aliases:
+        raise ValueError(
+            f"Unsupported tangent basis {value!r}; expected "
+            "'theta-phi' (alias 'e_theta,e_phi')."
+        )
+    return aliases[normalized]
+
+
+def _validate_polarized_sky_metadata(sky_model):
+    required = (
+        "units",
+        "frame",
+        "convention",
+        "stokes",
+        "tangent_basis",
+        "frequency_units",
+    )
+    missing = [name for name in required if not hasattr(sky_model, name)]
+    if missing:
+        raise ValueError(
+            "Polarized sky is missing required metadata: "
+            + ", ".join(missing)
+        )
+    if str(sky_model.units).strip() != "K":
+        raise ValueError(
+            f"Polarized sky units must be 'K'; got {sky_model.units!r}."
+        )
+    if str(sky_model.frequency_units).strip() != "MHz":
+        raise ValueError(
+            "Polarized sky frequency_units must be 'MHz'; got "
+            f"{sky_model.frequency_units!r}."
+        )
+    if str(sky_model.convention).upper() != "IAU":
+        raise ValueError("Polarized sky convention must be canonical IAU.")
+    if tuple(sky_model.stokes) != ("I", "Q", "U", "V"):
+        raise ValueError("Polarized sky Stokes order must be exactly IQUV.")
+    _canonical_tangent_basis(sky_model.tangent_basis)
+    _frame_name(sky_model.frame)
+
+
+def _validate_instrument_metadata(beam):
+    if beam.nports != 4 or tuple(beam.pairs) != tuple(
+        (a, b) for a in range(4) for b in range(a, 4)
+    ):
+        raise ValueError(
+            "Instrument response must contain the ten ordered a<=b pairs."
+        )
+    _frame_name(beam.frame)
+    if _frame_name(beam.frame) != "topo":
+        raise ValueError("Instrument response frame must be topocentric.")
+    _canonical_tangent_basis(beam.tangent_basis)
+
+
+def _contains_tracer(value):
+    return any(
+        isinstance(leaf, jax.core.Tracer)
+        for leaf in jax.tree_util.tree_leaves(value)
+    )
 
 
 def _interpolate_frequency_axis(array, frequency_map, axis):
@@ -138,12 +207,14 @@ def prepare_polarized_sky_alms(sky_model, target_freqs, lmax):
     import croissant as cro
 
     if hasattr(sky_model, "polarized_alm_at_freq"):
+        _validate_polarized_sky_metadata(sky_model)
         result = jnp.asarray(
             sky_model.polarized_alm_at_freq(target_freqs, lmax=lmax)
         )
     elif hasattr(cro, "PolarizedSky") and isinstance(
         sky_model, cro.PolarizedSky
     ):
+        _validate_polarized_sky_metadata(sky_model)
         source_freqs = np.asarray(sky_model.freqs, dtype=np.float64)
         frequency_map = FrequencyMap.build(target_freqs, source_freqs)
         source_indices = frequency_map.source_indices
@@ -155,6 +226,7 @@ def prepare_polarized_sky_alms(sky_model, target_freqs, lmax):
             convention=sky_model.convention,
             stokes=sky_model.stokes,
             units=sky_model.units,
+            frequency_units=sky_model.frequency_units,
             frame=sky_model.frame,
             tangent_basis=sky_model.tangent_basis,
             niter=sky_model._niter,
@@ -196,6 +268,28 @@ def _rotate_sky_to_topo(sky_alms, sky_frame, obs, time, lmax):
     )
 
 
+@jax.jit
+def _topo_rotate_contract_kernel(
+    pair_alms,
+    sky_alms,
+    rotations,
+    dl_arrays,
+):
+    """Rotate and contract every timestamp in one compiled vmap."""
+    import croissant as cro
+
+    sky_topo = cro.rotations.rotate_alm_batched(
+        sky_alms,
+        rotations,
+        dl_arrays,
+    )
+    return jnp.einsum(
+        "tfclm,pfclm->tfp",
+        sky_topo.conjugate(),
+        pair_alms,
+    )
+
+
 class FullStokesSimulatorBase:
     """Shared response preparation and covariance postprocessing."""
 
@@ -214,6 +308,7 @@ class FullStokesSimulatorBase:
     ):
         if not isinstance(beam, InstrumentResponse):
             raise TypeError("beam must be one four-port InstrumentResponse.")
+        _validate_instrument_metadata(beam)
         self.obs = obs
         self.beam = beam
         self.sky_model = sky_model
@@ -227,7 +322,9 @@ class FullStokesSimulatorBase:
         else:
             target_freq = freq
             removed = {}
-        self.freq = np.asarray(target_freq, dtype=np.float64).reshape(-1)
+        self.freq = np.asarray(target_freq, dtype=np.float64)
+        if self.freq.ndim != 1:
+            raise ValueError("Target frequency array must be one-dimensional.")
         self.default_frequency_removals = removed
         if self.freq.size == 0:
             raise ValueError("Target frequency array must be nonempty.")
@@ -248,6 +345,8 @@ class FullStokesSimulatorBase:
         self.result_beam = None
         self.result_receiver = None
         self.result_sky = None
+        self.result_scale_assumed = None
+        self.result_clock_source = None
 
     @property
     def result_labeled(self):
@@ -260,6 +359,7 @@ class FullStokesSimulatorBase:
         )
 
     def prepare_pair_alms(self, beam):
+        _validate_instrument_metadata(beam)
         pair_alms, frequency_map = beam.pair_stokes_alms(
             self.lmax,
             self.freq,
@@ -274,6 +374,15 @@ class FullStokesSimulatorBase:
             ZA + jnp.swapaxes(ZA.conjugate(), -1, -2)
         )
         Rmoon = dissipative - Rsky
+        if not _contains_tracer(Rmoon):
+            moon = np.asarray(Rmoon)
+            scale = max(1.0, float(np.max(np.abs(moon))))
+            minimum = float(np.min(np.linalg.eigvalsh(moon)))
+            if minimum < -1e-8 * scale:
+                raise ValueError(
+                    "Target-derived Rmoon has a negative eigenvalue "
+                    f"({minimum:.6g} Ohm)."
+                )
         return pair_alms, ZA, Rsky, Rmoon
 
     def _convolve(self, pair_alms, sky_alms, sky_frame, times):
@@ -288,12 +397,15 @@ class FullStokesSimulatorBase:
         receiver=None,
     ):
         """Simulate exact supplied timestamps and return a bare array."""
-        times = _as_time_array(self.obs.times if times is None else times)
+        times, scale_assumed = _as_time_array(
+            self.obs.times if times is None else times
+        )
         effective_sky = self.sky_model if sky is None else sky
         effective_beam = self.beam if beam is None else beam
         effective_receiver = self.receiver if receiver is None else receiver
         if not isinstance(effective_beam, InstrumentResponse):
             raise TypeError("beam override must be an InstrumentResponse.")
+        _validate_instrument_metadata(effective_beam)
 
         pair_alms, ZA, Rsky, Rmoon = self.prepare_pair_alms(effective_beam)
         sky_alms = prepare_polarized_sky_alms(
@@ -321,6 +433,9 @@ class FullStokesSimulatorBase:
         covariance, M = load_covariance(open_covariance, ZA, ZL)
         packed, labels = pack_covariance(covariance, self.products)
 
+        if _contains_tracer(packed):
+            return packed
+
         self.result = packed
         self.result_times = times.copy()
         self.product_labels = labels
@@ -334,6 +449,12 @@ class FullStokesSimulatorBase:
         self.result_beam = effective_beam
         self.result_receiver = effective_receiver
         self.result_sky = effective_sky
+        self.result_scale_assumed = scale_assumed
+        self.result_clock_source = (
+            "astropy-default-coercion"
+            if scale_assumed
+            else "supplied-astropy-time"
+        )
         return self.result
 
     def temperature_equivalent(self):
@@ -366,8 +487,8 @@ class FullStokesSimulatorBase:
             "FREQINT": "linear-native-alm",
             "TIMESYS": self.result_times.scale.upper(),
             "TIMEUNIT": "d",
-            "CLOCKSRC": "astropy/lunarsky",
-            "SCALEASM": False,
+            "CLOCKSRC": self.result_clock_source,
+            "SCALEASM": bool(self.result_scale_assumed),
             "RECMODEL": type(receiver).__name__,
             "RECCHANS": ",".join(
                 getattr(receiver, "channel_map", ())
@@ -404,14 +525,21 @@ class FullStokesSimulatorBase:
             header={"BUNIT": "MHz"},
         )
         fits.write(
-            np.asarray(self.result_times.mjd, dtype=np.float64),
+            np.stack(
+                (
+                    np.asarray(self.result_times.jd1, dtype=np.float64),
+                    np.asarray(self.result_times.jd2, dtype=np.float64),
+                ),
+                axis=-1,
+            ),
             extname="time",
             header={
                 "BUNIT": "d",
                 "TIMESYS": self.result_times.scale.upper(),
                 "TIMEUNIT": "d",
-                "CLOCKSRC": "astropy/lunarsky",
-                "SCALEASM": False,
+                "TIMEFMT": "JD1+JD2",
+                "CLOCKSRC": self.result_clock_source,
+                "SCALEASM": bool(self.result_scale_assumed),
             },
         )
         product_table = np.zeros(
@@ -422,7 +550,7 @@ class FullStokesSimulatorBase:
         fits.write_table(
             product_table,
             extname="products",
-            header={"BUNIT": "1"},
+            header={"TUNIT1": "1"},
         )
 
         def write_complex(name, values, units):
@@ -541,26 +669,43 @@ class FullStokesTopoJaxSimulator(FullStokesSimulatorBase):
     engine = "topo"
 
     def _convolve(self, pair_alms, sky_alms, sky_frame, times):
-        values = []
-        for time in times:
-            sky_topo = _rotate_sky_to_topo(
-                sky_alms,
-                sky_frame,
-                self.obs,
-                time,
-                self.lmax,
-            )
+        import croissant as cro
+        from lunarsky import LunarTopo
+
+        source = _frame_name(sky_frame)
+        if source == "topo":
             pair_value = jnp.einsum(
                 "fclm,pfclm->pf",
-                sky_topo.conjugate(),
+                sky_alms.conjugate(),
                 pair_alms,
             )
-            values.append(jnp.swapaxes(pair_value, 0, 1))
+            values = jnp.broadcast_to(
+                jnp.swapaxes(pair_value, 0, 1)[None],
+                (len(times), pair_value.shape[1], pair_value.shape[0]),
+            )
+        else:
+            rotations = []
+            dl_arrays = []
+            for time in times:
+                topo = LunarTopo(obstime=time, location=self.obs.loc)
+                rotation, dl_array = cro.rotations.generate_euler_dl(
+                    self.lmax,
+                    source,
+                    topo,
+                )
+                rotations.append(jnp.asarray(rotation))
+                dl_arrays.append(jnp.asarray(dl_array))
+            values = _topo_rotate_contract_kernel(
+                pair_alms,
+                sky_alms,
+                jnp.stack(rotations),
+                jnp.stack(dl_arrays),
+            )
         self.result_epoch_tdb_jd = float(times[0].tdb.jd)
         self.elapsed_tdb_seconds = jnp.asarray(
             (times.tdb - times[0].tdb).to_value(u.s)
         )
-        return jnp.stack(values, axis=0)
+        return values
 
 
 CovarianceCroSimulator = FullStokesCroSimulator
