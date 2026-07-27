@@ -38,19 +38,47 @@ def _as_time_array(times):
 
 
 def _frame_name(frame):
-    value = str(frame).lower()
+    value = str(frame).strip().lower()
+    if value == "mcmf":
+        raise ValueError(
+            "MCMF sky input is not supported by the full-Stokes "
+            "simulators. MCMF is body-fixed and cannot be relabeled as "
+            "MEPA; provide an epoch-dependent transport or an explicitly "
+            "MEPA/topocentric sky."
+        )
     aliases = {
-        "mcmf": "mcmf",
         "galactic": "galactic",
         "equatorial": "fk5",
         "fk5": "fk5",
         "icrs": "fk5",
+        "mepa": "mepa",
         "topo": "topo",
         "instrument-topocentric": "topo",
     }
     if value not in aliases:
         raise ValueError(f"Unsupported sky frame {frame!r}.")
     return aliases[value]
+
+
+def _sky_frame(sky_model):
+    """Return the authoritative sky frame and reject contradictory metadata."""
+    coord = getattr(sky_model, "coord", None)
+    frame = getattr(sky_model, "frame", None)
+    if coord is None and frame is None:
+        raise ValueError(
+            "Sky input must declare an authoritative coord or frame."
+        )
+    authoritative = coord if coord is not None else frame
+    result = _frame_name(authoritative)
+    if coord is not None and frame is not None:
+        frame_result = _frame_name(frame)
+        if frame_result != result:
+            raise ValueError(
+                "Polarized sky has contradictory coordinate metadata: "
+                f"coord={coord!r}, frame={frame!r}. luseepy treats coord "
+                "as authoritative when it is present."
+            )
+    return result
 
 
 def _canonical_tangent_basis(value):
@@ -70,11 +98,9 @@ def _canonical_tangent_basis(value):
 def _validate_polarized_sky_metadata(sky_model):
     required = (
         "units",
-        "frame",
         "convention",
         "stokes",
         "tangent_basis",
-        "frequency_units",
     )
     missing = [name for name in required if not hasattr(sky_model, name)]
     if missing:
@@ -86,17 +112,18 @@ def _validate_polarized_sky_metadata(sky_model):
         raise ValueError(
             f"Polarized sky units must be 'K'; got {sky_model.units!r}."
         )
-    if str(sky_model.frequency_units).strip() != "MHz":
+    frequency_units = getattr(sky_model, "frequency_units", "MHz")
+    if str(frequency_units).strip() != "MHz":
         raise ValueError(
             "Polarized sky frequency_units must be 'MHz'; got "
-            f"{sky_model.frequency_units!r}."
+            f"{frequency_units!r}."
         )
     if str(sky_model.convention).upper() != "IAU":
         raise ValueError("Polarized sky convention must be canonical IAU.")
     if tuple(sky_model.stokes) != ("I", "Q", "U", "V"):
         raise ValueError("Polarized sky Stokes order must be exactly IQUV.")
     _canonical_tangent_basis(sky_model.tangent_basis)
-    _frame_name(sky_model.frame)
+    _sky_frame(sky_model)
 
 
 def _validate_instrument_metadata(beam):
@@ -226,8 +253,6 @@ def prepare_polarized_sky_alms(sky_model, target_freqs, lmax):
             convention=sky_model.convention,
             stokes=sky_model.stokes,
             units=sky_model.units,
-            frequency_units=sky_model.frequency_units,
-            frame=sky_model.frame,
             tangent_basis=sky_model.tangent_basis,
             niter=sky_model._niter,
         )
@@ -246,26 +271,6 @@ def prepare_polarized_sky_alms(sky_model, target_freqs, lmax):
             f"{result.shape}."
         )
     return result
-
-
-def _rotate_sky_to_topo(sky_alms, sky_frame, obs, time, lmax):
-    import croissant as cro
-    from lunarsky import LunarTopo
-
-    source = _frame_name(sky_frame)
-    if source == "topo":
-        return sky_alms
-    topo = LunarTopo(obstime=time, location=obs.loc)
-    rotation, dl_array = cro.rotations.generate_euler_dl(
-        lmax,
-        source,
-        topo,
-    )
-    return cro.rotations.rotate_alm(
-        sky_alms,
-        rotation,
-        dl_array=dl_array,
-    )
 
 
 @jax.jit
@@ -408,15 +413,11 @@ class FullStokesSimulatorBase:
         _validate_instrument_metadata(effective_beam)
 
         pair_alms, ZA, Rsky, Rmoon = self.prepare_pair_alms(effective_beam)
+        sky_frame = _sky_frame(effective_sky)
         sky_alms = prepare_polarized_sky_alms(
             effective_sky,
             self.freq,
             self.lmax,
-        )
-        sky_frame = getattr(
-            effective_sky,
-            "frame",
-            getattr(effective_sky, "coord", None),
         )
         pair_integrals = self._convolve(
             pair_alms,
@@ -495,13 +496,7 @@ class FullStokesSimulatorBase:
             ),
             "RECSRC": str(getattr(receiver, "source", None) or "analytic"),
             "SKYMODEL": type(sky).__name__,
-            "SKYFRAME": str(
-                getattr(
-                    sky,
-                    "frame",
-                    getattr(sky, "coord", "unknown"),
-                )
-            ),
+            "SKYFRAME": _sky_frame(sky),
             "SKYSRC": str(
                 getattr(
                     sky,
@@ -636,6 +631,8 @@ class FullStokesCroSimulator(FullStokesSimulatorBase):
             )
             if source == "galactic":
                 sky_work = cro.rotations.gal2mepa(sky_alms, et=et)
+            elif source == "mepa":
+                sky_work = sky_alms
             else:
                 sky_rotation, sky_dl = cro.rotations.generate_euler_dl(
                     self.lmax,
@@ -684,6 +681,12 @@ class FullStokesTopoJaxSimulator(FullStokesSimulatorBase):
                 (len(times), pair_value.shape[1], pair_value.shape[0]),
             )
         else:
+            reference_et = None
+            if source == "mepa":
+                from .spice_utils import ensure_lunarsky_moon_frame
+
+                ensure_lunarsky_moon_frame()
+                reference_et = cro.rotations.jd_to_et(times[0].tdb.jd)
             rotations = []
             dl_arrays = []
             for time in times:
@@ -692,6 +695,7 @@ class FullStokesTopoJaxSimulator(FullStokesSimulatorBase):
                     self.lmax,
                     source,
                     topo,
+                    et=reference_et,
                 )
                 rotations.append(jnp.asarray(rotation))
                 dl_arrays.append(jnp.asarray(dl_array))

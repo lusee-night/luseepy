@@ -234,7 +234,6 @@ def compute_sky_moon_resistance(
                 sampling="mwss",
                 convention="IAU",
                 units="m^2",
-                frequency_units="MHz",
                 frame="topo",
                 tangent_basis="theta-phi",
                 baseline_direction="a<=b",

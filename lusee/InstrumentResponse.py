@@ -630,7 +630,6 @@ class InstrumentResponse:
                         sampling="mwss",
                         convention="IAU",
                         units="m^2",
-                        frequency_units="MHz",
                         frame="topo",
                         tangent_basis=self.tangent_basis,
                         baseline_direction="a<=b",

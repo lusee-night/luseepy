@@ -27,6 +27,20 @@ Croissant transforms only the unique native bracket endpoints required by a
 coefficients. Irregular, unsorted, duplicate in-range target arrays are
 preserved exactly; extrapolation is rejected.
 
+Full-Stokes sky coordinates are explicit. `coord` is authoritative when
+present; contradictory `coord`/`frame` metadata is rejected. On the
+Croissant path, galactic and equatorial skies are transported to MEPA using
+the observation-start TDB epoch. Native MEPA skies are assumed to use that
+same reference epoch and are not rotated MEPA-to-MEPA. Instrument-fixed
+topocentric skies stay on the no-global-rotation path. Body-fixed MCMF input
+is rejected until an epoch-dependent transport is implemented.
+
+Croissant frequency arrays are bare values. At the luseepy boundary they are
+defined to be MHz, matching response FITS `BUNIT=MHz` and simulator target
+frequencies. luseepy rejects non-MHz unit metadata when a custom provider
+supplies it; it does not add unsupported `frequency_units` metadata to
+Croissant objects.
+
 Response transforms are chunked over native frequency and pair axes under a
 512 MiB default workspace budget. Set
 `LUSEE_RESPONSE_TRANSFORM_MAX_BYTES` to a positive byte count to tune this

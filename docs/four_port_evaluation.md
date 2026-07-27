@@ -2,6 +2,8 @@
 
 Evaluation date: 2026-07-23
 
+Compatibility re-evaluation: 2026-07-27
+
 Branches:
 
 - luseepy: `codex/four-port-polarization-refactor`
@@ -19,6 +21,14 @@ metadata, so `importlib.metadata` reports that version even while
 affect the imported code used here, but a local editable install of both
 checkouts is required before generating production FITS provenance.
 
+For the 2026-07-27 compatibility re-evaluation,
+`croissant.__file__` resolved to the sibling checkout at rebased commit
+`6bdc17f` and distribution/package version `6.0.0`. luseepy now treats
+`coord` as authoritative, supports native topocentric input through the
+companion branch, rejects MCMF and contradictory frame metadata, and treats
+bare Croissant frequency values as MHz at its public boundary without
+inventing a `frequency_units` attribute.
+
 ## Review outcome
 
 An independent `@review` found issues in validation, memory scaling,
@@ -31,9 +41,10 @@ blockers it identified:
 - The canonical response hash covers every persisted response array,
   including optional source/reference data, plus physical convention and
   provenance metadata at the precision actually written.
-- Response and polarized-sky units, frames, tangent basis, IAU/IQUV order,
-  pair order, baseline direction, and visibility definition are checked at
-  public boundaries.
+- Response and polarized-sky units, authoritative coordinates, tangent basis,
+  IAU/IQUV order, pair order, baseline direction, and visibility definition
+  are checked at public boundaries. Bare Croissant frequencies follow
+  luseepy's documented MHz contract.
 - Response transforms are chunked over native frequency and pair under a
   configurable 512 MiB workspace budget. Croissant only retains a dense
   low-bandlimit HEALPix operator when one matrix fits its configurable

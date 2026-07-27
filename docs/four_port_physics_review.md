@@ -2,12 +2,22 @@
 
 Date: 2026-07-23
 
+Re-evaluated: 2026-07-27
+
 Reviewed revisions:
 
 - luseepy `codex/four-port-polarization-refactor` at
   `4ce6f6e3da51b89f3f28b4aff81dc46094397a8c`
 - companion Croissant `codex/full-stokes-pair-response` at
   `4677c7e7d7fd52183bd5c2b70a24ce391cd7cef3`
+
+The 2026-07-27 re-evaluation used Croissant
+`codex/full-stokes-pair-response-rebased` at `6bdc17f`, followed by the
+native-topocentric compatibility change on
+`codex/full-stokes-pair-response-topo`, together with luseepy
+`codex/four-port-croissant-rebased`. Findings 1, 6, and 7 below are resolved
+by that combined update. The original measurements remain in this document
+to record what failed on the revisions reviewed on 2026-07-23.
 
 The runtime checks used the local CUDA GPU with JAX x64 enabled and placed
 `../croissant/src` first on `PYTHONPATH`. They did not use Lawrencium or the
@@ -18,21 +28,21 @@ and metadata conclusions below.
 ## Verdict
 
 The central electrodynamics and coupled-network formulation are sound, but
-the reviewed revisions are not scientifically release-ready. Two issues are
-release blockers: local celestial rotations contain an unhandled reflection,
-and peak/RMS response conversion likely reduces sky power by a factor of two.
-The map-making noise model, finite-bandlimit covariance physicality, and
-response-validation gaps also need resolution before scientific use.
+the revisions originally reviewed on 2026-07-23 were not scientifically
+release-ready. The rebased Croissant branch and current luseepy compatibility
+changes have since corrected the local NEU-to-ENU reflection, coordinate
+authority, and instrument-rotation convention findings. The peak/RMS response
+conversion, map-making noise model, finite-bandlimit covariance physicality,
+and response-validation gaps still need resolution before scientific use.
 
-In particular, the current revisions should not be used for:
+In particular, the remaining unresolved revisions should not be used for:
 
-- polarized celestial predictions;
 - absolute calibration from peak-labelled solver exports; or
 - quantitative map-making uncertainties.
 
 ## Findings
 
-### 1. Blocker: `LunarTopo` rotations include an unhandled reflection
+### 1. Resolved on rebase: `LunarTopo` reflection
 
 Croissant's
 [`get_rot_mat`](../../croissant/src/croissant/rotations.py#L114)
@@ -110,6 +120,15 @@ Required resolution:
    references.
 4. Apply the same audit to Earth `AltAz`, which has an analogous local-chart
    convention.
+
+Resolution on 2026-07-27: rebased Croissant converts both `LunarTopo` and
+Earth `AltAz` from their native left-handed North-East-Up chart to the
+right-handed East-North-Up convention before Euler decomposition. Its
+rotation tests now require orthogonality and determinant `+1` in both
+directions. The luseepy Croissant and independent topocentric engines agree
+again on the celestial full-Stokes regression. The North/East reflection
+claim was valid for the originally reviewed branch but is fixed in the
+rebase.
 
 ### 2. Blocker: peak/RMS conversion likely halves sky covariance
 
@@ -303,22 +322,25 @@ Production release validation should include:
 4. reciprocity and passivity gates; and
 5. a conditioning threshold justified by retained numerical precision.
 
-### 6. Medium: coordinate metadata can be contradictory
+### 6. Resolved: one authoritative sky coordinate
 
-Croissant
-[`PolarizedSky`](../../croissant/src/croissant/polarization.py#L323)
-stores both `coord` and `frame`. Its constructor allows, for example,
-`coord="mcmf"` with `frame="topo"`.
+Rebased Croissant
+[`PolarizedSky`](../../croissant/src/croissant/polarization.py) accepts
+`galactic`, `equatorial`, `mepa`, and `topo`; it does not accept `mcmf`.
+luseepy treats `coord` as authoritative whenever it is present, falls back to
+`frame` only for legacy/provider objects, and rejects contradictory
+`coord`/`frame` pairs. A genuinely body-fixed MCMF sky is rejected with an
+explicit request for epoch-dependent transport rather than being relabelled
+MEPA.
 
-[`compute_alm_eq`](../../croissant/src/croissant/polarization.py#L412)
-chooses coordinate transport from `coord`, while luseepy
-[`simulate`](../lusee/FullStokesSimulator.py#L391) chooses it from `frame`.
-The same object can therefore represent different physical skies through the
-two public paths. One attribute should be authoritative, `topo` should be
-represented explicitly where supported, and inconsistent pairs should be
-rejected.
+A native MEPA sky is not rotated MEPA-to-MEPA. A topocentric sky is analyzed
+and contracted in its local frame without a global rotation. Croissant's
+`compute_alm_eq()` rejects that topocentric transport because a bare sky
+object lacks the concrete observer location and epoch needed to define it.
+The luseepy simulator retains those observation data for paths that actually
+require global transport.
 
-### 7. Medium: whole-instrument rotation has the opposite azimuth sign
+### 7. Resolved on rebase: whole-instrument azimuth sign
 
 [`InstrumentResponse.rotate`](../lusee/InstrumentResponse.py#L707) rolls its
 maps by `-bins`. A direct harmonic diagnostic found that
@@ -328,21 +350,23 @@ maps by `-bins`. A direct harmonic diagnostic found that
 exp(+i m alpha).
 ```
 
-Croissant's documented positive
-[`beam_az_rot`](../../croissant/src/croissant/beam.py#L51) applies
+The rebased Croissant [`beam_rot`](../../croissant/src/croissant/beam.py)
+applies the same
 
 ```text
-exp(-i m alpha),
+exp(+i m alpha)
 ```
 
-corresponding to an active counter-clockwise rotation from local East toward
-North. Given the response metadata's right-handed positive-phi convention,
-these operations have opposite signs.
+phase to scalar and pair-response beams. Positive rotation is defined by the
+astronomical azimuth convention, from local North toward East. Since the
+stored ENU spherical phi coordinate increases from East toward North, this
+active North-to-East turntable rotation shifts the sampled map toward
+decreasing phi, exactly the existing `roll(..., -bins)` operation.
 
-The luseepy operation must either be documented as a coordinate rotation with
-the opposite sign, or changed to the same active whole-instrument convention.
-An analytic directional beam/source transit test should freeze the turntable
-semantics.
+The original opposite-sign claim referred to the pre-rebase azimuth-rotation
+implementation and no longer applies. luseepy must not flip its roll sign. A
+regression now checks both the analytic `exp(+i m alpha)` phase and equality
+with `PairStokesBeam(beam_rot=+alpha)`.
 
 ### 8. Medium: physical-input and projection diagnostics are incomplete
 
@@ -465,13 +489,11 @@ because receiver/load additive noise and post-JFET gain are outside scope.
 
 ## Recommended release order
 
-1. Correct and independently test the ENU/local-frame parity.
-2. Resolve the peak/RMS response contract and establish absolute solver
+1. Resolve the peak/RMS response contract and establish absolute solver
    normalization.
-3. Correct the radiometric-noise statistics and decide whether map-making
+2. Correct the radiometric-noise statistics and decide whether map-making
    supports full or explicitly approximate noise covariance.
-4. Add covariance PSD/`lmax` adequacy diagnostics.
-5. Add reciprocity, passivity, conditioning, and independent power oracles.
-6. Unify coordinate and turntable-rotation conventions.
-7. Run operational-`lmax` horizon and polarized-sky convergence tests against
+3. Add covariance PSD/`lmax` adequacy diagnostics.
+4. Add reciprocity, passivity, conditioning, and independent power oracles.
+5. Run operational-`lmax` horizon and polarized-sky convergence tests against
    direct angular quadrature.

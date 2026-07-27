@@ -1,5 +1,6 @@
 """Tests for FITS-v3 four-port instrument responses."""
 
+import croissant as cro
 import jax.numpy as jnp
 import fitsio
 import numpy as np
@@ -416,3 +417,52 @@ def test_rotation_moves_all_ports_and_keeps_wraparound():
     rotated = response.rotate(45.0)
     assert jnp.array_equal(rotated.H_theta[..., 0], rotated.H_theta[..., -1])
     assert jnp.array_equal(rotated.H_theta[..., 0], response.H_theta[..., 1])
+
+
+def test_positive_rotation_matches_croissant_north_to_east_phase():
+    arrays = make_response_arrays()
+    response = InstrumentResponse.from_arrays(
+        arrays.freq_mhz,
+        arrays.theta_deg,
+        arrays.phi_deg,
+        arrays.H_theta,
+        arrays.H_phi,
+        arrays.ZA,
+        arrays.Rsky,
+        arrays.Rmoon,
+    )
+    lmax = 2
+    rotation_deg = 45.0
+    maps = response._full_sphere_maps(
+        response.all_pair_stokes_maps([0])
+    )
+    croissant_rotated = cro.PairStokesBeam(
+        maps,
+        response.freq[[0]],
+        response.pairs,
+        sampling="mwss",
+        beam_rot=rotation_deg,
+        horizon=jnp.asarray(
+            np.linspace(0.0, 180.0, maps.shape[-2])[:, None] <= 90.0
+        ),
+    ).compute_alm(lmax=lmax)
+    unrotated = response.pair_stokes_alms_native(lmax, [0])
+    rotated = response.rotate(rotation_deg).pair_stokes_alms_native(
+        lmax,
+        [0],
+    )
+    emms = jnp.arange(-lmax, lmax + 1)
+    phase = jnp.exp(1j * emms * jnp.radians(rotation_deg))
+
+    np.testing.assert_allclose(
+        rotated,
+        unrotated * phase[None, None, None, None],
+        rtol=2e-12,
+        atol=2e-12,
+    )
+    np.testing.assert_allclose(
+        rotated,
+        croissant_rotated,
+        rtol=2e-12,
+        atol=2e-12,
+    )

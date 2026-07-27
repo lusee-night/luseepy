@@ -121,8 +121,7 @@ def main():
         sky_maps,
         native_freq,
         sampling="mwss",
-        coord="mcmf",
-        frame="topo",
+        coord="topo",
     )
     sky_native, sky_transform = timed(lambda: sky.compute_alm(lmax=lmax))
     frequency_map = FrequencyMap.build(target, native_freq)
