@@ -42,9 +42,11 @@ from .frequencies import (
     ALL_FREQUENCIES_MHZ,
     ALL_FREQUENCY_INDICES,
     FrequencyMap,
+    FrequencyPolicy,
     canonical_frequencies,
     canonical_frequency_indices,
     canonicalize_frequencies,
+    frequency_policy_from_config,
     frequencies_from_config,
     frequency_indices_from_values,
 )

@@ -43,8 +43,11 @@ class TopoNumpySimulator(SimulatorBase):
     def __init__ (self, obs, beams, sky_model, Tground = 200.0,
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None,
                   lmax = 128, cross_power = None,
-                  extra_opts = {}):
-        super().__init__(obs, beams, sky_model, Tground, combinations, freq)
+                  extra_opts = {}, *, frequency_policy = "exact"):
+        super().__init__(
+            obs, beams, sky_model, Tground, combinations, freq,
+            frequency_policy=frequency_policy,
+        )
         self.lmax = lmax
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()

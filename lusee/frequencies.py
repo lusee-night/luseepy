@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+from enum import StrEnum
+
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -24,63 +27,199 @@ ALL_FREQUENCIES_MHZ_NP.setflags(write=False)
 ALL_FREQUENCIES_MHZ = jnp.asarray(ALL_FREQUENCIES_MHZ_NP)
 
 
-@jax.tree_util.register_pytree_node_class
-class FrequencyMap:
-    """Native-index lookup + linear interpolator from a target grid to a source grid.
+class FrequencyPolicy(StrEnum):
+    """Allowed construction-time contracts for frequency alignment."""
 
-    A single object bundles the two things every simulator needs to evaluate an
-    off-grid frequency set:
-
-    1. **Index lookup** (:attr:`source_indices`): the unique native source-grid
-       indices bracketed by the target frequencies. Expensive per-frequency
-       products (beam and sky a_lm transforms) are evaluated *only* at these
-       indices -- ``get_healpix_alm(freq_ndx=fmap.source_indices)`` and
-       ``sky.get_alm(fmap.source_indices)`` -- so nothing is recomputed at
-       shared bracket endpoints or at exact on-grid hits.
-
-    2. **Interpolator**: linear blend weights mapping either the unique samples
-       (:meth:`from_unique`) or a full native-grid array (:meth:`from_native`)
-       onto the target grid. For target frequency i::
-
-           val[i] = (1 - alpha[i]) * unique_vals[lo_in_unique[i]]
-                  +      alpha[i]  * unique_vals[hi_in_unique[i]]
-
-       where ``unique_vals[k]`` is the value at native index
-       ``source_indices[k]``.
-
-    Snap-on-match: a target within ``(atol, rtol)`` of a source point sets
-    ``lo == hi`` and ``alpha == 0.0`` exactly, so plain indexing is recovered
-    with no floating-point garbage.
-
-    Registered as a JAX pytree (children: the three index arrays and ``alpha``)
-    so an instance can cross ``jit``/``grad``/``vmap`` boundaries. Gradients w.r.t.
-    interpolated *values* flow through :meth:`from_unique`/:meth:`from_native`;
-    the discrete brackets are built on the host in numpy, so there is no gradient
-    w.r.t. the frequencies themselves -- intended, since observing channels are
-    fixed. The two-point linear stencil lives entirely behind these methods, so a
-    higher-order scheme can be swapped in later without touching call sites.
-    """
-
-    def __init__(self, unique_native_idx, lo_in_unique, hi_in_unique, alpha):
-        self.unique_native_idx = unique_native_idx
-        self.lo_in_unique = lo_in_unique
-        self.hi_in_unique = hi_in_unique
-        self.alpha = alpha
+    IDENTITY = "identity"
+    EXACT = "exact"
+    LINEAR = "linear"
 
     @classmethod
-    def build(cls, target_freqs, source_freqs, *, atol=1e-6, rtol=1e-9):
+    def normalize(cls, value):
+        try:
+            return cls(value)
+        except ValueError as exc:
+            choices = ", ".join(repr(policy.value) for policy in cls)
+            raise ValueError(
+                f"Unknown frequency policy {value!r}; expected one of {choices}"
+            ) from exc
+
+
+@jax.tree_util.register_pytree_node_class
+@dataclass(frozen=True)
+class FrequencyMap:
+    """Static frequency-alignment plan compiled from target and source grids.
+
+    ``policy`` is the construction-time contract: ``identity`` requires the
+    grids to align one-for-one, ``exact`` permits integer selection only, and
+    ``linear`` permits interpolation. The resolved ``mode`` is one of
+    ``identity``, ``gather``, or ``linear`` and controls the runtime fast path.
+
+    All floating-point lookup and snap-on-match handling happens in
+    :meth:`build`. Runtime methods use only the compiled integer indices and
+    weights. Policy and mode are static JAX pytree metadata.
+    """
+
+    unique_native_idx: object
+    lo_in_unique: object
+    hi_in_unique: object
+    alpha: object
+    policy: FrequencyPolicy
+    mode: str
+    source_size: int
+
+    def __init__(
+        self,
+        unique_native_idx,
+        lo_in_unique,
+        hi_in_unique,
+        alpha,
+        *,
+        policy=FrequencyPolicy.LINEAR,
+        mode="linear",
+        source_size,
+    ):
+        unique_native_idx = self._metadata_array(
+            unique_native_idx, name="unique_native_idx", integer=True
+        )
+        lo_in_unique = self._metadata_array(
+            lo_in_unique, name="lo_in_unique", integer=True
+        )
+        hi_in_unique = self._metadata_array(
+            hi_in_unique, name="hi_in_unique", integer=True
+        )
+        alpha = self._metadata_array(alpha, name="alpha", integer=False)
+        policy = FrequencyPolicy.normalize(policy)
+        if mode not in {"identity", "gather", "linear"}:
+            raise ValueError(f"Unknown frequency map mode {mode!r}")
+        source_size = int(source_size)
+        if source_size < 1:
+            raise ValueError("FrequencyMap source_size must be positive")
+
+        self._validate_compiled_metadata(
+            unique_native_idx,
+            lo_in_unique,
+            hi_in_unique,
+            alpha,
+            policy=policy,
+            mode=mode,
+            source_size=source_size,
+        )
+        object.__setattr__(self, "unique_native_idx", unique_native_idx)
+        object.__setattr__(self, "lo_in_unique", lo_in_unique)
+        object.__setattr__(self, "hi_in_unique", hi_in_unique)
+        object.__setattr__(self, "alpha", alpha)
+        object.__setattr__(self, "policy", policy)
+        object.__setattr__(self, "mode", mode)
+        object.__setattr__(self, "source_size", source_size)
+
+    @staticmethod
+    def _metadata_array(value, *, name, integer):
+        if getattr(value, "ndim", None) != 1:
+            raise ValueError(f"FrequencyMap {name} must be one-dimensional")
+        if isinstance(value, (jax.Array, jax.core.Tracer)):
+            return value
+        array = np.asarray(value)
+        if integer and not np.issubdtype(array.dtype, np.integer):
+            raise TypeError(f"FrequencyMap {name} must contain integers")
+        array = np.array(
+            array,
+            dtype=np.int32 if integer else np.float64,
+            copy=True,
+        )
+        array.setflags(write=False)
+        return array
+
+    @staticmethod
+    def _validate_compiled_metadata(
+        unique_native_idx,
+        lo_in_unique,
+        hi_in_unique,
+        alpha,
+        *,
+        policy,
+        mode,
+        source_size,
+    ):
+        n_unique = unique_native_idx.shape[0]
+        n_target = alpha.shape[0]
+        if n_unique < 1 or n_target < 1:
+            raise ValueError("FrequencyMap source and target metadata must not be empty")
+        if lo_in_unique.shape != alpha.shape or hi_in_unique.shape != alpha.shape:
+            raise ValueError("FrequencyMap target metadata lengths must match")
+
+        # Pytree reconstruction under jit receives tracers from metadata that
+        # was already validated when build() created the map.
+        values = (unique_native_idx, lo_in_unique, hi_in_unique, alpha)
+        if any(isinstance(value, jax.core.Tracer) for value in values):
+            return
+
+        unique = np.asarray(unique_native_idx)
+        lo = np.asarray(lo_in_unique)
+        hi = np.asarray(hi_in_unique)
+        weights = np.asarray(alpha)
+        if not all(
+            np.issubdtype(value.dtype, np.integer) for value in (unique, lo, hi)
+        ):
+            raise TypeError("FrequencyMap stencil indices must be integers")
+        if np.any(unique < 0) or np.any(unique >= source_size):
+            raise ValueError("FrequencyMap native indices are out of bounds")
+        if unique.size > 1 and not np.all(np.diff(unique) > 0):
+            raise ValueError("FrequencyMap native indices must be strictly increasing")
+        if np.any(lo < 0) or np.any(lo >= n_unique):
+            raise ValueError("FrequencyMap lower stencil indices are out of bounds")
+        if np.any(hi < 0) or np.any(hi >= n_unique):
+            raise ValueError("FrequencyMap upper stencil indices are out of bounds")
+        if not np.all(np.isfinite(weights)):
+            raise ValueError("FrequencyMap weights must all be finite")
+        if np.any(weights < 0.0) or np.any(weights > 1.0):
+            raise ValueError("FrequencyMap interpolation weights must lie in [0, 1]")
+
+        direct = np.array_equal(lo, hi) and np.all(weights == 0.0)
+        identity = (
+            direct
+            and n_target == source_size
+            and n_unique == source_size
+            and np.array_equal(unique, np.arange(source_size))
+            and np.array_equal(lo, np.arange(source_size))
+        )
+        if mode == "identity" and not identity:
+            raise ValueError("FrequencyMap identity mode does not match its stencil")
+        if mode == "gather" and not direct:
+            raise ValueError("FrequencyMap gather mode requires exact channel indices")
+        if mode == "linear" and direct:
+            raise ValueError("FrequencyMap linear mode requires an interpolating stencil")
+        if policy is FrequencyPolicy.IDENTITY and mode != "identity":
+            raise ValueError("FrequencyMap identity policy requires identity mode")
+        if policy is FrequencyPolicy.EXACT and mode == "linear":
+            raise ValueError("FrequencyMap exact policy cannot use linear mode")
+
+    @classmethod
+    def build(
+        cls,
+        target_freqs,
+        source_freqs,
+        *,
+        policy=FrequencyPolicy.EXACT,
+        atol=1e-6,
+        rtol=1e-9,
+    ):
         """Construct a map from ``target_freqs`` onto ``source_freqs``.
 
         :param target_freqs: requested frequencies, 1-D array-like in MHz.
         :param source_freqs: native frequencies of the data being interpolated,
             1-D strictly-increasing array-like in MHz.
+        :param policy: ``identity`` requires one-for-one alignment, ``exact``
+            allows exact channel selection, and ``linear`` allows off-grid
+            interpolation.
         :param atol: absolute tolerance for snap-on-match and boundary checks.
         :param rtol: relative tolerance for the same.
-        :returns: a :class:`FrequencyMap` with int32 index arrays and float64 alpha.
+        :returns: a :class:`FrequencyMap` with a static execution mode.
         :raises ValueError: if either grid is None or contains non-finite values,
             ``source_freqs`` is not strictly increasing, or any target frequency
-            lies outside ``[source.min(), source.max()]`` beyond the tolerance.
+            violates the requested policy.
         """
+        policy = FrequencyPolicy.normalize(policy)
         if target_freqs is None:
             raise ValueError("target_freqs is None; expected a 1-D array of MHz values")
         if source_freqs is None:
@@ -116,6 +255,30 @@ class FrequencyMap:
                 f"target_freqs out of range [{src_min}, {src_max}] MHz: {offenders}"
             )
 
+        if policy is FrequencyPolicy.IDENTITY:
+            if target.shape != source.shape:
+                raise ValueError(
+                    "frequency_policy='identity' requires target and source grids "
+                    f"to have the same shape; got {target.shape} and {source.shape}"
+                )
+            matches = np.isclose(target, source, atol=atol, rtol=rtol)
+            if not np.all(matches):
+                offenders = target[~matches].tolist()
+                raise ValueError(
+                    "frequency_policy='identity' requires one-for-one native "
+                    f"channel alignment; mismatched targets: {offenders}"
+                )
+            indices = np.arange(source.size, dtype=np.int32)
+            return cls(
+                indices,
+                indices.copy(),
+                indices.copy(),
+                np.zeros(target.size, dtype=np.float64),
+                policy=policy,
+                mode="identity",
+                source_size=source.size,
+            )
+
         if source.size == 1:
             # Degenerate single-point source: every target must snap to index 0.
             n = target.size
@@ -125,6 +288,9 @@ class FrequencyMap:
                 zeros,
                 zeros,
                 np.zeros(n, dtype=np.float64),
+                policy=policy,
+                mode="identity" if n == 1 else "gather",
+                source_size=1,
             )
 
         insertion = np.searchsorted(source, target, side="left")
@@ -144,16 +310,35 @@ class FrequencyMap:
         new_hi = np.where(lo_match, lo, np.where(hi_match, hi, hi))
         new_alpha = np.where(lo_match | hi_match, 0.0, alpha)
 
+        off_grid = new_lo != new_hi
+        if policy is FrequencyPolicy.EXACT and np.any(off_grid):
+            offenders = target[off_grid].tolist()
+            raise ValueError(
+                "frequency_policy='exact' rejected off-grid target frequencies "
+                f"{offenders}; no native channel is within tolerance. "
+                "Use policy='linear' (frequency_policy='linear' on a simulator) "
+                "to interpolate."
+            )
+
         all_idx = np.concatenate([new_lo, new_hi])
         unique_idx, inverse = np.unique(all_idx, return_inverse=True)
         lo_in_unique = inverse[: target.size].astype(np.int32)
         hi_in_unique = inverse[target.size :].astype(np.int32)
 
+        direct = not np.any(off_grid)
+        identity = (
+            direct
+            and target.size == source.size
+            and np.array_equal(new_lo, np.arange(source.size))
+        )
         return cls(
             unique_idx.astype(np.int32),
             lo_in_unique,
             hi_in_unique,
             new_alpha.astype(np.float64),
+            policy=policy,
+            mode="identity" if identity else ("gather" if direct else "linear"),
+            source_size=source.size,
         )
 
     @property
@@ -200,7 +385,17 @@ class FrequencyMap:
         """
         is_jax = isinstance(unique_array, jnp.ndarray)
         arr = jnp.asarray(unique_array) if is_jax else np.asarray(unique_array)
+        expected = self.unique_native_idx.shape[0]
+        if arr.ndim < 1 or arr.shape[0] != expected:
+            raise ValueError(
+                "unique array leading dimension must match source_indices "
+                f"({expected}), got shape {arr.shape}"
+            )
+        if self.mode == "identity":
+            return arr
         lo_vals = arr[self.lo_in_unique]
+        if self.mode == "gather":
+            return lo_vals
         hi_vals = arr[self.hi_in_unique]
         a = jnp.asarray(self.alpha) if is_jax else np.asarray(self.alpha)
         shape = (a.shape[0],) + (1,) * (lo_vals.ndim - 1)
@@ -217,23 +412,46 @@ class FrequencyMap:
         """
         is_jax = isinstance(native_array, jnp.ndarray)
         arr = jnp.asarray(native_array) if is_jax else np.asarray(native_array)
+        if arr.ndim < 1 or arr.shape[0] != self.source_size:
+            raise ValueError(
+                f"native array leading dimension must be {self.source_size}, "
+                f"got shape {arr.shape}"
+            )
+        if self.mode == "identity":
+            return arr
+        if self.mode == "gather":
+            return arr[self.unique_native_idx[self.lo_in_unique]]
         return self.from_unique(arr[self.unique_native_idx])
 
     def tree_flatten(self):
         children = (self.unique_native_idx, self.lo_in_unique, self.hi_in_unique, self.alpha)
-        return children, None
+        return children, (self.policy.value, self.mode, self.source_size)
 
     @classmethod
     def tree_unflatten(cls, aux_data, children):
-        return cls(*children)
+        policy, mode, source_size = aux_data
+        return cls(
+            *children,
+            policy=policy,
+            mode=mode,
+            source_size=source_size,
+        )
 
     def __repr__(self):
         n_offgrid = int(np.count_nonzero(np.asarray(self.alpha) != 0.0))
         return (
-            f"FrequencyMap(n_target={len(self)}, "
+            f"FrequencyMap(policy={self.policy.value!r}, mode={self.mode!r}, "
+            f"n_target={len(self)}, "
             f"n_source_touched={np.asarray(self.unique_native_idx).shape[0]}, "
             f"n_offgrid={n_offgrid})"
         )
+
+
+def frequency_policy_from_config(freq_cfg):
+    """Return the frequency policy in a YAML ``freq`` block (default: exact)."""
+    return FrequencyPolicy.normalize(
+        freq_cfg.get("policy", FrequencyPolicy.EXACT.value)
+    )
 
 
 def frequencies_from_config(freq_cfg):
@@ -241,9 +459,9 @@ def frequencies_from_config(freq_cfg):
 
     Accepted forms::
 
-        freq: { values: [10.0, 20.0, 30.0] }
-        freq: { start: 1.0, end: 50.0, step: 1.0 }   # arange: end is EXCLUSIVE
-        freq: { start: 1.0, end: 75.0, n: 75 }       # linspace: end is inclusive
+        freq: { policy: exact, values: [10.0, 20.0, 30.0] }
+        freq: { policy: exact, start: 1.0, end: 50.0, step: 1.0 }
+        freq: { policy: linear, start: 1.0, end: 75.0, n: 75 }
 
     The ``step`` form follows numpy.arange semantics (half-open interval,
     matching the pre-interpolation parser). Float steps inherit arange's
@@ -253,6 +471,7 @@ def frequencies_from_config(freq_cfg):
     Legacy index-based forms (``indices``, ``start_idx``/``stop_idx``/``step_idx``)
     are no longer supported and produce a :class:`ValueError` naming the new keys.
     """
+    frequency_policy_from_config(freq_cfg)
     legacy_keys = {"indices", "start_idx", "stop_idx", "step_idx"}
     found_legacy = legacy_keys & set(freq_cfg.keys())
     if found_legacy:

@@ -1,7 +1,7 @@
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
-from .frequencies import FrequencyMap
+from .frequencies import FrequencyMap, FrequencyPolicy
 
 import numpy as np
 import jax.numpy as jnp
@@ -138,17 +138,22 @@ class SimulatorBase:
     :type combinations: list[tuple]
     :param freq: Frequencies at which instrument observes sky in MHz. If empty, taken from lusee.beam class.
     :type freq: list[float]
+    :param frequency_policy: Frequency alignment contract: ``identity``,
+        ``exact`` (default), or ``linear``.
+    :type frequency_policy: str
     
     """
 
     def __init__ (self, obs, beams, sky_model, Tground = 200.0,
-                  combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None):
+                  combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None,
+                  *, frequency_policy = FrequencyPolicy.EXACT):
 
         self.obs = obs
         self.sky_model = sky_model
         self.Tground = Tground
         self.combinations = combinations
         self.result = None
+        self.frequency_policy = FrequencyPolicy.normalize(frequency_policy)
 
         if freq is None:
             self.freq = beams[0].freq
@@ -165,7 +170,9 @@ class SimulatorBase:
                     f"beam[0] (id={getattr(beams[0], 'id', None)!r})."
                 )
         try:
-            self.freq_map_beam = FrequencyMap.build(self.freq, beams[0].freq)
+            self.freq_map_beam = FrequencyMap.build(
+                self.freq, beams[0].freq, policy=self.frequency_policy
+            )
         except ValueError as exc:
             raise ValueError(f"Beam frequency mismatch: {exc}") from exc
         self.freq_map_sky = None
@@ -179,14 +186,19 @@ class SimulatorBase:
         Returns None when the model implements ``get_alm_at_freq`` (closed-form
         evaluation needs no map). The map built at construction is reused when
         ``sky_model`` is the constructor sky model; an override sky passed to
-        ``simulate(sky=...)`` gets a map built for its own native grid.
+        ``simulate(sky=...)`` gets a map built for its own native grid under
+        the same frequency policy.
         """
         if hasattr(sky_model, "get_alm_at_freq"):
             return None
         if sky_model is self.sky_model and self.freq_map_sky is not None:
             return self.freq_map_sky
         try:
-            return FrequencyMap.build(self.freq, getattr(sky_model, "freq", None))
+            return FrequencyMap.build(
+                self.freq,
+                getattr(sky_model, "freq", None),
+                policy=self.frequency_policy,
+            )
         except ValueError as exc:
             raise ValueError(f"Sky-model frequency mismatch: {exc}") from exc
 

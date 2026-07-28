@@ -57,7 +57,10 @@ def load_config(config_path):
 
 def setup_simulation(cfg, lusee):
     """Build Observation, beams, sky from config (same as SimDriver)."""
-    from lusee.frequencies import frequencies_from_config
+    from lusee.frequencies import (
+        frequencies_from_config,
+        frequency_policy_from_config,
+    )
 
     root = cfg["_root"]
     od = cfg["observation"]
@@ -65,6 +68,7 @@ def setup_simulation(cfg, lusee):
     if isinstance(dt, str):
         dt = eval(dt)
     freq = frequencies_from_config(od["freq"])
+    frequency_policy = frequency_policy_from_config(od["freq"])
     lmax = od["lmax"]
 
     # Sky
@@ -116,6 +120,7 @@ def setup_simulation(cfg, lusee):
         "beams": beams,
         "sky": sky,
         "freq": freq,
+        "frequency_policy": frequency_policy,
         "lmax": lmax,
         "combinations": combs,
         "Tground": od["Tground"],
@@ -174,6 +179,7 @@ def run_comparison(config_path=None):
         Tground=setup["Tground"], combinations=setup["combinations"],
         freq=setup["freq"], lmax=setup["lmax"],
         cross_power=setup["cross_power"], extra_opts=setup.get("extra_opts", {}),
+        frequency_policy=setup["frequency_policy"],
     )
     def_sim.simulate()
     out_def = def_sim.result
@@ -184,6 +190,7 @@ def run_comparison(config_path=None):
         freq=setup["freq"], lmax=setup["lmax"],
         cross_power=setup["cross_power"],
         extra_opts=setup.get("extra_opts", {}),
+        frequency_policy=setup["frequency_policy"],
     )
     cro_sim.simulate()
     out_cro = cro_sim.result
