@@ -1,12 +1,10 @@
 """
 Working with arbitrary frequency grids.
 
-Since the off-grid interpolation update, simulators accept any target
-frequencies inside the beams' native range -- not just the canonical
-1-50 MHz integer grid.  Off-grid targets are linearly interpolated from
-the bracketing native bins; on-grid targets snap exactly (alpha = 0.0,
-bit-identical to plain indexing).  Closed-form monopole skies evaluate
-their spectra exactly at any frequency, with no interpolation at all.
+Simulators default to the ``exact`` frequency policy: requested channels
+must snap to native gridded inputs. Select ``linear`` explicitly to permit
+off-grid targets, which are interpolated from the bracketing native bins.
+Closed-form monopole skies evaluate their spectra exactly at any frequency.
 
 Runs without LUSEE_DRIVE_DIR (analytic BeamGauss + point-source sky).
 """
@@ -23,7 +21,8 @@ from lusee.frequencies import FrequencyMap, frequencies_from_config
 # ── 1. YAML 'freq:' config forms ─────────────────────────────────────
 
 # explicit values, any spacing
-print(frequencies_from_config({"values": [10.0, 17.5, 30.25]}))
+print(frequencies_from_config(
+    {"policy": "linear", "values": [10.0, 17.5, 30.25]}))
 
 # arange semantics: end is EXCLUSIVE (1, 2, ..., 49)
 print(frequencies_from_config({"start": 1.0, "end": 50.0, "step": 1.0}))
@@ -35,7 +34,7 @@ print(frequencies_from_config({"start": 1.0, "end": 50.0, "n": 50}))
 
 native = np.linspace(1.0, 50.0, 50)          # a beam's native grid
 target = np.asarray([12.0, 12.5, 30.0 + 1e-10])
-fmap = FrequencyMap.build(target, native)
+fmap = FrequencyMap.build(target, native, policy="linear")
 
 print(fmap)
 print(fmap.alpha)          # [0.0, 0.5, 0.0]: on-grid targets snap exactly
@@ -73,7 +72,8 @@ sky = lusee.sky.HarmonicPointSourceSky(
 freq = np.asarray([10.0, 12.5, 20.0])        # 12.5 MHz is off-grid for the beam
 sim = lusee.TopoNumpySimulator(
     obs, [lusee.NpWrapper(beam)], lusee.NpWrapper(sky),
-    Tground=0.0, combinations=[(0, 0)], freq=freq, lmax=lmax)
+    Tground=0.0, combinations=[(0, 0)], freq=freq, lmax=lmax,
+    frequency_policy="linear")
 wf = np.asarray(sim.simulate(times=obs.times))
 print(wf.shape)                               # (n_times, n_combinations, n_freq)
 

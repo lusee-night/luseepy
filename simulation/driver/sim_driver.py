@@ -68,7 +68,10 @@ class SimDriver:
         import jax
 
     def _parse_base(self):
-        from lusee.frequencies import frequencies_from_config
+        from lusee.frequencies import (
+            frequencies_from_config,
+            frequency_policy_from_config,
+        )
 
         self.lmax = self.cfg["observation"]["lmax"]
         self.root = self.cfg["paths"]["lusee_drive_dir"]
@@ -83,6 +86,7 @@ class SimDriver:
         if isinstance(self.dt, str):
             self.dt = eval(self.dt)
         self.freq = frequencies_from_config(od["freq"])
+        self.frequency_policy = frequency_policy_from_config(od["freq"])
 
     def _parse_sky(self):
         lusee = self._lusee
@@ -235,6 +239,7 @@ class SimDriver:
                 lmax=self.lmax,
                 cross_power=self.couplings,
                 extra_opts=extra_opts,
+                frequency_policy=self.frequency_policy,
             )
         elif self.engine is SimEngine.TOPO_NP:
             print("  setting up Default (NumPy) Simulation object...")
@@ -248,6 +253,7 @@ class SimDriver:
                 lmax=self.lmax,
                 cross_power=self.couplings,
                 extra_opts=extra_opts,
+                frequency_policy=self.frequency_policy,
             )
         elif self.engine is SimEngine.TOPO:
             print("  setting up JAX Simulation object...")
@@ -261,6 +267,7 @@ class SimDriver:
                 lmax=self.lmax,
                 cross_power=self.couplings,
                 extra_opts=extra_opts,
+                frequency_policy=self.frequency_policy,
             )
         else:
             raise ValueError(f"Unknown engine: {self.engine}")

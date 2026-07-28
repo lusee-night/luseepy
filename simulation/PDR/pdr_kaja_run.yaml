@@ -24,6 +24,7 @@ observation:
   lmax: 32
   combinations: all
   freq:
+    policy: exact
     start: 1.0
     end: 50.0
     n: 50

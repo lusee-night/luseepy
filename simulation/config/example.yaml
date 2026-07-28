@@ -41,6 +41,7 @@ observation:
   lmax: 32
   combinations: all
   freq:
+    policy: exact
     values: [1.0, 5.0]
 
 simulation:

@@ -27,7 +27,7 @@ def _build_obs():
     )
 
 
-def _run_numpy_sim(freq):
+def _run_numpy_sim(freq, *, frequency_policy="exact"):
     import lusee
 
     obs = _build_obs()
@@ -50,6 +50,7 @@ def _run_numpy_sim(freq):
         combinations=[(0, 0)],
         freq=np.asarray(freq, dtype=float),
         lmax=lmax,
+        frequency_policy=frequency_policy,
     )
     return np.asarray(sim.simulate(times=times))
 
@@ -69,9 +70,16 @@ def test_snap_on_match_is_bit_identical():
 
 def test_offgrid_run_produces_finite_output():
     """A target between two native beam frequencies must run cleanly."""
-    res = _run_numpy_sim([12.5, 17.3])
+    res = _run_numpy_sim([12.5, 17.3], frequency_policy="linear")
     assert res.shape[-1] == 2  # two frequency bins in the waterfall
     assert np.isfinite(res).all()
+
+
+def test_exact_default_rejects_offgrid_beam_and_sky():
+    with pytest.raises(ValueError, match=r"Beam frequency mismatch.*policy='linear'"):
+        _run_numpy_sim([12.5])
+    with pytest.raises(ValueError, match=r"Sky-model frequency mismatch.*policy='linear'"):
+        _run_numpy_sim([10.0])
 
 
 def test_out_of_range_raises():
@@ -93,18 +101,19 @@ def test_freq_ndx_compat_shims_per_target_contract():
     beam = lusee.BeamGauss(alt_deg=90.0, az_deg=0.0, sigma_deg=20.0,
                            one_over_freq_scaling=False, id="shim")
 
-    def build(freq):
+    def build(freq, *, frequency_policy="exact"):
         return lusee.TopoNumpySimulator(
             obs, [lusee.NpWrapper(beam)], lusee.NpWrapper(sky),
             Tground=0.0, combinations=[(0, 0)],
             freq=np.asarray(freq, dtype=float), lmax=lmax,
+            frequency_policy=frequency_policy,
         )
 
     sim = build([25.0, 12.0, 12.0])
     np.testing.assert_array_equal(sim.freq_ndx_beam, [24, 11, 11])
     np.testing.assert_array_equal(sim.freq_ndx_sky, [2, 1, 1])
 
-    sim_off = build([12.5, 25.0])
+    sim_off = build([12.5, 25.0], frequency_policy="linear")
     with pytest.raises(ValueError, match=r"off-grid"):
         sim_off.freq_ndx_beam
     with pytest.raises(ValueError, match=r"off-grid"):
@@ -138,12 +147,14 @@ def test_cro_simulate_sky_override_uses_override_grid():
     )
 
     sim = lusee.CroSimulator(obs, [beam], base_sky, Tground=0.0,
-                             combinations=[(0, 0)], freq=target_freq, lmax=lmax)
+                             combinations=[(0, 0)], freq=target_freq, lmax=lmax,
+                             frequency_policy="linear")
     res_override = np.asarray(sim.simulate(times=obs.times, sky=override_sky))
     assert np.isfinite(res_override).all()
 
     sim_direct = lusee.CroSimulator(obs, [beam], override_sky, Tground=0.0,
-                                    combinations=[(0, 0)], freq=target_freq, lmax=lmax)
+                                    combinations=[(0, 0)], freq=target_freq, lmax=lmax,
+                                    frequency_policy="linear")
     res_direct = np.asarray(sim_direct.simulate(times=obs.times))
     np.testing.assert_allclose(res_override, res_direct, rtol=1e-12, atol=0.0)
 
