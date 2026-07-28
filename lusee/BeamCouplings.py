@@ -4,6 +4,7 @@
 # Ability to calculate beams couplings based on 1 and 2 ports beams
 #
 from .Beam import Beam
+from .frequencies import frequency_grids_match
 import numpy as np
 
 
@@ -42,7 +43,7 @@ class BeamCouplings:
             two_port_freq = np.asarray(two_port_beam.freq, dtype=float)
             for bid in {bid for c in combs for bid in c}:
                 beam_freq = np.asarray(self.beamd[bid].freq, dtype=float)
-                if two_port_freq.shape != beam_freq.shape or not np.allclose(two_port_freq, beam_freq):
+                if not frequency_grids_match(two_port_freq, beam_freq):
                     raise ValueError(
                         f"coupling '{n}': two-port beam {sd['two_port']!r} has a "
                         f"different native frequency grid than beam {bid!r}; "
@@ -78,4 +79,3 @@ class BeamCouplings:
         return freq_map.from_native(np.asarray(cross_power))
     
         
-
