@@ -91,7 +91,16 @@ def main(argv: list[str] | None = None) -> int:
         rrl_sigma_mhz=float(
             sky_kw.get("rrl_sigma_mhz", lu.RRL_DEFAULT_LINE_SIGMA_MHZ)
         ),
-        rrl_peak_k=float(sky_kw.get("rrl_peak_k", lu.RRL_DEFAULT_LINE_PEAK_K)),
+        rrl_peak_k=(
+            float(sky_kw["rrl_peak_k"])
+            if sky_kw.get("rrl_peak_k") is not None
+            else None
+        ),
+        rrl_peak_sky_fraction=float(
+            sky_kw.get(
+                "rrl_peak_sky_fraction", lu.RRL_DEFAULT_LINE_PEAK_SKY_FRACTION
+            )
+        ),
     )
 
     bd = cfg.get("beam") or {}

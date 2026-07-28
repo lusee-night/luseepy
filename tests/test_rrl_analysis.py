@@ -71,6 +71,37 @@ def test_rydberg_line_spectrum_auto_fills_carbon_band():
     assert n_lines > 0
 
 
+def test_rydberg_line_spectrum_peak_sky_fraction():
+    nu = np.linspace(12.45, 12.55, 401)
+    tr = carbon_rrl_alpha_transitions_in_frequency_band_mhz(12.45, 12.55)
+    n1, n2 = tr[len(tr) // 2]
+    nu0 = carbon_rrl_frequency_mhz(n1, n2)
+    t_sky = np.full(nu.shape, 200.0)
+    spec = rydberg_line_spectrum_mhz(
+        nu,
+        ((n1, n2),),
+        species="carbon",
+        sigma_mhz=0.01,
+        peak_sky_fraction=1e-4,
+        sky_temperature_k=t_sky,
+        line_sign=-1.0,
+    )
+    expected_peak = -1e-4 * 200.0
+    assert float(spec[np.argmin(np.abs(nu - nu0))]) == pytest.approx(
+        expected_peak, rel=1e-3
+    )
+    assert np.all(spec <= 0.0)
+
+
+def test_rrl_line_sign_for_gas_case():
+    from lusee.RRLSkyModels import rrl_line_sign_for_gas_case, rrl_line_species_for_gas_case
+
+    assert rrl_line_sign_for_gas_case("cold") == -1.0
+    assert rrl_line_sign_for_gas_case("hot") == 1.0
+    assert rrl_line_species_for_gas_case("cold") == "carbon"
+    assert rrl_line_species_for_gas_case("hot") == "hydrogen"
+
+
 def test_resample_waterfall_frequency_shape():
     fin = np.array([10.0, 11.0, 12.0])
     fout = np.linspace(10.0, 12.0, 5)

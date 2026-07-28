@@ -26,6 +26,7 @@ except (ModuleNotFoundError, ImportError) as e:
 from .RRLSkyModels import (
     RRL_DEFAULT_LINE_FWHM_KHZ,
     RRL_DEFAULT_LINE_PEAK_K,
+    RRL_DEFAULT_LINE_PEAK_SKY_FRACTION,
     RRL_DEFAULT_LINE_SIGMA_MHZ,
     ULSAPlusEnvelopeSky,
     ULSAPlusRRLSky,
@@ -44,7 +45,10 @@ from .RRLSkyModels import (
     Vydula2024EnvelopeParams,
     rrl_envelope_T_rrl_k_mhz,
     rrl_smooth_envelope_weight_mhz,
+    rrl_line_sign_for_gas_case,
+    rrl_line_species_for_gas_case,
     rydberg_line_spectrum_mhz,
+    ulsa_monopole_temperature_k_mhz,
     vydula2024_envelope_params_from_config,
     vydula2024_envelope_params_from_gas_case,
 )

@@ -34,9 +34,10 @@ beam:
   id: rrl_demo
 
 sky:
-  # RRL line Gaussian in ν: default 25 kHz FWHM → σ = FWHM/(2√(2 ln 2)) MHz; 0.5 K peak
+  # RRL line Gaussian in ν: default 25 kHz FWHM → σ = FWHM/(2√(2 ln 2)) MHz
   rrl_sigma_mhz: 0.010616575061747945
-  rrl_peak_k: 0.5
+  # Cα line peak = 0.01% of ULSA monopole sky T (override with fixed rrl_peak_k: K)
+  rrl_peak_sky_fraction: 1.0e-4
   spot_sigma_deg: 0.35
 
 # Staged analysis: smooth envelope on catalog positions → Croissant @ beam ν →

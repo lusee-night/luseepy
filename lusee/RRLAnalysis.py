@@ -17,13 +17,16 @@ import numpy as np
 from .frequencies import fine_uniform_frequency_mhz
 from .RRLSkyModels import (
     GasCaseName,
-    RRL_DEFAULT_LINE_PEAK_K,
+    RRL_DEFAULT_LINE_PEAK_SKY_FRACTION,
     RRL_DEFAULT_LINE_SIGMA_MHZ,
     ULSAPlusEnvelopeSky,
     Vydula2024EnvelopeParams,
     default_rrl_catalog_path,
     default_ulsa_path,
     rydberg_line_spectrum_mhz,
+    rrl_line_sign_for_gas_case,
+    rrl_line_species_for_gas_case,
+    ulsa_monopole_temperature_k_mhz,
 )
 
 
@@ -75,8 +78,11 @@ class RRLAnalysisPipeline:
        (:class:`ULSAPlusEnvelopeSky`).
     2. **Convolve:** :class:`CroSimulator` at native / resampled beam frequencies.
     3. **Resample:** convolved waterfall to ``fine_step_khz`` (default 0.5 kHz).
-    4. **Lines:** add carbon Cα :func:`rydberg_line_spectrum_mhz` on the fine grid
+    4. **Lines:** add Cα / Hα :func:`rydberg_line_spectrum_mhz` on the fine grid
        (Vydula+2024 Eq. 1–2, all lines in band when ``alpha_transitions`` is ``None``).
+       Peak amplitude defaults to ``rrl_peak_sky_fraction`` (0.01%) times ULSA monopole
+       :math:`T_\\mathrm{sky}(\\nu)` at each line centre, with sign from ``gas_case``
+       (cold Cα absorption negative, hot Hα emission positive).
     """
 
     def __init__(
@@ -95,7 +101,8 @@ class RRLAnalysisPipeline:
         envelope_amplitude_k: float = 0.5,
         envelope_weight_fn=None,
         rrl_sigma_mhz: float = RRL_DEFAULT_LINE_SIGMA_MHZ,
-        rrl_peak_k: float = RRL_DEFAULT_LINE_PEAK_K,
+        rrl_peak_k: float | None = None,
+        rrl_peak_sky_fraction: float = RRL_DEFAULT_LINE_PEAK_SKY_FRACTION,
         alpha_transitions: Sequence[tuple[int, int]] | None = None,
     ):
         self.lmax = int(lmax)
@@ -111,7 +118,8 @@ class RRLAnalysisPipeline:
         self.envelope_amplitude_k = float(envelope_amplitude_k)
         self.envelope_weight_fn = envelope_weight_fn
         self.rrl_sigma_mhz = float(rrl_sigma_mhz)
-        self.rrl_peak_k = float(rrl_peak_k)
+        self.rrl_peak_k = None if rrl_peak_k is None else float(rrl_peak_k)
+        self.rrl_peak_sky_fraction = float(rrl_peak_sky_fraction)
         # None → all carbon Cα lines in the run band (Vydula+2024 Eq. 1–2)
         self.alpha_transitions = (
             None if alpha_transitions is None else tuple(alpha_transitions)
@@ -188,15 +196,32 @@ class RRLAnalysisPipeline:
         nu_lo, nu_hi = float(freq_beam[0]), float(freq_beam[-1])
         freq_fine = self.fine_frequency_mhz(nu_lo, nu_hi)
         wfall_fine = resample_waterfall_frequency(wfall_beam, freq_beam, freq_fine)
+        t_ulsa_beam = ulsa_monopole_temperature_k_mhz(
+            np.asarray(sky.mapalm_ulsa),
+            freq_beam,
+            nside=sky.Nside,
+            lmax=sky.lmax,
+        )
+        t_sky_fine = np.interp(freq_fine, freq_beam, t_ulsa_beam)
+        line_species = rrl_line_species_for_gas_case(self.gas_case)
+        line_sign = rrl_line_sign_for_gas_case(self.gas_case)
+        line_kw: dict = dict(
+            nu_lo_mhz=nu_lo,
+            nu_hi_mhz=nu_hi,
+            species=line_species,
+            delta_n=1,
+            sigma_mhz=self.rrl_sigma_mhz,
+            line_sign=line_sign,
+        )
+        if self.rrl_peak_k is not None:
+            line_kw["peak_k"] = self.rrl_peak_k
+        else:
+            line_kw["peak_sky_fraction"] = self.rrl_peak_sky_fraction
+            line_kw["sky_temperature_k"] = t_sky_fine
         line_spec = rydberg_line_spectrum_mhz(
             freq_fine,
             self.alpha_transitions,
-            nu_lo_mhz=nu_lo,
-            nu_hi_mhz=nu_hi,
-            species="carbon",
-            delta_n=1,
-            sigma_mhz=self.rrl_sigma_mhz,
-            peak_k=self.rrl_peak_k,
+            **line_kw,
         )
         wfall_final = wfall_fine + line_spec.reshape(1, 1, -1)
 

@@ -31,6 +31,8 @@ RRL_DEFAULT_LINE_SIGMA_MHZ = float(
     (RRL_DEFAULT_LINE_FWHM_KHZ / 1000.0) / (2.0 * np.sqrt(2.0 * np.log(2.0)))
 )
 RRL_DEFAULT_LINE_PEAK_K = 0.5
+# Cα (and other staged) line peaks default to this fraction of ULSA monopole T (K).
+RRL_DEFAULT_LINE_PEAK_SKY_FRACTION = 1e-4  # 0.01%
 
 
 def _hydrogen_rrl_k_hz() -> float:
@@ -780,6 +782,18 @@ HOT_GAS_VYDULA2024 = Vydula2024EnvelopeParams(
 GasCaseName = Literal["cold", "hot", "gaussian"]
 
 
+def rrl_line_sign_for_gas_case(gas_case: GasCaseName) -> float:
+    """``-1`` for cold-gas Cα absorption; ``+1`` for hot-gas Hα emission."""
+    return -1.0 if str(gas_case).lower() == "cold" else 1.0
+
+
+def rrl_line_species_for_gas_case(
+    gas_case: GasCaseName,
+) -> Literal["carbon", "hydrogen"]:
+    """``carbon`` for cold (Cα); ``hydrogen`` for hot (Hα) and legacy ``gaussian``."""
+    return "hydrogen" if str(gas_case).lower() == "hot" else "carbon"
+
+
 def vydula2024_envelope_params_from_gas_case(
     gas_case: GasCaseName = "cold",
 ) -> Vydula2024EnvelopeParams:
@@ -927,6 +941,27 @@ def rrl_smooth_envelope_weight_mhz(
     )
 
 
+def ulsa_monopole_temperature_k_mhz(
+    mapalm: np.ndarray,
+    freq_mhz: np.ndarray,
+    *,
+    nside: int,
+    lmax: int,
+) -> np.ndarray:
+    """ULSA monopole sky temperature (K) at each frequency in *freq_mhz*."""
+    alm = np.asarray(mapalm, dtype=np.complex128)
+    nu = np.asarray(freq_mhz, dtype=np.float64).reshape(-1)
+    if alm.ndim != 2 or alm.shape[0] != nu.size:
+        raise ValueError(
+            f"mapalm shape {alm.shape} must be (n_freq, n_alm) with n_freq={nu.size}"
+        )
+    out = np.empty(nu.size, dtype=np.float64)
+    for i in range(nu.size):
+        m = hp.alm2map(alm[i], nside=int(nside), lmax=int(lmax))
+        out[i] = float(np.mean(m))
+    return out
+
+
 def rydberg_line_spectrum_mhz(
     freq_mhz: np.ndarray,
     transitions: Sequence[tuple[int, int]] | None = None,
@@ -937,6 +972,9 @@ def rydberg_line_spectrum_mhz(
     delta_n: int = 1,
     sigma_mhz: float = RRL_DEFAULT_LINE_SIGMA_MHZ,
     peak_k: float = RRL_DEFAULT_LINE_PEAK_K,
+    peak_sky_fraction: float | None = None,
+    sky_temperature_k: np.ndarray | None = None,
+    line_sign: float = 1.0,
 ) -> np.ndarray:
     """
     Sum of Gaussian line profiles at RRL rest frequencies in the analysis band.
@@ -946,6 +984,11 @@ def rydberg_line_spectrum_mhz(
     When *transitions* is ``None``, every carbon line with
     :math:`n_{\\rm upper} - n_{\\rm lower} = \\delta_n` whose rest frequency lies
     in the band is included (from *freq_mhz* edges or ``nu_lo_mhz``/``nu_hi_mhz``).
+
+    When *peak_sky_fraction* and *sky_temperature_k* are set, each line peak is
+    ``line_sign * peak_sky_fraction * T_sky(ν_0)`` with :math:`T_\\mathrm{sky}`
+    linearly interpolated on *freq_mhz* (e.g. ULSA monopole temperatures).
+    Use ``line_sign=-1`` for absorption (cold Cα) and ``+1`` for emission (hot Hα).
     """
     nu = np.asarray(freq_mhz, dtype=np.float64).reshape(-1)
     if nu.size < 1:
@@ -972,9 +1015,25 @@ def rydberg_line_spectrum_mhz(
     )
     spec = np.zeros(nu.shape, dtype=np.float64)
     sig = float(sigma_mhz)
-    pk = float(peak_k)
+    sign = float(line_sign)
+    use_sky_frac = peak_sky_fraction is not None
+    if use_sky_frac:
+        if sky_temperature_k is None:
+            raise ValueError(
+                "sky_temperature_k is required when peak_sky_fraction is set"
+            )
+        t_sky = np.asarray(sky_temperature_k, dtype=np.float64).reshape(-1)
+        if t_sky.size != nu.size:
+            raise ValueError(
+                f"sky_temperature_k length {t_sky.size} != freq_mhz length {nu.size}"
+            )
+        frac = float(peak_sky_fraction)
     for n_upper, n_lower in transitions:
         nu0 = freq_fn(n_upper, n_lower)
+        if use_sky_frac:
+            pk = sign * frac * float(np.interp(nu0, nu, t_sky))
+        else:
+            pk = sign * float(peak_k)
         spec += pk * np.exp(-0.5 * ((nu - nu0) / sig) ** 2)
     return spec
 
