@@ -5,6 +5,7 @@ from lusee.frequencies import (
     ALL_FREQUENCIES_MHZ_NP,
     FrequencyMap,
     FrequencyPolicy,
+    frequency_grids_match,
     frequency_policy_from_config,
     frequencies_from_config,
 )
@@ -36,6 +37,44 @@ def test_near_match_within_atol_snaps():
 
     assert np.all(fmap.alpha == 0.0)
     assert np.all(fmap.lo_in_unique == fmap.hi_in_unique)
+
+
+@pytest.mark.parametrize("policy", ["exact", "linear"])
+def test_dense_grid_snap_selects_closest_native_channel(policy):
+    """If both neighbors are within tolerance, the closest one must win."""
+    source = np.asarray([1.0, 1.0000005, 2.0])
+    target = np.asarray([source[1]])
+    native = np.asarray([10.0, 20.0, 30.0])
+
+    fmap = FrequencyMap.build(target, source, policy=policy)
+
+    np.testing.assert_array_equal(fmap.per_target_indices(), [1])
+    np.testing.assert_array_equal(fmap.from_native(native), [20.0])
+
+
+def test_frequency_grid_match_uses_frequency_map_tolerance():
+    reference = np.asarray([1.0, 50.0])
+    shifted = np.asarray([1.0, 50.0005])  # 500 Hz at the upper endpoint
+
+    assert np.allclose(reference, shifted)
+    assert not frequency_grids_match(reference, shifted)
+
+
+def test_simulator_rejects_beam_grids_outside_map_tolerance():
+    from types import SimpleNamespace
+
+    from lusee.SimulatorBase import SimulatorBase
+
+    reference = np.asarray([1.0, 50.0])
+    shifted = np.asarray([1.0, 50.0005])
+    beams = [
+        SimpleNamespace(id="reference", freq=reference),
+        SimpleNamespace(id="shifted", freq=shifted),
+    ]
+    analytic_sky = SimpleNamespace(get_alm_at_freq=lambda freq: None)
+
+    with pytest.raises(ValueError, match=r"All beams must share"):
+        SimulatorBase(None, beams, analytic_sky, freq=reference)
 
 
 def test_midpoint_interpolation():

@@ -9,6 +9,8 @@ import jax.numpy as jnp
 CANONICAL_FREQ_START_MHZ = 1.0
 CANONICAL_FREQ_STOP_MHZ = 50.0
 CANONICAL_FREQ_COUNT = 50
+FREQUENCY_SNAP_ATOL_MHZ = 1e-6
+FREQUENCY_SNAP_RTOL = 1e-9
 
 ALL_FREQUENCY_INDICES = jnp.arange(CANONICAL_FREQ_COUNT, dtype=jnp.int32)
 # Reference grid in float64 NumPy so FITS/header MHz values (e.g. 12.0) match
@@ -25,6 +27,20 @@ ALL_FREQUENCIES_MHZ_NP = np.linspace(
 # the canonical grid process-wide
 ALL_FREQUENCIES_MHZ_NP.setflags(write=False)
 ALL_FREQUENCIES_MHZ = jnp.asarray(ALL_FREQUENCIES_MHZ_NP)
+
+
+def frequency_grids_match(left, right):
+    """Whether two native MHz grids agree under the standard snap tolerance."""
+    left = np.asarray(left, dtype=np.float64)
+    right = np.asarray(right, dtype=np.float64)
+    return left.shape == right.shape and bool(
+        np.allclose(
+            left,
+            right,
+            atol=FREQUENCY_SNAP_ATOL_MHZ,
+            rtol=FREQUENCY_SNAP_RTOL,
+        )
+    )
 
 
 class FrequencyPolicy(StrEnum):
@@ -201,8 +217,8 @@ class FrequencyMap:
         source_freqs,
         *,
         policy=FrequencyPolicy.EXACT,
-        atol=1e-6,
-        rtol=1e-9,
+        atol=FREQUENCY_SNAP_ATOL_MHZ,
+        rtol=FREQUENCY_SNAP_RTOL,
     ):
         """Construct a map from ``target_freqs`` onto ``source_freqs``.
 
@@ -299,8 +315,14 @@ class FrequencyMap:
 
         src_lo = source[lo]
         src_hi = source[hi]
-        lo_match = np.isclose(target, src_lo, atol=atol, rtol=rtol)
-        hi_match = np.isclose(target, src_hi, atol=atol, rtol=rtol) & ~lo_match
+        lo_close = np.isclose(target, src_lo, atol=atol, rtol=rtol)
+        hi_close = np.isclose(target, src_hi, atol=atol, rtol=rtol)
+        # Dense grids can put both neighbors inside the snap tolerance. Choose
+        # the physically closest native bin; an exact distance tie goes lower.
+        hi_match = hi_close & (
+            ~lo_close | (np.abs(target - src_hi) < np.abs(target - src_lo))
+        )
+        lo_match = lo_close & ~hi_match
 
         denom = src_hi - src_lo
         safe_denom = np.where(denom == 0.0, 1.0, denom)

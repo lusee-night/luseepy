@@ -1,7 +1,7 @@
 from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
-from .frequencies import FrequencyMap, FrequencyPolicy
+from .frequencies import FrequencyMap, FrequencyPolicy, frequency_grids_match
 
 import numpy as np
 import jax.numpy as jnp
@@ -163,7 +163,7 @@ class SimulatorBase:
         ref_freq = np.asarray(beams[0].freq, dtype=float)
         for idx, b in enumerate(beams[1:], start=1):
             other = np.asarray(b.freq, dtype=float)
-            if other.shape != ref_freq.shape or not np.allclose(other, ref_freq):
+            if not frequency_grids_match(other, ref_freq):
                 raise ValueError(
                     f"All beams must share the same native frequency grid; "
                     f"beam[{idx}] (id={getattr(b, 'id', None)!r}) differs from "

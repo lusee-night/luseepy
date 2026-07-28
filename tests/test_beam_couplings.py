@@ -45,8 +45,11 @@ def test_two_port_grid_check(drive_dir):
     bc = lusee.BeamCouplings([b_n, b_s], from_yaml_dict=couplings)
     assert ("N", "S") in bc.cross_powers
 
-    # a beam on a shifted grid must be rejected loudly
-    b_s.freq = np.asarray(b_s.freq, dtype=float) + 0.1
+    # A 500 Hz difference at 50 MHz passes numpy's default allclose but lies
+    # far outside FrequencyMap's snap tolerance, so it must be rejected.
+    b_s.freq = np.array(b_s.freq, dtype=float, copy=True)
+    b_s.freq[-1] += 5e-4
+    assert np.allclose(b_n.freq, b_s.freq)
     with pytest.raises(ValueError, match=r"different native frequency grid"):
         lusee.BeamCouplings([b_n, b_s], from_yaml_dict=couplings)
 
