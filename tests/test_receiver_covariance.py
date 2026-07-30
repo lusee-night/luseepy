@@ -7,11 +7,15 @@ import pytest
 
 from lusee.Covariance import (
     K_BOLTZMANN,
+    apply_receiver_loading,
     assemble_open_covariance,
     blackbody_normalization,
+    covariance_projection_diagnostics,
     default_product_labels,
     load_covariance,
+    matrix_condition_number,
     pack_covariance,
+    project_hermitian,
 )
 from lusee.MapMaker import compute_radiometric_noise
 from lusee.InstrumentResponse import PORT_PAIRS
@@ -102,6 +106,76 @@ def test_covariance_is_hermitian_and_packs_16_real_channels():
     assert jnp.allclose(
         covariance,
         jnp.swapaxes(covariance.conjugate(), -1, -2),
+    )
+
+
+def test_preprojection_diagnostics_preserve_antihermitian_residual():
+    ZA = jnp.zeros((1, 4, 4), dtype=jnp.complex128)
+    ZL = jnp.asarray([np.eye(4)], dtype=jnp.complex128)
+    open_covariance = np.zeros((1, 1, 4, 4), dtype=np.complex128)
+    open_covariance[0, 0, 0, 0] = 2.0
+    open_covariance[0, 0, 1, 1] = 3.0
+    open_covariance[0, 0, 0, 1] = 1.0 + 2.0j
+    open_covariance[0, 0, 1, 0] = 0.25 + 0.5j
+
+    unprojected, M = apply_receiver_loading(
+        jnp.asarray(open_covariance),
+        ZA,
+        ZL,
+    )
+    np.testing.assert_allclose(M, np.eye(4)[None])
+    diagnostics = covariance_projection_diagnostics(unprojected)
+    adjoint = np.swapaxes(open_covariance.conjugate(), -1, -2)
+    expected_absolute = np.max(
+        np.abs(open_covariance - adjoint),
+        axis=(-2, -1),
+    )
+    expected_relative = expected_absolute / np.max(
+        np.abs(open_covariance),
+        axis=(-2, -1),
+    )
+    np.testing.assert_allclose(
+        diagnostics["antihermitian_absolute"],
+        expected_absolute,
+    )
+    np.testing.assert_allclose(
+        diagnostics["antihermitian_relative"],
+        expected_relative,
+    )
+    covariance, _ = load_covariance(
+        jnp.asarray(open_covariance),
+        ZA,
+        ZL,
+    )
+    np.testing.assert_allclose(covariance, project_hermitian(unprojected))
+    np.testing.assert_allclose(
+        diagnostics["eigenvalues"],
+        np.linalg.eigvalsh(np.asarray(covariance)),
+    )
+    zero_diagnostics = covariance_projection_diagnostics(
+        jnp.zeros_like(unprojected)
+    )
+    np.testing.assert_array_equal(
+        zero_diagnostics["antihermitian_relative"],
+        0.0,
+    )
+    np.testing.assert_array_equal(
+        zero_diagnostics["minimum_eigenvalue_ratio"],
+        0.0,
+    )
+
+
+def test_matrix_condition_number_reports_each_frequency():
+    matrices = jnp.asarray(
+        [
+            np.diag([1.0, 2.0, 4.0, 8.0]),
+            np.diag([3.0, 3.0, 3.0, 3.0]),
+        ],
+        dtype=jnp.complex128,
+    )
+    np.testing.assert_allclose(
+        matrix_condition_number(matrices),
+        [8.0, 1.0],
     )
 
 

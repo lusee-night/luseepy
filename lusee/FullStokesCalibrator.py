@@ -5,12 +5,16 @@ import numpy as np
 from scipy.constants import Boltzmann, c, physical_constants
 
 from .Covariance import (
+    apply_receiver_loading,
     assemble_open_covariance,
-    load_covariance,
+    covariance_projection_diagnostics,
+    matrix_condition_number,
     pack_covariance,
+    project_hermitian,
 )
 from .InstrumentResponse import InstrumentResponse
 from .FullStokesSimulator import default_target_frequencies
+from .ResponsePhysics import validate_response_matrices
 
 
 VACUUM_IMPEDANCE_OHM = physical_constants[
@@ -70,7 +74,15 @@ class FullStokesCalibratorSimulator:
             pair_kernel,
             stokes,
         )[None]
-        ZA, _, Rmoon, Rloss, _ = self.beam.target_matrices(self.freq)
+        ZA, Rsky, Rmoon, Rloss, _ = self.beam.target_matrices(self.freq)
+        validate_response_matrices(
+            np.asarray(ZA),
+            np.asarray(Rsky),
+            np.asarray(Rmoon),
+            np.asarray(Rloss),
+            field_rsky=np.asarray(Rsky),
+            loss_model=self.beam.header.get("LOSSMODEL"),
+        )
         if T_ant is None:
             loss_model = str(
                 self.beam.header.get("LOSSMODEL", "")
@@ -91,12 +103,31 @@ class FullStokesCalibratorSimulator:
             T_ant=T_ant,
         )
         ZL = self.receiver.Z(self.freq)
-        covariance, M = load_covariance(open_covariance, ZA, ZL)
+        unprojected_covariance, M = apply_receiver_loading(
+            open_covariance,
+            ZA,
+            ZL,
+        )
+        covariance = project_hermitian(unprojected_covariance)
+        diagnostics = covariance_projection_diagnostics(
+            unprojected_covariance
+        )
         packed, labels = pack_covariance(covariance, self.products)
         self.result = packed
         self.covariance = covariance
         self.product_labels = labels
         self.M = M
+        self.covariance_antihermitian_absolute = diagnostics[
+            "antihermitian_absolute"
+        ]
+        self.covariance_antihermitian_relative = diagnostics[
+            "antihermitian_relative"
+        ]
+        self.covariance_eigenvalues = diagnostics["eigenvalues"]
+        self.covariance_minimum_eigenvalue_ratio = diagnostics[
+            "minimum_eigenvalue_ratio"
+        ]
+        self.loading_condition_number = matrix_condition_number(ZA + ZL)
         self.Rmoon = Rmoon
         self.Rloss = Rloss
         self.T_moon = T_moon

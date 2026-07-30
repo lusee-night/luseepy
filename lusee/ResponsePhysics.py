@@ -38,6 +38,7 @@ RESPONSE_HASH_METADATA_KEYS = (
     "POLBASIS",
     "PHASEREF",
     "PORTS",
+    "MAX_ICOND",
 )
 DEFAULT_RESPONSE_TRANSFORM_MAX_BYTES = 512 * 2**20
 
@@ -420,6 +421,114 @@ def _validation_tolerances(*arrays):
     return 1e-9, 1e-11
 
 
+def _matrix_scale(value):
+    return np.max(np.abs(value), axis=(-2, -1))
+
+
+def _relative_residual(residual, scale):
+    return np.divide(
+        residual,
+        scale,
+        out=np.zeros_like(residual, dtype=np.float64),
+        where=scale > 0,
+    )
+
+
+def response_matrix_diagnostics(ZA, Rsky, Rmoon, Rloss):
+    """Return per-frequency response-matrix residuals and eigenvalues."""
+    ZA = np.asarray(ZA)
+    Rsky = np.asarray(Rsky)
+    Rmoon = np.asarray(Rmoon)
+    Rloss = np.asarray(Rloss)
+    if not (
+        ZA.shape == Rsky.shape == Rmoon.shape == Rloss.shape
+        and ZA.ndim == 3
+        and ZA.shape[-2:] == (4, 4)
+    ):
+        raise ValueError(
+            "ZA, Rsky, Rmoon, and Rloss must share shape "
+            "(frequency, 4, 4)."
+        )
+
+    adjoint = lambda value: np.swapaxes(value.conjugate(), -1, -2)
+    dissipative = 0.5 * (ZA + adjoint(ZA))
+    closure = Rsky + Rmoon + Rloss - dissipative
+    za_scale = _matrix_scale(ZA)
+    resistance_scale = np.maximum.reduce(
+        (
+            _matrix_scale(dissipative),
+            _matrix_scale(Rsky),
+            _matrix_scale(Rmoon),
+            _matrix_scale(Rloss),
+        )
+    )
+    reciprocity = _matrix_scale(ZA - np.swapaxes(ZA, -1, -2))
+    closure_error = _matrix_scale(closure)
+    result = {
+        "za_condition_number": np.linalg.cond(ZA),
+        "za_reciprocity_error": reciprocity,
+        "za_reciprocity_relative": _relative_residual(
+            reciprocity,
+            za_scale,
+        ),
+        "resistance_closure_error": closure_error,
+        "resistance_closure_relative": _relative_residual(
+            closure_error,
+            resistance_scale,
+        ),
+        "passivity_eigenvalues": np.linalg.eigvalsh(dissipative),
+    }
+    for label, value in (
+        ("sky", Rsky),
+        ("moon", Rmoon),
+        ("loss", Rloss),
+    ):
+        scale = _matrix_scale(value)
+        hermitian_error = _matrix_scale(value - adjoint(value))
+        result[f"{label}_hermitian_error"] = hermitian_error
+        result[f"{label}_hermitian_relative"] = _relative_residual(
+            hermitian_error,
+            scale,
+        )
+        result[f"{label}_eigenvalues"] = np.linalg.eigvalsh(
+            0.5 * (value + adjoint(value))
+        )
+    return result
+
+
+def normalization_condition_numbers(
+    metadata,
+    *,
+    ZA,
+    Vsource,
+    Zref,
+):
+    """Return embedded-current unmixing condition numbers, when applicable."""
+    normalization_kind = str(
+        dict(metadata).get("NORM_KIND", "")
+    ).strip().lower()
+    if normalization_kind != "vsource":
+        return None
+    ZA = np.asarray(ZA)
+    Vsource = np.asarray(Vsource)
+    Zref = np.asarray(Zref)
+    if (
+        ZA.ndim != 3
+        or ZA.shape[-2:] != (4, 4)
+        or Vsource.shape != ZA.shape
+        or Zref.shape != ZA.shape[:2]
+    ):
+        raise ValueError(
+            "Embedded condition diagnostics require ZA/Vsource shape "
+            "(frequency, 4, 4) and Zref shape (frequency, 4)."
+        )
+    load = np.zeros_like(ZA)
+    diagonal = np.arange(4)
+    load[:, diagonal, diagonal] = Zref
+    currents = np.linalg.solve(ZA + load, Vsource)
+    return np.linalg.cond(currents)
+
+
 def validate_response_matrices(
     ZA,
     Rsky,
@@ -456,6 +565,15 @@ def validate_response_matrices(
             atol=atol,
         ):
             raise ValueError(f"{name} must be Hermitian.")
+    difference = float(
+        np.max(np.abs(ZA - np.swapaxes(ZA, -1, -2)))
+    )
+    reciprocity_scale = float(np.max(np.abs(ZA)))
+    if difference > atol + rtol * reciprocity_scale:
+        raise ValueError(
+            "ZA must be reciprocal (ZA == ZA.T); maximum residual is "
+            f"{difference:.6g} Ohm."
+        )
     dissipative = 0.5 * (ZA + np.swapaxes(ZA.conjugate(), -1, -2))
     if not np.allclose(
         Rsky + Rmoon + Rloss,
@@ -466,9 +584,24 @@ def validate_response_matrices(
         raise ValueError(
             "Rsky + Rmoon + Rloss does not equal the dissipative part of ZA."
         )
-    for name, value in (("Rmoon", Rmoon), ("Rloss", Rloss)):
+    for name, value in (
+        ("Herm(ZA)", dissipative),
+        ("Rsky", Rsky),
+        ("Rmoon", Rmoon),
+        ("Rloss", Rloss),
+    ):
         scale = max(1.0, float(np.max(np.abs(value))))
-        minimum = float(np.min(np.linalg.eigvalsh(value)))
+        minimum = float(
+            np.min(
+                np.linalg.eigvalsh(
+                    0.5
+                    * (
+                        value
+                        + np.swapaxes(value.conjugate(), -1, -2)
+                    )
+                )
+            )
+        )
         if minimum < -max(1e-8, 10 * atol) * scale:
             raise ValueError(
                 f"{name} has a negative eigenvalue "

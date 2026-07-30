@@ -79,8 +79,8 @@ def assemble_open_covariance(
 
 
 @jax.jit
-def load_covariance(open_covariance, ZA, ZL):
-    """Apply receiver loading as ``M K M^dagger``."""
+def apply_receiver_loading(open_covariance, ZA, ZL):
+    """Apply receiver loading and retain the unprojected covariance."""
     M = loading_matrix(ZA, ZL)
     covariance = jnp.einsum(
         "fab,tfbc,fdc->tfad",
@@ -88,9 +88,68 @@ def load_covariance(open_covariance, ZA, ZL):
         open_covariance,
         M.conjugate(),
     )
-    covariance = 0.5 * (
-        covariance + jnp.swapaxes(covariance.conjugate(), -1, -2)
+    return covariance, M
+
+
+@jax.jit
+def project_hermitian(matrix):
+    """Project a matrix batch onto its Hermitian part."""
+    return 0.5 * (
+        matrix + jnp.swapaxes(matrix.conjugate(), -1, -2)
     )
+
+
+@jax.jit
+def covariance_projection_diagnostics(unprojected_covariance):
+    """Measure projection residuals and eigenvalues without PSD clipping."""
+    adjoint = jnp.swapaxes(
+        unprojected_covariance.conjugate(),
+        -1,
+        -2,
+    )
+    absolute = jnp.max(
+        jnp.abs(unprojected_covariance - adjoint),
+        axis=(-2, -1),
+    )
+    scale = jnp.max(
+        jnp.abs(unprojected_covariance),
+        axis=(-2, -1),
+    )
+    safe_scale = jnp.where(scale > 0, scale, 1.0)
+    relative = jnp.where(scale > 0, absolute / safe_scale, 0.0)
+    eigenvalues = jnp.linalg.eigvalsh(
+        project_hermitian(unprojected_covariance)
+    )
+    eigenvalue_scale = jnp.max(jnp.abs(eigenvalues), axis=-1)
+    safe_eigenvalue_scale = jnp.where(
+        eigenvalue_scale > 0,
+        eigenvalue_scale,
+        1.0,
+    )
+    minimum_eigenvalue_ratio = jnp.where(
+        eigenvalue_scale > 0,
+        eigenvalues[..., 0] / safe_eigenvalue_scale,
+        0.0,
+    )
+    return {
+        "antihermitian_absolute": absolute,
+        "antihermitian_relative": relative,
+        "eigenvalues": eigenvalues,
+        "minimum_eigenvalue_ratio": minimum_eigenvalue_ratio,
+    }
+
+
+@jax.jit
+def matrix_condition_number(matrix):
+    """Return the spectral condition number of each final-axis matrix."""
+    return jnp.linalg.cond(matrix)
+
+
+@jax.jit
+def load_covariance(open_covariance, ZA, ZL):
+    """Apply receiver loading and project the result onto Hermitian matrices."""
+    covariance, M = apply_receiver_loading(open_covariance, ZA, ZL)
+    covariance = project_hermitian(covariance)
     return covariance, M
 
 

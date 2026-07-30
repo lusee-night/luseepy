@@ -2,12 +2,12 @@
 
 Date: 2026-07-30
 
-Status: implementation update, items 1--3 of the recommended plan complete
+Status: implementation update, items 1--4 of the recommended plan complete
 
 Reviewed revisions:
 
 - luseepy `codex/four-port-polarization-refactor`, implementation baseline
-  `6849c2594ece58b3aca438dd381eebba30b24645`
+  `e827ac12aee1ca58c7cead57f7b4b2379d1be795`
 - companion Croissant `codex/full-stokes-pair-response-topo` at
   `daf1545bc57cb7fdf3d28cc468789a139c6eeb68`
 - TeX source of truth:
@@ -60,9 +60,10 @@ diagonal weights, so it does not yet represent covariance between the two
 components or between products that share a port; that approximation is now
 explicit.
 
-Finite-`lmax` positivity and the remaining validation gaps are important
-release-readiness risks, not demonstrated operational bugs: there is no real
-four-port response on which to quantify them yet.
+Finite-`lmax` positivity remains an important release-readiness risk, not a
+demonstrated operational bug: the simulator now records the relevant matrix
+diagnostics, but there is no real four-port response on which to set an
+operational threshold yet.
 
 ## Wrong-result findings
 
@@ -99,9 +100,10 @@ silently treating a missing matrix as zero.
 Rmoon = Herm(ZA) - Rsky - Rloss.
 ```
 
-The writer and loader validate Hermiticity, the three-term resistance
-identity, and PSD of `Rmoon` and `Rloss`. The interpolated target-frequency
-matrices are checked again before simulation.
+The writer and loader validate reciprocity, passivity, Hermiticity, the
+three-term resistance identity, and PSD of `Rsky`, `Rmoon`, and `Rloss`.
+The interpolated target-frequency matrices are checked again before
+simulation.
 [`assemble_open_covariance`](../lusee/Covariance.py) now assembles
 
 ```text
@@ -279,32 +281,41 @@ bandlimits. It is expected spectral-truncation behavior, not by itself a
 programming error or evidence that an operational `lmax` is inadequate.
 Without a real four-port response, the realistic magnitude is unknown.
 
-Add covariance-eigenvalue and `lmax`-convergence diagnostics, and compare
-representative horizon structure against direct angular quadrature. Do not
+The simulator now records every covariance eigenvalue and
+`lambda_min/max(abs(lambda))` for every time/frequency sample, without
+clipping or rejecting a negative result. These arrays, plus their minimum
+summary, are persisted in simulation FITS and exposed by `Data`. This makes
+under-resolution visible without confusing it with an algebraically invalid
+input.
+
+The remaining work is to compare representative horizon structure against
+direct angular quadrature and demonstrate `lmax` convergence. Do not
 silently clip negative eigenvalues: clipping would hide inadequate angular
 resolution.
 
-### Response validation has no independent absolute oracle
+### Internal response gates complete; no independent absolute oracle
 
 [`validate_response_matrices`](../lusee/ResponsePhysics.py) now checks
 finiteness, `Rsky`/`Rmoon`/`Rloss` Hermiticity, the three-term complement,
-`Rmoon` and `Rloss` PSD, the PEC-zero-loss constraint, and agreement between
-stored and field-derived `Rsky`. It does not yet explicitly gate or report:
+the PEC-zero-loss constraint, agreement between stored and field-derived
+`Rsky`, reciprocity (`ZA approximately ZA.T`), passivity of `Herm(ZA)`, and
+PSD of all three resistance matrices. The same gates are applied to the
+interpolated target-frequency matrices before simulation.
 
-- reciprocity, `ZA approximately ZA.T`, for the reciprocal antenna model;
-- PSD of field-derived `Rsky`;
-- passivity of `Herm(ZA)`;
-- an acceptable condition number for embedded-current unmixing.
+[`InstrumentResponse.response_diagnostics`](../lusee/InstrumentResponse.py)
+reports per-frequency absolute and relative reciprocity, Hermiticity, and
+closure residuals; the eigenvalues of `Herm(ZA)`, `Rsky`, `Rmoon`, and
+`Rloss`; and the condition number of `ZA`. For embedded exports it also
+reconstructs and reports every solver-current unmixing condition number from
+the persisted `ZA`, `Vsource`, and `Zref`. The converter records the maximum
+as hash-bound `MAX_ICOND`, but deliberately does not impose a hard threshold.
 
-The converter records `MAX_ICOND`, but it has no justified acceptance
-threshold. The synthetic response closes its resistance budget using the
-same harmonic operator under test, so it is useful for internal consistency
-but not an absolute normalization oracle.
-
-Add mathematical reciprocity/passivity/PSD checks and conditioning
-diagnostics now. Add a grid-converged Hertzian-dipole analytic oracle. A hard
-conditioning threshold and a solver accepted-power oracle should wait for a
-representative export and numerical-precision requirements.
+The synthetic response still closes its resistance budget using the same
+harmonic operator under test, so these gates establish internal physical
+consistency, not absolute normalization. Add a grid-converged
+Hertzian-dipole analytic oracle next. A hard conditioning threshold and a
+solver accepted-power oracle should wait for a representative export and
+numerical-precision requirements.
 
 ### Coordinate metadata can still disagree
 
@@ -318,7 +329,7 @@ the stated review scope.
 Make one field authoritative or reject disagreement at construction and at
 the luseepy boundary.
 
-### Physical-input and projection diagnostics are incomplete
+### Physical-input diagnostics remain optional
 
 Physical Stokes maps satisfy
 
@@ -331,9 +342,13 @@ Signed components and map-making perturbations can be intentional, so these
 conditions should be an optional physical-simulation diagnostic rather than
 an unconditional rejection.
 
-Likewise, `load_covariance` projects onto the Hermitian subspace without
-reporting the pre-projection anti-Hermitian residual. Record that residual so
-convention errors can be distinguished from roundoff.
+The projection gap is resolved. Before projecting onto the Hermitian
+subspace, both full-Stokes simulators now record the maximum absolute and
+relative anti-Hermitian residual for every time/frequency matrix. The
+residual arrays and maximum summaries are persisted in simulation FITS and
+exposed by `Data`, alongside the per-frequency condition number of
+`ZA + ZL`. This distinguishes convention or truncation problems from
+roundoff while retaining the explicitly Hermitian science output.
 
 ## Scientifically sound components
 
@@ -411,7 +426,7 @@ The focused new-path and converter suite, including explicit-loss and
 normalization tests, completed without a compatibility shim with
 
 ```text
-68 passed, 2 warnings
+74 passed, 2 warnings
 ```
 
 The warnings are Astropy's pre-existing assumption that two numerical
@@ -439,8 +454,8 @@ further expert input:
    representation-invariance tests.
 3. **Complete:** correct real/imaginary radiometric variances and document
    the diagonal map-making approximation.
-4. Add reciprocity, passivity, matrix-PSD, anti-Hermitian-residual, and
-   condition-number diagnostics.
+4. **Complete:** add reciprocity, passivity, matrix-PSD,
+   anti-Hermitian-residual, and condition-number diagnostics.
 5. Add the grid-converged Hertzian-dipole oracle and direct-quadrature
    `lmax` convergence tests.
 6. Reject `coord`/`frame` disagreement and document/test the positive

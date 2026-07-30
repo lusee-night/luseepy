@@ -116,6 +116,11 @@ class Data(Observation):
             "SCALEASM",
             "TMOON_K",
             "TANT_K",
+            "LOADCMAX",
+            "AHABSMAX",
+            "AHRELMAX",
+            "COVEIMIN",
+            "COVERMIN",
         )
         self.provenance = {
             key: header[key]
@@ -279,6 +284,67 @@ class Data(Observation):
             "blackbody_normalization",
             "V^2/(Hz K)",
         )
+        hdu_names = {hdu.get_extname().lower() for hdu in fits}
+
+        def read_diagnostic(name, units, expected_shape):
+            if name.lower() not in hdu_names:
+                return None
+            hdu = fits[name]
+            diagnostic_header = dict(hdu.read_header())
+            actual_units = str(
+                diagnostic_header.get("BUNIT", "")
+            ).strip()
+            if actual_units != units:
+                raise ValueError(
+                    f"{name} must have BUNIT={units!r}; got "
+                    f"{actual_units!r}."
+                )
+            values = np.asarray(hdu.read())
+            if values.shape != expected_shape:
+                raise ValueError(
+                    f"{name} must have shape {expected_shape}; got "
+                    f"{values.shape}."
+                )
+            return values
+
+        self.loading_condition_number = read_diagnostic(
+            "loading_condition_number",
+            "1",
+            (len(self.freq),),
+        )
+        self.covariance_antihermitian_absolute = read_diagnostic(
+            "covariance_antihermitian_absolute",
+            "V^2/Hz",
+            (len(self.times), len(self.freq)),
+        )
+        self.covariance_antihermitian_relative = read_diagnostic(
+            "covariance_antihermitian_relative",
+            "1",
+            (len(self.times), len(self.freq)),
+        )
+        self.covariance_eigenvalues = read_diagnostic(
+            "covariance_eigenvalues",
+            "V^2/Hz",
+            (len(self.times), len(self.freq), 4),
+        )
+        self.covariance_minimum_eigenvalue_ratio = read_diagnostic(
+            "covariance_minimum_eigenvalue_ratio",
+            "1",
+            (len(self.times), len(self.freq)),
+        )
+        self.covariance_diagnostics = {
+            "loading_condition_number": self.loading_condition_number,
+            "antihermitian_absolute": (
+                self.covariance_antihermitian_absolute
+            ),
+            "antihermitian_relative": (
+                self.covariance_antihermitian_relative
+            ),
+            "eigenvalues": self.covariance_eigenvalues,
+            "minimum_eigenvalue_ratio": (
+                self.covariance_minimum_eigenvalue_ratio
+            ),
+        }
         receiver_payload = np.asarray(
             fits["receiver_params"].read(),
             dtype=np.uint8,

@@ -13,7 +13,10 @@ from scipy.constants import c, physical_constants
 from .frequencies import FrequencyMap
 from .ReceiverImpedance import loading_matrix
 from .ResponsePhysics import (
+    _validation_tolerances,
     compute_sky_moon_resistance,
+    normalization_condition_numbers,
+    response_matrix_diagnostics,
     response_payload_hash,
     validate_conversion_metadata,
     validate_normalization_payload,
@@ -925,35 +928,99 @@ class InstrumentResponse:
         )
 
     def sky_coupling_check(self, tolerance=1e-10):
-        """Return eigenvalue diagnostics for native Moon and metal loss."""
-        moon_hermitian_error = jnp.max(
-            jnp.abs(
-                self.Rmoon_native
-                - jnp.swapaxes(self.Rmoon_native.conjugate(), -1, -2)
-            ),
-            axis=(-2, -1),
+        """Return native reciprocity, passivity, closure, and PSD diagnostics."""
+        diagnostics = self.response_diagnostics()
+        rtol, atol = _validation_tolerances(
+            self.ZA,
+            self.Rsky_native,
+            self.Rmoon_native,
+            self.Rloss_native,
         )
-        loss_hermitian_error = jnp.max(
-            jnp.abs(
-                self.Rloss_native
-                - jnp.swapaxes(self.Rloss_native.conjugate(), -1, -2)
-            ),
-            axis=(-2, -1),
+        ZA = np.asarray(self.ZA)
+        Rsky = np.asarray(self.Rsky_native)
+        Rmoon = np.asarray(self.Rmoon_native)
+        Rloss = np.asarray(self.Rloss_native)
+        dissipative = 0.5 * (
+            ZA + np.swapaxes(ZA.conjugate(), -1, -2)
         )
-        moon_eigenvalues = jnp.linalg.eigvalsh(self.Rmoon_native)
-        loss_eigenvalues = jnp.linalg.eigvalsh(self.Rloss_native)
-        return {
-            "hermitian_error": moon_hermitian_error,
-            "eigenvalues": moon_eigenvalues,
-            "moon_hermitian_error": moon_hermitian_error,
-            "loss_hermitian_error": loss_hermitian_error,
-            "moon_eigenvalues": moon_eigenvalues,
-            "loss_eigenvalues": loss_eigenvalues,
-            "physical": jnp.logical_and(
-                jnp.all(moon_eigenvalues >= -tolerance),
-                jnp.all(loss_eigenvalues >= -tolerance),
-            ),
-        }
+
+        def residual_is_small(name, scale):
+            return np.all(
+                diagnostics[name] <= atol + rtol * np.asarray(scale)
+            )
+
+        def is_psd(name, matrix):
+            scale = max(1.0, float(np.max(np.abs(matrix))))
+            eigenvalue_tolerance = max(1e-8, tolerance, 10 * atol)
+            return (
+                np.min(diagnostics[name])
+                >= -eigenvalue_tolerance * scale
+            )
+
+        physical = (
+            residual_is_small(
+                "za_reciprocity_error",
+                np.max(np.abs(ZA), axis=(-2, -1)),
+            )
+            and residual_is_small(
+                "resistance_closure_error",
+                np.maximum.reduce(
+                    (
+                        np.max(np.abs(dissipative), axis=(-2, -1)),
+                        np.max(np.abs(Rsky), axis=(-2, -1)),
+                        np.max(np.abs(Rmoon), axis=(-2, -1)),
+                        np.max(np.abs(Rloss), axis=(-2, -1)),
+                    )
+                ),
+            )
+            and residual_is_small(
+                "sky_hermitian_error",
+                np.max(np.abs(Rsky), axis=(-2, -1)),
+            )
+            and residual_is_small(
+                "moon_hermitian_error",
+                np.max(np.abs(Rmoon), axis=(-2, -1)),
+            )
+            and residual_is_small(
+                "loss_hermitian_error",
+                np.max(np.abs(Rloss), axis=(-2, -1)),
+            )
+            and is_psd("passivity_eigenvalues", dissipative)
+            and is_psd("sky_eigenvalues", Rsky)
+            and is_psd("moon_eigenvalues", Rmoon)
+            and is_psd("loss_eigenvalues", Rloss)
+        )
+        diagnostics.update(
+            {
+                # Backward-compatible aliases for the former Moon-only API.
+                "hermitian_error": diagnostics["moon_hermitian_error"],
+                "eigenvalues": diagnostics["moon_eigenvalues"],
+                "physical": bool(physical),
+            }
+        )
+        return diagnostics
+
+    def response_diagnostics(self):
+        """Evaluate host-side matrix and normalization diagnostics."""
+        diagnostics = response_matrix_diagnostics(
+            self.ZA,
+            self.Rsky_native,
+            self.Rmoon_native,
+            self.Rloss_native,
+        )
+        condition_numbers = normalization_condition_numbers(
+            self.header,
+            ZA=self.ZA,
+            Vsource=self.Vsource,
+            Zref=self.Zref,
+        )
+        diagnostics["normalization_condition_number"] = condition_numbers
+        diagnostics["max_normalization_condition_number"] = (
+            None
+            if condition_numbers is None
+            else float(np.max(condition_numbers))
+        )
+        return diagnostics
 
 
 FourPortBeam = InstrumentResponse

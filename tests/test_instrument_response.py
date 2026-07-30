@@ -185,6 +185,67 @@ def test_response_loader_rechecks_validated_physical_matrices(tmp_path):
         InstrumentResponse(filename)
 
 
+def test_validated_response_rejects_nonreciprocal_impedance(tmp_path):
+    arrays = make_response_arrays()
+    arrays.ZA = arrays.ZA.copy()
+    arrays.ZA[:, 0, 1] += 0.25
+    arrays.ZA[:, 1, 0] -= 0.25
+    with pytest.raises(ValueError, match="must be reciprocal"):
+        write_response_fits(tmp_path / "nonreciprocal.fits", arrays)
+
+
+def test_validated_response_rejects_nonpassive_impedance(tmp_path):
+    arrays = make_response_arrays()
+    shift = 40.0 * np.eye(4)[None]
+    arrays.ZA = arrays.ZA - shift
+    arrays.Rmoon = arrays.Rmoon - shift
+    with pytest.raises(ValueError, match=r"Herm\(ZA\).*negative eigenvalue"):
+        write_response_fits(tmp_path / "nonpassive.fits", arrays)
+
+
+def test_validated_response_rejects_non_psd_sky_resistance(tmp_path):
+    arrays = make_response_arrays()
+    eigenvalues, eigenvectors = np.linalg.eigh(arrays.Rsky[0])
+    vector = eigenvectors[:, 0]
+    shift = (
+        abs(eigenvalues[0]) + 1.0
+    ) * np.outer(vector, vector.conjugate())
+    arrays.Rsky = arrays.Rsky.copy()
+    arrays.Rmoon = arrays.Rmoon.copy()
+    arrays.Rsky[0] -= shift
+    arrays.Rmoon[0] += shift
+    with pytest.raises(ValueError, match="Rsky has a negative eigenvalue"):
+        write_response_fits(tmp_path / "non_psd_sky.fits", arrays)
+
+
+def test_response_matrix_diagnostics_report_all_physical_gates():
+    arrays = make_response_arrays()
+    response = InstrumentResponse.from_arrays(
+        arrays.freq_mhz,
+        arrays.theta_deg,
+        arrays.phi_deg,
+        arrays.H_theta,
+        arrays.H_phi,
+        arrays.ZA,
+        arrays.Rsky,
+        arrays.Rmoon,
+        arrays.Rloss,
+        validated=True,
+        metadata=arrays.metadata,
+    )
+    diagnostics = response.response_diagnostics()
+    assert diagnostics["za_reciprocity_error"].shape == (2,)
+    assert diagnostics["passivity_eigenvalues"].shape == (2, 4)
+    assert diagnostics["sky_eigenvalues"].shape == (2, 4)
+    assert diagnostics["moon_eigenvalues"].shape == (2, 4)
+    assert diagnostics["loss_eigenvalues"].shape == (2, 4)
+    assert diagnostics["za_condition_number"].shape == (2,)
+    assert np.all(diagnostics["za_reciprocity_error"] == 0.0)
+    assert np.all(diagnostics["resistance_closure_relative"] < 1e-12)
+    assert diagnostics["normalization_condition_number"] is None
+    assert response.sky_coupling_check()["physical"]
+
+
 def test_response_loader_verifies_persisted_content_hash(tmp_path):
     arrays = make_response_arrays()
     filename = tmp_path / "content_hash.fits"

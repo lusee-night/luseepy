@@ -325,8 +325,22 @@ def test_embedded_converter_persists_original_and_canonical_normalization(
     assert response.header["NORM_UNIT"] == "V"
     assert response.header["NORM_AMP"] == "rms"
     assert response.header["CANONICAL"] == "H[m],SI-RMS"
+    assert response.header["MAX_ICOND"] == pytest.approx(1.0)
     np.testing.assert_allclose(response.Vsource, Vsource_rms)
     np.testing.assert_allclose(response.Zref, 50.0)
+    diagnostics = response.response_diagnostics()
+    np.testing.assert_allclose(
+        diagnostics["normalization_condition_number"],
+        1.0,
+    )
+    assert diagnostics["max_normalization_condition_number"] == (
+        pytest.approx(1.0)
+    )
+
+    with fitsio.FITS(filename, "rw") as fits:
+        fits["H_theta_real"].write_key("MAX_ICOND", 2.0)
+    with pytest.raises(ValueError, match="CONTENT hash"):
+        InstrumentResponse(filename)
 
 
 def test_direct_bare_converter_persists_si_normalization_current(tmp_path):

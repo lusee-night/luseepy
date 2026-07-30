@@ -521,6 +521,20 @@ def test_covariance_fits_data_round_trip_preserves_exact_time_and_units(
         lmax=2,
     )
     simulator.simulate(times)
+    assert simulator.loading_condition_number.shape == (3,)
+    assert simulator.covariance_antihermitian_absolute.shape == (
+        len(times),
+        3,
+    )
+    assert simulator.covariance_antihermitian_relative.shape == (
+        len(times),
+        3,
+    )
+    assert simulator.covariance_eigenvalues.shape == (len(times), 3, 4)
+    assert np.all(
+        np.asarray(simulator.covariance_antihermitian_relative) < 1e-12
+    )
+    assert np.min(np.asarray(simulator.covariance_eigenvalues)) > -1e-30
     filename = tmp_path / "covariance.fits"
     simulator.write_fits(filename)
     with fitsio.FITS(filename) as fits:
@@ -538,6 +552,17 @@ def test_covariance_fits_data_round_trip_preserves_exact_time_and_units(
     assert header["LUSEEVER"] != ""
     assert header["CROVER"] != ""
     assert header["S2FFTVER"] != ""
+    assert header["LOADCMAX"] == pytest.approx(
+        np.max(np.asarray(simulator.loading_condition_number))
+    )
+    assert header["AHRELMAX"] == pytest.approx(
+        np.max(
+            np.asarray(simulator.covariance_antihermitian_relative)
+        )
+    )
+    assert header["COVEIMIN"] == pytest.approx(
+        np.min(np.asarray(simulator.covariance_eigenvalues))
+    )
     assert time_header["TIMEFMT"] == "JD1+JD2"
     assert time_payload.shape == (len(times), 2)
     assert product_header["TUNIT1"] == "1"
@@ -556,6 +581,31 @@ def test_covariance_fits_data_round_trip_preserves_exact_time_and_units(
         "explicit-zero-test-fixture"
     )
     assert np.all(data.Rloss == 0.0)
+    np.testing.assert_allclose(
+        data.loading_condition_number,
+        simulator.loading_condition_number,
+    )
+    np.testing.assert_allclose(
+        data.covariance_antihermitian_absolute,
+        simulator.covariance_antihermitian_absolute,
+    )
+    np.testing.assert_allclose(
+        data.covariance_antihermitian_relative,
+        simulator.covariance_antihermitian_relative,
+    )
+    np.testing.assert_allclose(
+        data.covariance_eigenvalues,
+        simulator.covariance_eigenvalues,
+    )
+    np.testing.assert_allclose(
+        data.covariance_minimum_eigenvalue_ratio,
+        simulator.covariance_minimum_eigenvalue_ratio,
+    )
+    assert np.min(
+        data.covariance_diagnostics["minimum_eigenvalue_ratio"]
+    ) == pytest.approx(
+        header["COVERMIN"]
+    )
     assert np.array_equal(data.times.utc.mjd, times.utc.mjd)
     assert np.array_equal(data.times.jd1, times.jd1)
     assert np.array_equal(data.times.jd2, times.jd2)
@@ -657,6 +707,11 @@ def test_calibrator_pair_kernel_matches_direct_loaded_response_for_iquv():
             rtol=2e-11,
             atol=1e-25,
         )
+        assert simulator.loading_condition_number.shape == (1,)
+        assert simulator.covariance_eigenvalues.shape == (1, 1, 4)
+        assert np.max(
+            np.asarray(simulator.covariance_antihermitian_relative)
+        ) < 1e-12
 
 
 def test_lossy_calibrator_uses_distinct_moon_and_antenna_temperatures():

@@ -12,15 +12,19 @@ import jax.numpy as jnp
 import numpy as np
 
 from .Covariance import (
+    apply_receiver_loading,
     assemble_open_covariance,
     blackbody_normalization,
-    load_covariance,
+    covariance_projection_diagnostics,
+    matrix_condition_number,
     pack_covariance,
+    project_hermitian,
 )
 from .frequencies import FrequencyMap
 from .GainModel import V2_PER_HZ
 from .InstrumentResponse import InstrumentResponse
 from .LabeledArray import FRAME_TOPO, LabeledArray
+from .ResponsePhysics import validate_response_matrices
 
 
 def _as_time_array(times):
@@ -350,6 +354,11 @@ class FullStokesSimulatorBase:
         self.result_frame = FRAME_TOPO
         self.product_labels = None
         self.covariance = None
+        self.covariance_antihermitian_absolute = None
+        self.covariance_antihermitian_relative = None
+        self.covariance_eigenvalues = None
+        self.covariance_minimum_eigenvalue_ratio = None
+        self.loading_condition_number = None
         self.ZA_target = None
         self.ZL_target = None
         self.M_target = None
@@ -392,15 +401,14 @@ class FullStokesSimulatorBase:
         )
         Rmoon = dissipative - Rsky - Rloss
         if not _contains_tracer(Rmoon):
-            for name, matrix in (("Rmoon", Rmoon), ("Rloss", Rloss)):
-                value = np.asarray(matrix)
-                scale = max(1.0, float(np.max(np.abs(value))))
-                minimum = float(np.min(np.linalg.eigvalsh(value)))
-                if minimum < -1e-8 * scale:
-                    raise ValueError(
-                        f"Target-derived {name} has a negative eigenvalue "
-                        f"({minimum:.6g} Ohm)."
-                    )
+            validate_response_matrices(
+                np.asarray(ZA),
+                np.asarray(Rsky),
+                np.asarray(Rmoon),
+                np.asarray(Rloss),
+                field_rsky=np.asarray(Rsky),
+                loss_model=beam.header.get("LOSSMODEL"),
+            )
         return pair_alms, ZA, Rsky, Rmoon, Rloss
 
     def _antenna_temperature(self, beam):
@@ -467,16 +475,35 @@ class FullStokesSimulatorBase:
             T_ant=T_ant,
         )
         ZL = effective_receiver.Z(self.freq)
-        covariance, M = load_covariance(open_covariance, ZA, ZL)
+        unprojected_covariance, M = apply_receiver_loading(
+            open_covariance,
+            ZA,
+            ZL,
+        )
+        covariance = project_hermitian(unprojected_covariance)
         packed, labels = pack_covariance(covariance, self.products)
 
         if _contains_tracer(packed):
             return packed
 
+        covariance_diagnostics = covariance_projection_diagnostics(
+            unprojected_covariance
+        )
         self.result = packed
         self.result_times = times.copy()
         self.product_labels = labels
         self.covariance = covariance
+        self.covariance_antihermitian_absolute = covariance_diagnostics[
+            "antihermitian_absolute"
+        ]
+        self.covariance_antihermitian_relative = covariance_diagnostics[
+            "antihermitian_relative"
+        ]
+        self.covariance_eigenvalues = covariance_diagnostics["eigenvalues"]
+        self.covariance_minimum_eigenvalue_ratio = covariance_diagnostics[
+            "minimum_eigenvalue_ratio"
+        ]
+        self.loading_condition_number = matrix_condition_number(ZA + ZL)
         self.ZA_target = ZA
         self.ZL_target = ZL
         self.M_target = M
@@ -554,6 +581,33 @@ class FullStokesSimulatorBase:
             "CROVER": _package_version("croissant-sim"),
             "S2FFTVER": _package_version("s2fft"),
             "TMOON_K": float(self.T_moon),
+            "LOADCMAX": float(
+                np.max(np.asarray(self.loading_condition_number))
+            ),
+            "AHABSMAX": float(
+                np.max(
+                    np.asarray(
+                        self.covariance_antihermitian_absolute
+                    )
+                )
+            ),
+            "AHRELMAX": float(
+                np.max(
+                    np.asarray(
+                        self.covariance_antihermitian_relative
+                    )
+                )
+            ),
+            "COVEIMIN": float(
+                np.min(np.asarray(self.covariance_eigenvalues))
+            ),
+            "COVERMIN": float(
+                np.min(
+                    np.asarray(
+                        self.covariance_minimum_eigenvalue_ratio
+                    )
+                )
+            ),
         }
         if self.result_T_ant is not None:
             header["TANT_K"] = float(self.result_T_ant)
@@ -620,6 +674,31 @@ class FullStokesSimulatorBase:
             "blackbody_normalization",
             self.blackbody_normalization,
             "V^2/(Hz K)",
+        )
+        fits.write(
+            np.asarray(self.loading_condition_number),
+            extname="loading_condition_number",
+            header={"BUNIT": "1"},
+        )
+        fits.write(
+            np.asarray(self.covariance_antihermitian_absolute),
+            extname="covariance_antihermitian_absolute",
+            header={"BUNIT": V2_PER_HZ},
+        )
+        fits.write(
+            np.asarray(self.covariance_antihermitian_relative),
+            extname="covariance_antihermitian_relative",
+            header={"BUNIT": "1"},
+        )
+        fits.write(
+            np.asarray(self.covariance_eigenvalues),
+            extname="covariance_eigenvalues",
+            header={"BUNIT": V2_PER_HZ},
+        )
+        fits.write(
+            np.asarray(self.covariance_minimum_eigenvalue_ratio),
+            extname="covariance_minimum_eigenvalue_ratio",
+            header={"BUNIT": "1"},
         )
         params = getattr(receiver, "params", {})
         payload = json.dumps(

@@ -599,6 +599,30 @@ def write_response_fits(
         raise ValueError("dtype must be 'float32' or 'float64'.")
     real_dtype = np.dtype(dtype)
     header = _response_header(response, validated)
+    header.pop("MAX_ICOND", None)
+    from lusee.ResponsePhysics import normalization_condition_numbers
+
+    def persisted_complex(value):
+        if value is None:
+            return None
+        value = np.asarray(value)
+        return (
+            value.real.astype(real_dtype)
+            + 1j * value.imag.astype(real_dtype)
+        )
+
+    condition_numbers = normalization_condition_numbers(
+        header,
+        ZA=persisted_complex(response.ZA),
+        Vsource=persisted_complex(response.Vsource),
+        Zref=(
+            None
+            if response.Zref is None
+            else np.asarray(response.Zref).astype(real_dtype)
+        ),
+    )
+    if condition_numbers is not None:
+        header["MAX_ICOND"] = float(np.max(condition_numbers))
     header["CONTENT"] = response_content_hash(
         response,
         metadata=header,

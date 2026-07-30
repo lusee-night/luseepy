@@ -297,7 +297,6 @@ def convert_receive_csvs(
             raise ValueError(
                 "Zref must be scalar, per-port, or frequency-by-port."
             )
-    I_sim = None
     canonical_vsource = None
     canonical_inorm = None
     if input_kind == "embedded":
@@ -314,7 +313,7 @@ def convert_receive_csvs(
             raise ValueError(
                 "Embedded inputs cannot also supply a normalization current."
             )
-        Etheta, Ephi, I_sim = embedded_fields_to_bare(
+        Etheta, Ephi, _ = embedded_fields_to_bare(
             Etheta,
             Ephi,
             ZA,
@@ -395,10 +394,6 @@ def convert_receive_csvs(
     )
     meta = dict(metadata or {})
     meta.update(contract)
-    if I_sim is not None:
-        meta["MAX_ICOND"] = float(
-            np.max(np.linalg.cond(I_sim))
-        )
     response = ResponseArrays(
         freq,
         theta,

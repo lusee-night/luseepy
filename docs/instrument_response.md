@@ -44,6 +44,14 @@ The primary result is the JFET-input covariance `M K M^dagger` in `V^2/Hz`.
 `simulate()` and `result` stay bare arrays for JAX. `result_labeled` attaches
 `V^2/Hz` and `topo` only at the Python boundary.
 
+Before the final Hermitian projection, the simulator records the absolute
+and relative anti-Hermitian residual for every time/frequency matrix. It also
+records all four covariance eigenvalues, the minimum eigenvalue relative to
+the largest absolute eigenvalue, and the per-frequency condition number of
+`ZA + ZL`. These are diagnostics only: finite-`lmax` sky/response
+contractions can be non-PSD when under-resolved, so the simulator neither
+clips nor unconditionally rejects negative covariance eigenvalues.
+
 Simulation FITS files store exact target frequencies and supplied timestamps
 as two-part `JD1+JD2` values with `TIMESYS`, `TIMEUNIT`, clock source, and
 scale-assumption metadata. This preserves Astropy's double-double time
@@ -51,6 +59,9 @@ precision; `Data` also retains read compatibility with the development-only
 single-MJD form. The legacy `V` selection suffix is a no-op for new
 physical-PSD files; a `K` suffix selects the derived
 blackbody-normalized view.
+The same files persist the covariance and loading diagnostics, with maximum
+or minimum summaries in the data header; `Data.covariance_diagnostics`
+exposes them after loading.
 
 See `simulation/config/four_port_example.yaml` for the new value-based
 configuration.
@@ -98,12 +109,20 @@ Thevenin array and `--vsource-units V --vsource-amplitude rms`.
 
 Validation derives `Rsky` from `H_theta/H_phi` with the same Croissant MWSS
 monopole operator used by simulation. A supplied `Rsky` must match that
-result; `Rsky + Rmoon + Rloss` must equal `(ZA + ZA^dagger)/2`; and `Rmoon`
-and `Rloss` must be Hermitian and positive semidefinite. A PEC response must
-declare its explicit zero `Rloss`. The `InstrumentResponse` loader repeats
-the geometry, convention, normalization-payload, field/matrix, and
-dissipative-matrix checks, so `VALIDATED=True` is not accepted as a
-substitute for checking the payload.
+result; reciprocal antennas must satisfy `ZA approximately ZA.T`;
+`Herm(ZA)` must be passive; `Rsky + Rmoon + Rloss` must equal
+`(ZA + ZA^dagger)/2`; and all three resistance matrices must be Hermitian and
+positive semidefinite. A PEC response must declare its explicit zero
+`Rloss`. The `InstrumentResponse` loader repeats the geometry, convention,
+normalization-payload, field/matrix, and dissipative-matrix checks, so
+`VALIDATED=True` is not accepted as a substitute for checking the payload.
+
+`InstrumentResponse.response_diagnostics()` reports the corresponding
+per-frequency residuals, eigenvalues, and `ZA` condition number. For an
+embedded-field artifact it also reconstructs the current-unmixing condition
+number from the persisted `ZA`, `Vsource`, and `Zref`; its maximum is stored
+as hash-bound `MAX_ICOND`. This is report-only until a representative solver
+export and numerical-error requirement justify an acceptance threshold.
 
 `CONTENT` hashes the canonical persisted precision of every numerical
 response array, including canonical SI `Vsource` or `Inorm` data when
