@@ -82,6 +82,60 @@ def test_exact_default_rejects_offgrid_beam_and_sky():
         _run_numpy_sim([10.0])
 
 
+def test_mapmaker_build_instrument_forwards_frequency_policy(monkeypatch):
+    import lusee
+    from lusee import mapmaker
+
+    class DummyBeam:
+        freq = np.asarray([25.0, 26.0])
+
+        def __init__(self, beam_file, id):
+            self.id = id
+
+        def rotate(self, angle):
+            return self
+
+        def taper_and_smooth(self, taper):
+            pass
+
+    class DummyObservation:
+        def __init__(self, obs_range, **kwargs):
+            pass
+
+    class DummySky:
+        def __init__(self, nside, lmax, *, maps, freq, frame):
+            pass
+
+    def build_simulator(obs, beams, sky, *, Tground, combinations, freq, lmax,
+                        frequency_policy):
+        return lusee.FrequencyMap.build(
+            freq, beams[0].freq, policy=frequency_policy
+        )
+
+    monkeypatch.setattr(mapmaker, "Beam", DummyBeam)
+    monkeypatch.setattr(mapmaker, "Observation", DummyObservation)
+    monkeypatch.setattr(mapmaker, "HealpixSky", DummySky)
+    monkeypatch.setattr(mapmaker, "CroSimulator", build_simulator)
+
+    kwargs = {
+        "beam_file": "unused.fits",
+        "obs_range": "unused",
+        "freq": np.asarray([25.5]),
+        "lmax": 4,
+        "layout": [("N", 0.0)],
+        "combinations": [(0, 0)],
+    }
+    with pytest.raises(ValueError, match=r"frequency_policy='exact'"):
+        mapmaker.build_instrument(**kwargs)
+
+    freq_map, _, _ = mapmaker.build_instrument(
+        **kwargs, frequency_policy="linear"
+    )
+    assert freq_map.policy is lusee.FrequencyPolicy.LINEAR
+    np.testing.assert_array_equal(freq_map.source_indices, [0, 1])
+    np.testing.assert_array_equal(freq_map.alpha, [0.5])
+
+
 def test_out_of_range_raises():
     """Requesting 55 MHz on a 1-50 MHz BeamGauss must raise ValueError."""
     with pytest.raises(ValueError, match=r"out of range"):
