@@ -15,6 +15,8 @@ from .ReceiverImpedance import loading_matrix
 from .ResponsePhysics import (
     compute_sky_moon_resistance,
     response_payload_hash,
+    validate_conversion_metadata,
+    validate_normalization_payload,
     validate_response_matrices,
 )
 
@@ -46,7 +48,12 @@ REQUIRED_PROVENANCE = (
     "SOURCE_ROOT",
     "INPUT_KIND",
     "FIELD_KIND",
-    "AMP_CONV",
+    "FIELD_UNIT",
+    "FIELD_AMP",
+    "NORM_KIND",
+    "NORM_UNIT",
+    "NORM_AMP",
+    "CANONICAL",
     "LOSSMODEL",
     "RLOSSSRC",
     "TIMECONV",
@@ -69,8 +76,18 @@ CANONICAL_CONVENTIONS = {
     "POLBASIS": {"e_theta,e_phi"},
     "PORTS": {"0123"},
     "INPUT_KIND": {"bare", "embedded"},
-    "FIELD_KIND": {"re", "r_e", "effective-length", "effective_length"},
-    "AMP_CONV": {"rms", "peak"},
+    "FIELD_KIND": {"re", "re-per-current", "effective-length"},
+    "FIELD_UNIT": {"v", "mv", "v/a", "mv/a", "m"},
+    "FIELD_AMP": {"rms", "peak", "ratio"},
+    "NORM_KIND": {
+        "vsource",
+        "current",
+        "already-per-ampere",
+        "already-effective-length",
+    },
+    "NORM_UNIT": {"v", "mv", "a", "ma", "not-applicable"},
+    "NORM_AMP": {"rms", "peak", "ratio"},
+    "CANONICAL": {"h[m],si-rms"},
     "LOSSMODEL": {"pec", "lossy"},
 }
 
@@ -139,6 +156,7 @@ def _validate_provenance(header):
                 f"Validated response has unsupported {key}={header[key]!r}; "
                 f"expected one of {sorted(allowed)}."
             )
+    validate_conversion_metadata(header)
 
 
 @jax.tree_util.register_pytree_node_class
@@ -185,12 +203,25 @@ class InstrumentResponse:
             if "vsource_real" in names
             else None
         )
+        Inorm = (
+            _read_complex(fits, "Inorm", "A")
+            if "inorm_real" in names
+            else None
+        )
         Zref = (
             _read_unit_checked(fits, "Zref", "Ohm")
             if "zref" in names
             else None
         )
         fits.close()
+        if validated:
+            validate_normalization_payload(
+                header,
+                Vsource=Vsource,
+                Inorm=Inorm,
+                Zref=Zref,
+                nfrequency=self.freq.size,
+            )
         if not np.all(np.isfinite(H_theta)):
             raise ValueError("H_theta contains non-finite values.")
         if not np.all(np.isfinite(H_phi)):
@@ -201,6 +232,11 @@ class InstrumentResponse:
         self.Rsky_native = jnp.asarray(Rsky)
         self.Rmoon_native = jnp.asarray(Rmoon)
         self.Rloss_native = jnp.asarray(Rloss)
+        self.Vsource = (
+            None if Vsource is None else jnp.asarray(Vsource)
+        )
+        self.Inorm = None if Inorm is None else jnp.asarray(Inorm)
+        self.Zref = None if Zref is None else jnp.asarray(Zref)
         self.header = header
         self.validated = validated
         self.id = header.get("PORTS", "0123")
@@ -245,6 +281,7 @@ class InstrumentResponse:
             Rmoon=Rmoon,
             Rloss=Rloss,
             Vsource=Vsource,
+            Inorm=Inorm,
             Zref=Zref,
             metadata=header,
         )
@@ -272,6 +309,9 @@ class InstrumentResponse:
         *,
         validated=None,
         metadata=None,
+        Vsource=None,
+        Inorm=None,
+        Zref=None,
     ):
         """Construct a response in memory for analytic fixtures and tests."""
         obj = cls.__new__(cls)
@@ -285,6 +325,11 @@ class InstrumentResponse:
         obj.Rsky_native = jnp.asarray(Rsky)
         obj.Rmoon_native = jnp.asarray(Rmoon)
         obj.Rloss_native = jnp.asarray(Rloss)
+        obj.Vsource = (
+            None if Vsource is None else jnp.asarray(Vsource)
+        )
+        obj.Inorm = None if Inorm is None else jnp.asarray(Inorm)
+        obj.Zref = None if Zref is None else jnp.asarray(Zref)
         obj.header = {
             str(key).upper(): value
             for key, value in dict(metadata or {}).items()
@@ -314,6 +359,13 @@ class InstrumentResponse:
         obj.freq_max = float(obj.freq[-1])
         obj._validate()
         if obj.validated:
+            validate_normalization_payload(
+                obj.header,
+                Vsource=obj.Vsource,
+                Inorm=obj.Inorm,
+                Zref=obj.Zref,
+                nfrequency=obj.freq.size,
+            )
             try:
                 field_rsky, _ = compute_sky_moon_resistance(
                     obj.freq,
@@ -349,6 +401,9 @@ class InstrumentResponse:
                 Rsky=obj.Rsky_native,
                 Rmoon=obj.Rmoon_native,
                 Rloss=obj.Rloss_native,
+                Vsource=obj.Vsource,
+                Inorm=obj.Inorm,
+                Zref=obj.Zref,
                 metadata=obj.header,
             )
         except jax.errors.TracerArrayConversionError:
@@ -449,6 +504,9 @@ class InstrumentResponse:
             self.Rsky_native,
             self.Rmoon_native,
             self.Rloss_native,
+            self.Vsource,
+            self.Inorm,
+            self.Zref,
         )
         aux = (
             tuple(self.freq.tolist()),
@@ -485,7 +543,17 @@ class InstrumentResponse:
             content_hash,
             transform_memory_budget_bytes,
         ) = aux
-        H_theta, H_phi, ZA, Rsky, Rmoon, Rloss = children
+        (
+            H_theta,
+            H_phi,
+            ZA,
+            Rsky,
+            Rmoon,
+            Rloss,
+            Vsource,
+            Inorm,
+            Zref,
+        ) = children
         obj = cls.__new__(cls)
         obj.filename = filename
         obj.freq = np.asarray(freq, dtype=np.float64)
@@ -497,6 +565,9 @@ class InstrumentResponse:
         obj.Rsky_native = Rsky
         obj.Rmoon_native = Rmoon
         obj.Rloss_native = Rloss
+        obj.Vsource = Vsource
+        obj.Inorm = Inorm
+        obj.Zref = Zref
         obj.validated = validated
         obj.id = id_value
         obj.frame = frame
@@ -758,6 +829,9 @@ class InstrumentResponse:
             Rsky=result.Rsky_native,
             Rmoon=result.Rmoon_native,
             Rloss=result.Rloss_native,
+            Vsource=result.Vsource,
+            Inorm=result.Inorm,
+            Zref=result.Zref,
             metadata=result.header,
         )
         return result

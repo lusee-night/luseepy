@@ -20,7 +20,12 @@ RESPONSE_HASH_METADATA_KEYS = (
     "SOURCE_ROOT",
     "INPUT_KIND",
     "FIELD_KIND",
-    "AMP_CONV",
+    "FIELD_UNIT",
+    "FIELD_AMP",
+    "NORM_KIND",
+    "NORM_UNIT",
+    "NORM_AMP",
+    "CANONICAL",
     "LOSSMODEL",
     "RLOSSSRC",
     "TIMECONV",
@@ -35,6 +40,137 @@ RESPONSE_HASH_METADATA_KEYS = (
     "PORTS",
 )
 DEFAULT_RESPONSE_TRANSFORM_MAX_BYTES = 512 * 2**20
+
+
+def validate_conversion_metadata(metadata):
+    """Validate the physical quantity, units, and normalization contract."""
+    values = {
+        str(key).upper(): str(value).strip().lower().replace("_", "-")
+        for key, value in dict(metadata).items()
+    }
+    input_kind = values.get("INPUT_KIND")
+    field_kind = values.get("FIELD_KIND")
+    field_unit = values.get("FIELD_UNIT")
+    field_amplitude = values.get("FIELD_AMP")
+    normalization_kind = values.get("NORM_KIND")
+    normalization_unit = values.get("NORM_UNIT")
+    normalization_amplitude = values.get("NORM_AMP")
+    canonical = values.get("CANONICAL")
+
+    if canonical != "h[m],si-rms":
+        raise ValueError(
+            "Validated response CANONICAL must be 'H[m],SI-RMS'."
+        )
+    if input_kind == "embedded":
+        expected = {
+            "FIELD_KIND": (field_kind, {"re"}),
+            "FIELD_UNIT": (field_unit, {"v", "mv"}),
+            "FIELD_AMP": (field_amplitude, {"rms", "peak"}),
+            "NORM_KIND": (normalization_kind, {"vsource"}),
+            "NORM_UNIT": (normalization_unit, {"v", "mv"}),
+            "NORM_AMP": (normalization_amplitude, {"rms", "peak"}),
+        }
+    elif input_kind == "bare" and field_kind == "re":
+        expected = {
+            "FIELD_UNIT": (field_unit, {"v", "mv"}),
+            "FIELD_AMP": (field_amplitude, {"rms", "peak"}),
+            "NORM_KIND": (normalization_kind, {"current"}),
+            "NORM_UNIT": (normalization_unit, {"a", "ma"}),
+            "NORM_AMP": (normalization_amplitude, {"rms", "peak"}),
+        }
+    elif input_kind == "bare" and field_kind == "re-per-current":
+        expected = {
+            "FIELD_UNIT": (field_unit, {"v/a", "mv/a"}),
+            "FIELD_AMP": (field_amplitude, {"ratio"}),
+            "NORM_KIND": (
+                normalization_kind,
+                {"already-per-ampere"},
+            ),
+            "NORM_UNIT": (normalization_unit, {"not-applicable"}),
+            "NORM_AMP": (normalization_amplitude, {"ratio"}),
+        }
+    elif input_kind == "bare" and field_kind == "effective-length":
+        expected = {
+            "FIELD_UNIT": (field_unit, {"m"}),
+            "FIELD_AMP": (field_amplitude, {"ratio"}),
+            "NORM_KIND": (
+                normalization_kind,
+                {"already-effective-length"},
+            ),
+            "NORM_UNIT": (normalization_unit, {"not-applicable"}),
+            "NORM_AMP": (normalization_amplitude, {"ratio"}),
+        }
+    else:
+        raise ValueError(
+            "Validated response has an unsupported INPUT_KIND/FIELD_KIND "
+            f"combination: {input_kind!r}/{field_kind!r}."
+        )
+
+    for key, (actual, allowed) in expected.items():
+        if actual not in allowed:
+            raise ValueError(
+                f"Validated response has inconsistent {key}={actual!r}; "
+                f"expected one of {sorted(allowed)} for "
+                f"{input_kind}/{field_kind}."
+            )
+
+
+def validate_normalization_payload(
+    metadata,
+    *,
+    Vsource,
+    Inorm,
+    Zref,
+    nfrequency,
+):
+    """Bind normalization provenance to the numerical payload."""
+    normalization_kind = str(
+        dict(metadata).get("NORM_KIND", "")
+    ).strip().lower()
+    if normalization_kind == "vsource":
+        if Vsource is None or Zref is None or Inorm is not None:
+            raise ValueError(
+                "NORM_KIND='vsource' requires Vsource and Zref and forbids "
+                "Inorm."
+            )
+        Vsource = np.asarray(Vsource)
+        if Vsource.shape != (nfrequency, 4, 4):
+            raise ValueError(
+                "Vsource must have shape (frequency, 4, 4)."
+            )
+        if not np.all(np.isfinite(Vsource)):
+            raise ValueError("Vsource contains non-finite values.")
+        Zref = np.asarray(Zref)
+        if Zref.shape != (nfrequency, 4):
+            raise ValueError("Zref must have shape (frequency, 4).")
+        if not np.all(np.isfinite(Zref)) or np.any(Zref <= 0):
+            raise ValueError("Zref must be finite and positive.")
+    elif normalization_kind == "current":
+        if Inorm is None or Vsource is not None or Zref is not None:
+            raise ValueError(
+                "NORM_KIND='current' requires Inorm and forbids Vsource "
+                "and Zref."
+            )
+        Inorm = np.asarray(Inorm)
+        if Inorm.shape != (nfrequency, 4):
+            raise ValueError(
+                "Inorm must have shape (frequency, 4)."
+            )
+        if not np.all(np.isfinite(Inorm)) or np.any(Inorm == 0):
+            raise ValueError("Inorm must be finite and nonzero.")
+    elif normalization_kind in {
+        "already-per-ampere",
+        "already-effective-length",
+    }:
+        if Vsource is not None or Inorm is not None or Zref is not None:
+            raise ValueError(
+                f"NORM_KIND={normalization_kind!r} forbids Vsource and "
+                "Inorm and Zref payloads."
+            )
+    else:
+        raise ValueError(
+            f"Unsupported NORM_KIND={normalization_kind!r}."
+        )
 
 
 def _validate_mwss_upper_grid(theta_deg, phi_deg):
@@ -394,6 +530,7 @@ def response_payload_hash(
     Rloss,
     metadata,
     Vsource=None,
+    Inorm=None,
     Zref=None,
     real_dtype=None,
 ):
@@ -416,6 +553,8 @@ def response_payload_hash(
         Rloss = persisted_complex(Rloss)
         if Vsource is not None:
             Vsource = persisted_complex(Vsource)
+        if Inorm is not None:
+            Inorm = persisted_complex(Inorm)
         if Zref is not None:
             Zref = np.asarray(Zref).astype(real_dtype)
 
@@ -431,6 +570,7 @@ def response_payload_hash(
         ("Rmoon", Rmoon),
         ("Rloss", Rloss),
         ("Vsource", Vsource),
+        ("Inorm", Inorm),
         ("Zref", Zref),
     ):
         _update_array_hash(digest, name, value)

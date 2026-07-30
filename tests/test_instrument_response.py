@@ -61,7 +61,12 @@ def make_response_arrays(freq=(10.0, 20.0)):
             "SOURCE_ROOT": "pytest",
             "INPUT_KIND": "bare",
             "FIELD_KIND": "effective-length",
-            "AMP_CONV": "RMS",
+            "FIELD_UNIT": "m",
+            "FIELD_AMP": "ratio",
+            "NORM_KIND": "already-effective-length",
+            "NORM_UNIT": "not-applicable",
+            "NORM_AMP": "ratio",
+            "CANONICAL": "H[m],SI-RMS",
             "LOSSMODEL": "PEC",
             "RLOSSSRC": "explicit-zero-test-fixture",
             "ZA_SOURCE": "analytic",
@@ -236,6 +241,29 @@ def test_validated_writer_rejects_noncanonical_provenance(tmp_path):
         write_response_fits(tmp_path / "bad_convention.fits", arrays)
 
 
+def test_validated_writer_rejects_inconsistent_conversion_contract(tmp_path):
+    arrays = make_response_arrays()
+    arrays.metadata["FIELD_KIND"] = "rE"
+    with pytest.raises(ValueError, match="inconsistent FIELD_UNIT"):
+        write_response_fits(tmp_path / "bad_conversion.fits", arrays)
+
+
+def test_raw_bare_contract_requires_persisted_normalization_current(tmp_path):
+    arrays = make_response_arrays()
+    arrays.metadata.update(
+        {
+            "FIELD_KIND": "rE",
+            "FIELD_UNIT": "V",
+            "FIELD_AMP": "rms",
+            "NORM_KIND": "current",
+            "NORM_UNIT": "A",
+            "NORM_AMP": "rms",
+        }
+    )
+    with pytest.raises(ValueError, match="requires Inorm"):
+        write_response_fits(tmp_path / "missing_inorm.fits", arrays)
+
+
 def test_writer_argument_controls_validated_header(tmp_path):
     arrays = make_response_arrays()
     arrays.metadata["VALIDATED"] = False
@@ -349,6 +377,10 @@ def test_embedded_basis_right_solve_recovers_noncommuting_bare_fields():
             ZA,
             Zref,
             Vsource,
+            field_units="V",
+            field_amplitude_convention="rms",
+            vsource_units="V",
+            vsource_amplitude_convention="rms",
         )
     )
     np.testing.assert_allclose(recovered_currents, currents, rtol=1e-12)

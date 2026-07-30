@@ -2,12 +2,12 @@
 
 Date: 2026-07-30
 
-Status: implementation update, item 1 of the recommended plan complete
+Status: implementation update, items 1--2 of the recommended plan complete
 
 Reviewed revisions:
 
 - luseepy `codex/four-port-polarization-refactor`, implementation baseline
-  `9589d7b9f5f463db1c2778a6f6a9c1613d60b6ec`
+  `daf7d793c70344dc489ce798f7177671d789bb73`
 - companion Croissant `codex/full-stokes-pair-response-topo` at
   `daf1545bc57cb7fdf3d28cc468789a139c6eeb68`
 - TeX source of truth:
@@ -37,11 +37,11 @@ derivation.
 
 The earlier ENU parity blocker is fixed in the reviewed Croissant revision.
 The earlier claim that peak-labelled inputs universally halve sky covariance
-was too broad. The real converter problem is that one amplitude flag cannot
-describe the field units and the separate field/source phasor conventions
-required by the TeX. Depending on preprocessing, the current converter can be
-correct, can be wrong by a factor of two in covariance, or can be wrong by
-six orders of magnitude from untreated HFSS mV units.
+was too broad. The converter now describes field units and field/source
+phasor conventions separately, normalizes raw phasors to SI RMS before
+forming a ratio, and treats already-normalized `rE/I` and effective length as
+ratio quantities. This removes both the conditional factor-of-two error and
+the untreated-HFSS-mV error from the supported conversion paths.
 
 The response and covariance schema now represents antenna metal loss
 separately and applies its own antenna temperature. This removes the
@@ -49,10 +49,10 @@ previous software error for unequal lunar and antenna temperatures.
 Producing a realistic lossy response still requires new lossy and PEC
 solver products, which are not currently available.
 
-One further change remains required before producing a scientifically
-validated, realistic four-port response:
-
-1. make the response-conversion unit and normalization contract explicit.
+The two previously identified blockers in the software model are resolved.
+A scientifically validated realistic response still requires a new solver
+export and an independent accepted-power or plane-wave terminal-voltage
+check; no such artifact is currently available.
 
 The map-making radiometric-noise calculation also has a definite factor and
 complex-covariance error. It does not alter simulator voltage covariances,
@@ -129,7 +129,7 @@ schema revision was updated in place because no production version-3
 four-port artifact exists; any experimental pre-change version-3 file is
 intentionally incompatible with the new required provenance.
 
-### 2. Blocker for response production: converter normalization is underspecified
+### 2. Resolved in software: converter units and normalization are explicit
 
 The TeX gives two separate HFSS requirements:
 
@@ -140,77 +140,41 @@ The TeX gives two separate HFSS requirements:
   or `sqrt(2)` V RMS, Thevenin source
   ([lines 249--253](../../new_four_port_paper/04_AsymmetricTwoAntenna.tex#L249)).
 
-The converter has no raw-field unit parameter.
-[`convert_fields_to_effective_length`](../beam_conversion/common.py#L147)
-accepts one `amplitude_convention`, divides every peak-labelled field by
-`sqrt(2)`, and assumes the resulting `rE` values are in volts.
-[`convert_receive_csvs`](../beam_conversion/receive_csv.py#L129) uses that
-same flag after reconstructing currents from a separately supplied
-`Vsource`, whose amplitude convention is neither declared nor checked.
+The converter now accepts four mutually explicit physical contracts:
 
-There is a second normalization hole for direct bare input. With
-`input_kind="bare"` and `field_kind="rE"`, the converter skips current
-reconstruction and applies the reciprocity factor immediately. This is
-correct only when each input pattern is already normalized to the open-port
-1 A basis, so its actual quantity is `rE/I` in V/A. The TeX can set
-`I_norm = 1 A` after embedded-pattern unmixing because that matrix operation
-forces the recovered current basis to the identity. An arbitrary direct
-bare solver export does not inherit that guarantee. The API accepts no
-per-port/frequency complex normalization current and records no explicit
-already-per-ampere assertion.
+1. embedded raw `rE` in V or mV, with a separately described Thevenin
+   `Vsource`;
+2. direct bare raw `rE` in V or mV, with a complex
+   `(frequency, 4)` normalization-current array;
+3. an explicit already-per-ampere `rE/I` in V/A or mV/A; or
+4. effective length in m.
 
-There is no universal factor-of-two diagnosis:
+For the first two paths, field and voltage/current phasors each carry their
+own RMS/peak convention. They are independently converted to SI RMS before
+the current reconstruction or division. Consequently, a peak/peak ratio is
+unchanged, while the TeX's mixed HFSS representation correctly applies
+`1e-3/sqrt(2)` to `rE_peak` and uses the independently supplied
+`sqrt(2) V` RMS Thevenin source. Already-formed `rE/I` and effective length
+are declared as ratio quantities and receive no field-only peak/RMS scale.
 
-- Raw HFSS mV numbers passed directly to the converter are interpreted as
-  volts. With otherwise correct RMS normalization, effective length is too
-  large by `1000` and covariance by `10^6`.
-- Peak fields unembedded with an RMS `Vsource` do need the field
-  `1/sqrt(2)` conversion; the current operation is correct in that specific
-  mixed representation.
-- If both field and `Vsource` describe the same peak representation, their
-  ratio is already invariant. The extra field-only division makes effective
-  length too small by `1/sqrt(2)` and covariance too small by `1/2`.
-- A bare `rE/I` transmit ratio is likewise peak/RMS invariant when field and
-  current use the same convention. Scaling only the field changes the
-  physical ratio.
-- A genuine effective length is already a voltage/field ratio. When its
-  numerator and denominator use the same phasor convention, labelling it
-  peak must not change its numerical value. The current function changes it.
+Embedded effective length is rejected because current-basis unmixing is
+defined on the raw embedded field, not on a receive ratio that has already
+lost its excitation normalization. A direct raw bare field is no longer
+silently assumed to represent a 1 A basis.
 
-The gross untreated-mV case should normally make the derived `Rmoon`
-non-PSD and fail validated response writing. That safety check does not
-repair the unit contract, and it does not catch an underscaled response whose
-missing `Rsky` is absorbed into the Moon complement.
+Validated provenance now records `FIELD_KIND`, `FIELD_UNIT`, `FIELD_AMP`,
+`NORM_KIND`, `NORM_UNIT`, `NORM_AMP`, and the canonical
+`H[m],SI-RMS` representation. Cross-field combinations are validated both
+when writing and loading. The canonical SI RMS `Vsource` or `Inorm`
+numerical payload is persisted and included in `CONTENT`, as is `Zref` for
+embedded input.
 
-The existing
-[`test_peak_and_re_conversion_are_applied_exactly_once`](../tests/test_response_conversion.py#L75)
-tests the current scalar division, not representation invariance of the
-complete embedded-field/current calculation.
-
-Required software changes:
-
-1. Represent the physical input quantity and units separately: embedded
-   `rE` in mV or V, bare `rE/I` in V/A, or effective length in m.
-2. Represent field amplitude convention and excitation normalization
-   separately: `Vsource` for embedded input, or a per-port/frequency complex
-   normalization current for a direct bare export. Permit an already-per-
-   ampere input only with explicit provenance.
-3. Convert raw embedded fields and source voltages to SI RMS before
-   reconstructing currents and unembedding.
-4. Convert a direct bare field and its normalization current consistently
-   before forming `rE/I`. Do not apply a field-only peak/RMS scale to
-   `rE/I` or effective length.
-5. Define the physical meaning of `input_kind="embedded"` combined with
-   `field_kind="effective-length"`, or reject that combination.
-6. Persist the original and canonicalized conventions in response
-   provenance.
-7. Add representation-invariance tests and an explicit HFSS regression for
-   `rE_peak` in mV with `sqrt(2)` V RMS Thevenin excitation.
-
-These transformations follow directly from the TeX and can be implemented
-without additional expert judgment. Certifying a real artifact still
-requires one raw solver export and an independent accepted-power or
-plane-wave terminal-voltage check.
+Tests now cover the exact HFSS mV-peak/`sqrt(2) V`-RMS case, peak/RMS
+representation invariance, complex direct-current normalization, rejection
+of embedded effective length, frequency selection, and round trips of both
+normalization payloads. These close the identified software hole. Certifying
+a real artifact still requires one raw solver export and an independent
+accepted-power or plane-wave terminal-voltage check.
 
 ### 3. High for map-making: radiometric cross-product covariance is wrong
 
@@ -441,16 +405,22 @@ The luseepy constructors now match the reviewed Croissant API. The
 topocentric synthetic fixture also uses Croissant's current canonical
 `coord="topo"` spelling instead of the removed `mcmf` alias.
 
-The focused new-path suite, including the explicit-loss tests, completed
-without a compatibility shim with
+The focused new-path and converter suite, including explicit-loss and
+normalization tests, completed without a compatibility shim with
 
 ```text
-57 passed, 2 warnings
+65 passed, 2 warnings
 ```
 
 The warnings are Astropy's pre-existing assumption that two numerical
 `TimeDelta` inputs are days. The independent ENU basis check passed at
 machine precision.
+
+The broader non-ingest suite reached 230 passing tests with no failures
+before a remaining slow legacy Healpy rotation test was manually
+interrupted after five minutes. Collecting the ingest suite is independently
+blocked by the sibling `uncrater` checkout not exporting the `Packet` API
+expected by this luseepy revision.
 
 These tests use synthetic responses. They do not replace validation against
 a new lossy/PEC antenna simulation, because no such artifact is available.
@@ -462,8 +432,8 @@ further expert input:
 
 1. **Complete:** extend the response and covariance model with explicit
    `Rloss` and `T_ant`, including unequal-temperature closure tests.
-2. Replace the converter's single amplitude flag with explicit field-unit,
-   field-amplitude, and source-amplitude conventions; add HFSS and
+2. **Complete:** replace the converter's single amplitude flag with explicit
+   field-unit, field-amplitude, and normalization conventions; add HFSS and
    representation-invariance tests.
 3. Correct real/imaginary radiometric variances and document the diagonal
    map-making approximation.

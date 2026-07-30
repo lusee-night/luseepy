@@ -9,8 +9,10 @@ import numpy as np
 
 from .common import (
     ResponseArrays,
+    bare_fields_to_per_current,
     convert_fields_to_effective_length,
     embedded_fields_to_bare,
+    voltage_phasor_to_si_rms,
     write_response_fits,
 )
 from .touchstone import read_touchstone_z
@@ -126,6 +128,85 @@ def read_receive_csv(path, *, theta_max=90.0, zero_tolerance=1e-12):
     return freq, theta, phi, theta_field, phi_field
 
 
+def _canonical_conversion_contract(
+    *,
+    input_kind,
+    field_kind,
+    field_units,
+    field_amplitude_convention,
+    vsource_units,
+    vsource_amplitude_convention,
+    normalization_current_units,
+    normalization_current_amplitude_convention,
+):
+    input_kind = str(input_kind).strip().lower()
+    field_kind = str(field_kind).strip().lower().replace("_", "-")
+    field_units = str(field_units).strip()
+    field_amplitude = str(field_amplitude_convention).strip().lower()
+    if input_kind == "embedded":
+        if field_kind != "re":
+            raise ValueError(
+                "Embedded inputs must be raw rE; embedded effective-length "
+                "or rE-per-current inputs are undefined."
+            )
+        if vsource_units is None or vsource_amplitude_convention is None:
+            raise ValueError(
+                "Embedded inputs require explicit Vsource units and "
+                "amplitude convention."
+            )
+        metadata = {
+            "NORM_KIND": "vsource",
+            "NORM_UNIT": str(vsource_units).strip(),
+            "NORM_AMP": str(vsource_amplitude_convention).strip().lower(),
+        }
+    elif input_kind == "bare" and field_kind == "re":
+        if (
+            normalization_current_units is None
+            or normalization_current_amplitude_convention is None
+        ):
+            raise ValueError(
+                "Direct bare rE inputs require explicit normalization-current "
+                "units and amplitude convention."
+            )
+        metadata = {
+            "NORM_KIND": "current",
+            "NORM_UNIT": str(normalization_current_units).strip(),
+            "NORM_AMP": str(
+                normalization_current_amplitude_convention
+            ).strip().lower(),
+        }
+    elif input_kind == "bare" and field_kind == "re-per-current":
+        metadata = {
+            "NORM_KIND": "already-per-ampere",
+            "NORM_UNIT": "not-applicable",
+            "NORM_AMP": "ratio",
+        }
+    elif input_kind == "bare" and field_kind == "effective-length":
+        metadata = {
+            "NORM_KIND": "already-effective-length",
+            "NORM_UNIT": "not-applicable",
+            "NORM_AMP": "ratio",
+        }
+    else:
+        raise ValueError(
+            "input_kind must be 'embedded' or 'bare', with a supported "
+            "field_kind."
+        )
+    metadata.update(
+        {
+            "INPUT_KIND": input_kind,
+            "FIELD_KIND": field_kind,
+            "FIELD_UNIT": field_units,
+            "FIELD_AMP": field_amplitude,
+            "CANONICAL": "H[m],SI-RMS",
+        }
+    )
+    from lusee.ResponsePhysics import validate_conversion_metadata
+
+    validate_conversion_metadata(metadata)
+    return metadata
+
+
 def convert_receive_csvs(
     csv_paths,
     output,
@@ -133,10 +214,16 @@ def convert_receive_csvs(
     za,
     input_kind,
     field_kind,
-    amplitude_convention,
+    field_units,
+    field_amplitude_convention,
     rloss=None,
     zref=None,
     vsource=None,
+    vsource_units=None,
+    vsource_amplitude_convention=None,
+    normalization_current=None,
+    normalization_current_units=None,
+    normalization_current_amplitude_convention=None,
     dtype="float32",
     freq_select=None,
     metadata=None,
@@ -145,6 +232,20 @@ def convert_receive_csvs(
     """Convert four port-ordered receive CSVs to one response FITS."""
     if len(csv_paths) != 4:
         raise ValueError("Exactly four receive CSV paths are required.")
+    contract = _canonical_conversion_contract(
+        input_kind=input_kind,
+        field_kind=field_kind,
+        field_units=field_units,
+        field_amplitude_convention=field_amplitude_convention,
+        vsource_units=vsource_units,
+        vsource_amplitude_convention=vsource_amplitude_convention,
+        normalization_current_units=normalization_current_units,
+        normalization_current_amplitude_convention=(
+            normalization_current_amplitude_convention
+        ),
+    )
+    input_kind = contract["INPUT_KIND"]
+    field_kind = contract["FIELD_KIND"]
     loaded = [read_receive_csv(path) for path in csv_paths]
     freq, theta, phi = loaded[0][:3]
     for other in loaded[1:]:
@@ -157,55 +258,143 @@ def convert_receive_csvs(
     Etheta = np.stack([entry[3] for entry in loaded])
     Ephi = np.stack([entry[4] for entry in loaded])
     ZA = np.asarray(za)
+    native_nfrequency = freq.size
     selection = _frequency_selection(freq, freq_select)
     freq = freq[selection]
     Etheta = Etheta[:, selection]
     Ephi = Ephi[:, selection]
-    if ZA.shape[0] != loaded[0][0].size:
+    if ZA.shape[0] != native_nfrequency:
         raise ValueError("ZA and receive CSV frequency axes have different lengths.")
     ZA = ZA[selection]
     if rloss is not None:
         rloss = np.asarray(rloss)
-        if rloss.shape[0] != loaded[0][0].size:
+        if rloss.shape[0] != native_nfrequency:
             raise ValueError(
                 "Rloss and receive CSV frequency axes have different lengths."
             )
         rloss = rloss[selection]
     if vsource is not None:
-        vsource = np.asarray(vsource)[selection]
+        vsource = np.asarray(vsource)
+        if vsource.shape != (native_nfrequency, 4, 4):
+            raise ValueError("Vsource must have shape (frequency, 4, 4).")
+        vsource = vsource[selection]
+    if normalization_current is not None:
+        normalization_current = np.asarray(normalization_current)
+        if normalization_current.shape != (native_nfrequency, 4):
+            raise ValueError(
+                "normalization_current must have shape (frequency, 4)."
+            )
+        normalization_current = normalization_current[selection]
     if zref is not None:
         zref_array = np.asarray(zref)
-        if zref_array.ndim >= 2:
+        if zref_array.ndim == 0:
+            zref = np.full((freq.size, 4), zref_array)
+        elif zref_array.shape == (4,):
+            zref = np.broadcast_to(zref_array[None], (freq.size, 4))
+        elif zref_array.shape == (native_nfrequency, 4):
             zref = zref_array[selection]
+        else:
+            raise ValueError(
+                "Zref must be scalar, per-port, or frequency-by-port."
+            )
     I_sim = None
+    canonical_vsource = None
+    canonical_inorm = None
     if input_kind == "embedded":
         if zref is None or vsource is None:
             raise ValueError("Embedded inputs require zref and vsource.")
+        if any(
+            value is not None
+            for value in (
+                normalization_current,
+                normalization_current_units,
+                normalization_current_amplitude_convention,
+            )
+        ):
+            raise ValueError(
+                "Embedded inputs cannot also supply a normalization current."
+            )
         Etheta, Ephi, I_sim = embedded_fields_to_bare(
-            Etheta, Ephi, ZA, zref, vsource
+            Etheta,
+            Ephi,
+            ZA,
+            zref,
+            vsource,
+            field_units=field_units,
+            field_amplitude_convention=field_amplitude_convention,
+            vsource_units=vsource_units,
+            vsource_amplitude_convention=(
+                vsource_amplitude_convention
+            ),
         )
-    elif input_kind != "bare":
-        raise ValueError("input_kind must be 'embedded' or 'bare'.")
+        canonical_vsource = voltage_phasor_to_si_rms(
+            vsource,
+            units=vsource_units,
+            amplitude_convention=vsource_amplitude_convention,
+        )
+        canonical_field_kind = "rE-per-current"
+        canonical_field_units = "V/A"
+    elif field_kind == "re":
+        if normalization_current is None:
+            raise ValueError(
+                "Direct bare rE inputs require normalization_current."
+            )
+        if any(
+            value is not None
+            for value in (
+                vsource,
+                vsource_units,
+                vsource_amplitude_convention,
+                zref,
+            )
+        ):
+            raise ValueError("Bare inputs cannot supply Vsource or Zref.")
+        Etheta, Ephi, canonical_inorm = bare_fields_to_per_current(
+            Etheta,
+            Ephi,
+            normalization_current,
+            field_units=field_units,
+            field_amplitude_convention=field_amplitude_convention,
+            current_units=normalization_current_units,
+            current_amplitude_convention=(
+                normalization_current_amplitude_convention
+            ),
+        )
+        canonical_field_kind = "rE-per-current"
+        canonical_field_units = "V/A"
+    else:
+        if any(
+            value is not None
+            for value in (
+                vsource,
+                vsource_units,
+                vsource_amplitude_convention,
+                normalization_current,
+                normalization_current_units,
+                normalization_current_amplitude_convention,
+                zref,
+            )
+        ):
+            raise ValueError(
+                "Already-normalized bare inputs cannot supply Vsource, "
+                "Zref, or normalization_current."
+            )
+        canonical_field_kind = field_kind
+        canonical_field_units = field_units
     Htheta = convert_fields_to_effective_length(
         Etheta,
         freq,
-        field_kind=field_kind,
-        amplitude_convention=amplitude_convention,
+        field_kind=canonical_field_kind,
+        field_units=canonical_field_units,
     )
     Hphi = convert_fields_to_effective_length(
         Ephi,
         freq,
-        field_kind=field_kind,
-        amplitude_convention=amplitude_convention,
+        field_kind=canonical_field_kind,
+        field_units=canonical_field_units,
     )
     meta = dict(metadata or {})
-    meta.update(
-        {
-            "INPUT_KIND": input_kind,
-            "FIELD_KIND": field_kind,
-            "AMP_CONV": amplitude_convention,
-        }
-    )
+    meta.update(contract)
     if I_sim is not None:
         meta["MAX_ICOND"] = float(
             np.max(np.linalg.cond(I_sim))
@@ -218,7 +407,8 @@ def convert_receive_csvs(
         Hphi,
         ZA,
         Rloss=rloss,
-        Vsource=vsource,
+        Vsource=canonical_vsource,
+        Inorm=canonical_inorm,
         Zref=zref,
         metadata=meta,
     )
@@ -260,15 +450,44 @@ def main(argv=None):
             "required for embedded inputs"
         ),
     )
+    parser.add_argument(
+        "--vsource-units",
+        choices=("V", "mV"),
+        help="Units of --vsource-npy",
+    )
+    parser.add_argument(
+        "--vsource-amplitude",
+        choices=("rms", "peak"),
+        help="Phasor convention of --vsource-npy",
+    )
+    parser.add_argument(
+        "--normalization-current-npy",
+        help=(
+            "Complex (frequency,4) current for direct bare rE patterns"
+        ),
+    )
+    parser.add_argument(
+        "--normalization-current-units",
+        choices=("A", "mA"),
+    )
+    parser.add_argument(
+        "--normalization-current-amplitude",
+        choices=("rms", "peak"),
+    )
     parser.add_argument("--input-kind", choices=("embedded", "bare"), required=True)
     parser.add_argument(
         "--field-kind",
-        choices=("rE", "effective-length"),
+        choices=("rE", "rE-per-current", "effective-length"),
         required=True,
     )
     parser.add_argument(
-        "--amplitude-convention",
-        choices=("rms", "peak"),
+        "--field-units",
+        choices=("V", "mV", "V/A", "mV/A", "m"),
+        required=True,
+    )
+    parser.add_argument(
+        "--field-amplitude",
+        choices=("rms", "peak", "ratio"),
         required=True,
     )
     parser.add_argument("--dtype", choices=("float32", "float64"), default="float32")
@@ -291,11 +510,39 @@ def main(argv=None):
     freq_csv = read_receive_csv(args.csv[0])[0]
     if not np.allclose(freq_za, freq_csv):
         raise ValueError("Touchstone and receive CSV frequency grids differ.")
-    if args.input_kind == "embedded" and args.vsource_npy is None:
-        raise ValueError("Embedded conversion requires --vsource-npy.")
+    if args.input_kind == "embedded" and any(
+        value is None
+        for value in (
+            args.vsource_npy,
+            args.vsource_units,
+            args.vsource_amplitude,
+        )
+    ):
+        raise ValueError(
+            "Embedded conversion requires --vsource-npy, --vsource-units, "
+            "and --vsource-amplitude."
+        )
+    if args.input_kind == "bare" and args.field_kind == "rE" and any(
+        value is None
+        for value in (
+            args.normalization_current_npy,
+            args.normalization_current_units,
+            args.normalization_current_amplitude,
+        )
+    ):
+        raise ValueError(
+            "Direct bare rE conversion requires "
+            "--normalization-current-npy, --normalization-current-units, "
+            "and --normalization-current-amplitude."
+        )
     vsource = (
         np.load(args.vsource_npy)
         if args.vsource_npy is not None
+        else None
+    )
+    normalization_current = (
+        np.load(args.normalization_current_npy)
+        if args.normalization_current_npy is not None
         else None
     )
     if args.provenance_json is None:
@@ -340,10 +587,18 @@ def main(argv=None):
         za=ZA,
         input_kind=args.input_kind,
         field_kind=args.field_kind,
-        amplitude_convention=args.amplitude_convention,
+        field_units=args.field_units,
+        field_amplitude_convention=args.field_amplitude,
         rloss=rloss,
         zref=zref if args.input_kind == "embedded" else None,
         vsource=vsource,
+        vsource_units=args.vsource_units,
+        vsource_amplitude_convention=args.vsource_amplitude,
+        normalization_current=normalization_current,
+        normalization_current_units=args.normalization_current_units,
+        normalization_current_amplitude_convention=(
+            args.normalization_current_amplitude
+        ),
         dtype=args.dtype,
         freq_select=args.freq_select,
         allow_unvalidated=args.allow_unvalidated,

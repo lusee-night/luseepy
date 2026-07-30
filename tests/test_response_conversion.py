@@ -10,10 +10,16 @@ from scipy.constants import c
 from beam_conversion.common import (
     ResponseArrays,
     VACUUM_IMPEDANCE_OHM,
+    bare_fields_to_per_current,
     convert_fields_to_effective_length,
+    embedded_fields_to_bare,
     write_response_fits,
 )
-from beam_conversion.receive_csv import convert_receive_csvs, read_receive_csv
+from beam_conversion.receive_csv import (
+    _canonical_conversion_contract,
+    convert_receive_csvs,
+    read_receive_csv,
+)
 from beam_conversion.touchstone import s_to_z
 from lusee.InstrumentResponse import InstrumentResponse
 from lusee.SyntheticResponse import synthetic_four_port_response
@@ -72,26 +78,186 @@ def test_streaming_receive_csv_grid_and_horizon_validation(tmp_path):
         read_receive_csv(invalid)
 
 
-def test_peak_and_re_conversion_are_applied_exactly_once():
-    fields = np.ones((4, 2, 1, 1), dtype=np.complex128)
+def embed_bare_fields(bare, currents):
+    rows = np.moveaxis(bare, (0, 1), (-1, 0))
+    embedded = np.einsum("ftpa,fae->ftpe", rows, currents)
+    return np.moveaxis(embedded, (0, -1), (1, 0))
+
+
+def test_hfss_mv_peak_fields_and_rms_thevenin_source_recover_si_length():
+    rng = np.random.default_rng(13)
     freq = np.asarray([10.0, 20.0])
-    rms_length = convert_fields_to_effective_length(
-        fields,
+    ZA = np.broadcast_to(
+        (30.0 + 4.0j) * np.eye(4)[None],
+        (2, 4, 4),
+    ).copy()
+    Zref = 50.0
+    Vsource_rms = np.sqrt(2.0) * np.broadcast_to(
+        np.eye(4)[None],
+        (2, 4, 4),
+    )
+    currents = np.linalg.solve(
+        ZA + Zref * np.eye(4)[None],
+        Vsource_rms,
+    )
+    bare = rng.normal(size=(4, 2, 2, 3)) + 1j * rng.normal(
+        size=(4, 2, 2, 3)
+    )
+    embedded_rms = embed_bare_fields(bare, currents)
+    hfss_re_peak_mv = embedded_rms * (1e3 * np.sqrt(2.0))
+    recovered_theta, recovered_phi, recovered_currents = (
+        embedded_fields_to_bare(
+            hfss_re_peak_mv,
+            hfss_re_peak_mv,
+            ZA,
+            Zref,
+            Vsource_rms,
+            field_units="mV",
+            field_amplitude_convention="peak",
+            vsource_units="V",
+            vsource_amplitude_convention="rms",
+        )
+    )
+    np.testing.assert_allclose(recovered_currents, currents, rtol=1e-12)
+    np.testing.assert_allclose(recovered_theta, bare, rtol=1e-12)
+    np.testing.assert_allclose(recovered_phi, bare, rtol=1e-12)
+
+    effective_length = convert_fields_to_effective_length(
+        recovered_theta,
         freq,
-        field_kind="rE",
-        amplitude_convention="peak",
+        field_kind="rE-per-current",
+        field_units="V/A",
     )
     wave_number = 2 * np.pi * freq * 1e6 / c
-    expected = (
-        -4
-        * np.pi
-        / (1j * wave_number * VACUUM_IMPEDANCE_OHM)
-        / np.sqrt(2.0)
+    factor = -4 * np.pi / (
+        1j * wave_number * VACUUM_IMPEDANCE_OHM
     )
     np.testing.assert_allclose(
-        rms_length[:, :, 0, 0],
-        np.broadcast_to(expected[None], (4, 2)),
+        effective_length,
+        bare * factor[None, :, None, None],
+        rtol=1e-12,
     )
+
+
+def test_embedded_conversion_is_peak_rms_representation_invariant():
+    rng = np.random.default_rng(17)
+    ZA = np.broadcast_to(
+        (27.0 + 3.0j) * np.eye(4)[None],
+        (2, 4, 4),
+    ).copy()
+    Vsource_rms = np.sqrt(2.0) * np.broadcast_to(
+        np.eye(4)[None],
+        (2, 4, 4),
+    )
+    currents = np.linalg.solve(
+        ZA + 50.0 * np.eye(4)[None],
+        Vsource_rms,
+    )
+    bare = rng.normal(size=(4, 2, 1, 2)) + 1j * rng.normal(
+        size=(4, 2, 1, 2)
+    )
+    embedded_rms = embed_bare_fields(bare, currents)
+    mixed, _, _ = embedded_fields_to_bare(
+        embedded_rms * (1e3 * np.sqrt(2.0)),
+        embedded_rms * (1e3 * np.sqrt(2.0)),
+        ZA,
+        50.0,
+        Vsource_rms,
+        field_units="mV",
+        field_amplitude_convention="peak",
+        vsource_units="V",
+        vsource_amplitude_convention="rms",
+    )
+    all_peak, _, _ = embedded_fields_to_bare(
+        embedded_rms * np.sqrt(2.0),
+        embedded_rms * np.sqrt(2.0),
+        ZA,
+        50.0,
+        Vsource_rms * np.sqrt(2.0),
+        field_units="V",
+        field_amplitude_convention="peak",
+        vsource_units="V",
+        vsource_amplitude_convention="peak",
+    )
+    np.testing.assert_allclose(mixed, bare, rtol=1e-12)
+    np.testing.assert_allclose(all_peak, bare, rtol=1e-12)
+    np.testing.assert_allclose(all_peak, mixed, rtol=1e-12)
+
+
+def test_direct_bare_re_uses_complex_current_normalization_consistently():
+    rng = np.random.default_rng(19)
+    ratio = rng.normal(size=(4, 2, 1, 2)) + 1j * rng.normal(
+        size=(4, 2, 1, 2)
+    )
+    current_rms = np.asarray(
+        [
+            [0.2 + 0.03j, 0.3 - 0.02j, 0.4 + 0.05j, 0.5 - 0.01j],
+            [0.25 - 0.04j, 0.35 + 0.06j, 0.45 - 0.02j, 0.55 + 0.03j],
+        ]
+    )
+    field_rms = ratio * np.swapaxes(
+        current_rms,
+        0,
+        1,
+    )[..., None, None]
+    recovered_theta, recovered_phi, recovered_current = (
+        bare_fields_to_per_current(
+            field_rms * (1e3 * np.sqrt(2.0)),
+            field_rms * (1e3 * np.sqrt(2.0)),
+            current_rms * (1e3 * np.sqrt(2.0)),
+            field_units="mV",
+            field_amplitude_convention="peak",
+            current_units="mA",
+            current_amplitude_convention="peak",
+        )
+    )
+    np.testing.assert_allclose(recovered_theta, ratio, rtol=1e-12)
+    np.testing.assert_allclose(recovered_phi, ratio, rtol=1e-12)
+    np.testing.assert_allclose(recovered_current, current_rms, rtol=1e-12)
+
+
+def test_preformed_re_ratio_and_effective_length_receive_no_phasor_scaling():
+    rng = np.random.default_rng(23)
+    freq = np.asarray([10.0, 20.0])
+    ratio_v_per_a = rng.normal(size=(4, 2, 1, 2)) + 1j * rng.normal(
+        size=(4, 2, 1, 2)
+    )
+    from_volts = convert_fields_to_effective_length(
+        ratio_v_per_a,
+        freq,
+        field_kind="rE-per-current",
+        field_units="V/A",
+    )
+    from_millivolts = convert_fields_to_effective_length(
+        1e3 * ratio_v_per_a,
+        freq,
+        field_kind="rE-per-current",
+        field_units="mV/A",
+    )
+    np.testing.assert_allclose(from_volts, from_millivolts, rtol=1e-12)
+
+    effective_length = rng.normal(size=(4, 2, 1, 2))
+    unchanged = convert_fields_to_effective_length(
+        effective_length,
+        freq,
+        field_kind="effective-length",
+        field_units="m",
+    )
+    np.testing.assert_array_equal(unchanged, effective_length)
+
+
+def test_embedded_effective_length_contract_is_rejected():
+    with pytest.raises(ValueError, match="Embedded inputs must be raw rE"):
+        _canonical_conversion_contract(
+            input_kind="embedded",
+            field_kind="effective-length",
+            field_units="m",
+            field_amplitude_convention="ratio",
+            vsource_units="V",
+            vsource_amplitude_convention="rms",
+            normalization_current_units=None,
+            normalization_current_amplitude_convention=None,
+        )
 
 
 def test_converter_frequency_selection_keeps_float64_native_grid(tmp_path):
@@ -111,13 +277,92 @@ def test_converter_frequency_selection_keeps_float64_native_grid(tmp_path):
         za=ZA,
         input_kind="bare",
         field_kind="effective-length",
-        amplitude_convention="rms",
+        field_units="m",
+        field_amplitude_convention="ratio",
         freq_select=[20.0],
         metadata=synthetic_four_port_response().header,
     )
     response = InstrumentResponse(filename)
     assert response.freq.dtype == np.float64
     assert np.array_equal(response.freq, [20.0])
+
+
+def test_embedded_converter_persists_original_and_canonical_normalization(
+    tmp_path,
+):
+    paths = []
+    for port in range(4):
+        path = tmp_path / f"embedded_{port}.csv"
+        write_receive_csv(path)
+        paths.append(path)
+    ZA = np.broadcast_to(
+        1.0e3 * np.eye(4)[None],
+        (2, 4, 4),
+    ).copy()
+    Vsource_rms = np.sqrt(2.0) * np.broadcast_to(
+        np.eye(4)[None],
+        (2, 4, 4),
+    )
+    filename = tmp_path / "embedded_response.fits"
+    convert_receive_csvs(
+        paths,
+        filename,
+        za=ZA,
+        input_kind="embedded",
+        field_kind="rE",
+        field_units="mV",
+        field_amplitude_convention="peak",
+        zref=50.0,
+        vsource=Vsource_rms,
+        vsource_units="V",
+        vsource_amplitude_convention="rms",
+        metadata=synthetic_four_port_response().header,
+    )
+    response = InstrumentResponse(filename)
+    assert response.header["FIELD_UNIT"] == "mV"
+    assert response.header["FIELD_AMP"] == "peak"
+    assert response.header["NORM_KIND"] == "vsource"
+    assert response.header["NORM_UNIT"] == "V"
+    assert response.header["NORM_AMP"] == "rms"
+    assert response.header["CANONICAL"] == "H[m],SI-RMS"
+    np.testing.assert_allclose(response.Vsource, Vsource_rms)
+    np.testing.assert_allclose(response.Zref, 50.0)
+
+
+def test_direct_bare_converter_persists_si_normalization_current(tmp_path):
+    paths = []
+    for port in range(4):
+        path = tmp_path / f"bare_{port}.csv"
+        write_receive_csv(path)
+        paths.append(path)
+    ZA = np.broadcast_to(
+        1.0e6 * np.eye(4)[None],
+        (2, 4, 4),
+    ).copy()
+    current_peak_ma = 1e3 * np.sqrt(2.0) * np.ones(
+        (2, 4),
+        dtype=np.complex128,
+    )
+    filename = tmp_path / "bare_response.fits"
+    convert_receive_csvs(
+        paths,
+        filename,
+        za=ZA,
+        input_kind="bare",
+        field_kind="rE",
+        field_units="V",
+        field_amplitude_convention="rms",
+        normalization_current=current_peak_ma,
+        normalization_current_units="mA",
+        normalization_current_amplitude_convention="peak",
+        metadata=synthetic_four_port_response().header,
+    )
+    response = InstrumentResponse(filename)
+    assert response.header["NORM_KIND"] == "current"
+    assert response.header["NORM_UNIT"] == "mA"
+    assert response.header["NORM_AMP"] == "peak"
+    np.testing.assert_allclose(response.Inorm, 1.0)
+    assert response.Vsource is None
 
 
 def test_full_matrix_s_to_z_keeps_noncommuting_off_diagonals():

@@ -22,7 +22,12 @@ REQUIRED_PROVENANCE_KEYS = (
     "SOURCE_ROOT",
     "INPUT_KIND",
     "FIELD_KIND",
-    "AMP_CONV",
+    "FIELD_UNIT",
+    "FIELD_AMP",
+    "NORM_KIND",
+    "NORM_UNIT",
+    "NORM_AMP",
+    "CANONICAL",
     "LOSSMODEL",
     "RLOSSSRC",
     "TIMECONV",
@@ -45,8 +50,18 @@ CANONICAL_CONVENTIONS = {
     "POLBASIS": {"e_theta,e_phi"},
     "PORTS": {"0123"},
     "INPUT_KIND": {"bare", "embedded"},
-    "FIELD_KIND": {"re", "r_e", "effective-length", "effective_length"},
-    "AMP_CONV": {"rms", "peak"},
+    "FIELD_KIND": {"re", "re-per-current", "effective-length"},
+    "FIELD_UNIT": {"v", "mv", "v/a", "mv/a", "m"},
+    "FIELD_AMP": {"rms", "peak", "ratio"},
+    "NORM_KIND": {
+        "vsource",
+        "current",
+        "already-per-ampere",
+        "already-effective-length",
+    },
+    "NORM_UNIT": {"v", "mv", "a", "ma", "not-applicable"},
+    "NORM_AMP": {"rms", "peak", "ratio"},
+    "CANONICAL": {"h[m],si-rms"},
     "LOSSMODEL": {"pec", "lossy"},
 }
 
@@ -65,6 +80,7 @@ class ResponseArrays:
     Rmoon: np.ndarray | None = None
     Rloss: np.ndarray | None = None
     Vsource: np.ndarray | None = None
+    Inorm: np.ndarray | None = None
     Zref: np.ndarray | None = None
     metadata: dict | None = None
 
@@ -101,22 +117,80 @@ def compute_sky_moon_resistance(
     )
 
 
+def _phasor_to_si_rms(values, *, units, amplitude_convention, factors, name):
+    units_key = str(units).strip().lower()
+    amplitude = str(amplitude_convention).strip().lower()
+    if units_key not in factors:
+        raise ValueError(
+            f"{name} units must be one of {sorted(factors)}; got {units!r}."
+        )
+    if amplitude not in {"rms", "peak"}:
+        raise ValueError(
+            f"{name} amplitude convention must be 'rms' or 'peak'."
+        )
+    scale = factors[units_key]
+    if amplitude == "peak":
+        scale /= np.sqrt(2.0)
+    return np.asarray(values) * scale
+
+
+def voltage_phasor_to_si_rms(values, *, units, amplitude_convention):
+    """Convert a voltage-like phasor to RMS volts."""
+    return _phasor_to_si_rms(
+        values,
+        units=units,
+        amplitude_convention=amplitude_convention,
+        factors={"v": 1.0, "mv": 1e-3},
+        name="Voltage phasor",
+    )
+
+
+def current_phasor_to_si_rms(values, *, units, amplitude_convention):
+    """Convert a current phasor to RMS amperes."""
+    return _phasor_to_si_rms(
+        values,
+        units=units,
+        amplitude_convention=amplitude_convention,
+        factors={"a": 1.0, "ma": 1e-3},
+        name="Current phasor",
+    )
+
+
 def embedded_fields_to_bare(
     E_theta,
     E_phi,
     ZA,
     Zref,
     Vsource,
+    *,
+    field_units,
+    field_amplitude_convention,
+    vsource_units,
+    vsource_amplitude_convention,
 ):
-    """Remove the embedded excitation-current basis using right-side solves.
+    """Recover bare ``rE/I`` in V/A from embedded solver phasors.
 
-    Input field layout is ``(excitation, frequency, theta, phi)``. The output
-    layout is ``(bare_port, frequency, theta, phi)``.
+    Input field layout is ``(excitation, frequency, theta, phi)``. Field and
+    Thevenin-source phasors are independently converted to SI RMS before the
+    current solve. The output layout is
+    ``(bare_port, frequency, theta, phi)``.
     """
-    E_theta = np.asarray(E_theta)
-    E_phi = np.asarray(E_phi)
+    E_theta = voltage_phasor_to_si_rms(
+        E_theta,
+        units=field_units,
+        amplitude_convention=field_amplitude_convention,
+    )
+    E_phi = voltage_phasor_to_si_rms(
+        E_phi,
+        units=field_units,
+        amplitude_convention=field_amplitude_convention,
+    )
     ZA = np.asarray(ZA)
-    Vsource = np.asarray(Vsource)
+    Vsource = voltage_phasor_to_si_rms(
+        Vsource,
+        units=vsource_units,
+        amplitude_convention=vsource_amplitude_convention,
+    )
     nfreq, nport, _ = ZA.shape
     if nport != 4 or ZA.shape != (nfreq, nport, nport):
         raise ValueError("ZA must have shape (frequency, 4, 4).")
@@ -150,27 +224,73 @@ def embedded_fields_to_bare(
     return right_solve(E_theta), right_solve(E_phi), I_sim
 
 
+def bare_fields_to_per_current(
+    E_theta,
+    E_phi,
+    normalization_current,
+    *,
+    field_units,
+    field_amplitude_convention,
+    current_units,
+    current_amplitude_convention,
+):
+    """Normalize direct bare ``rE`` exports to SI ``rE/I`` in V/A."""
+    E_theta = voltage_phasor_to_si_rms(
+        E_theta,
+        units=field_units,
+        amplitude_convention=field_amplitude_convention,
+    )
+    E_phi = voltage_phasor_to_si_rms(
+        E_phi,
+        units=field_units,
+        amplitude_convention=field_amplitude_convention,
+    )
+    current = current_phasor_to_si_rms(
+        normalization_current,
+        units=current_units,
+        amplitude_convention=current_amplitude_convention,
+    )
+    if E_theta.shape != E_phi.shape or E_theta.ndim != 4:
+        raise ValueError(
+            "Bare field arrays must share shape "
+            "(4, frequency, theta, phi)."
+        )
+    nport, nfreq = E_theta.shape[:2]
+    if nport != 4 or current.shape != (nfreq, nport):
+        raise ValueError(
+            "normalization_current must have shape (frequency, 4)."
+        )
+    if np.any(current == 0):
+        raise ValueError("normalization_current must be nonzero.")
+    denominator = np.swapaxes(current, 0, 1)[..., None, None]
+    return E_theta / denominator, E_phi / denominator, current
+
+
 def convert_fields_to_effective_length(
     fields,
     freq_mhz,
     *,
     field_kind,
-    amplitude_convention,
+    field_units,
 ):
-    """Convert solver field samples to RMS effective lengths in meters."""
-    field_kind = str(field_kind).lower().replace("-", "_")
-    amplitude = str(amplitude_convention).lower()
-    if field_kind not in {"re", "r_e", "effective_length"}:
+    """Convert canonical ``rE/I`` or effective lengths to meters."""
+    field_kind = str(field_kind).strip().lower().replace("_", "-")
+    unit = str(field_units).strip().lower()
+    if field_kind not in {"re-per-current", "effective-length"}:
         raise ValueError(
-            "field_kind must be 'rE' or 'effective-length'."
+            "field_kind must be 'rE-per-current' or 'effective-length'."
         )
-    if amplitude not in {"rms", "peak"}:
-        raise ValueError("amplitude_convention must be 'rms' or 'peak'.")
     values = np.asarray(fields)
-    if amplitude == "peak":
-        values = values / np.sqrt(2.0)
-    if field_kind == "effective_length":
+    if field_kind == "effective-length":
+        if unit != "m":
+            raise ValueError("Effective-length inputs must have units 'm'.")
         return values
+    factors = {"v/a": 1.0, "mv/a": 1e-3}
+    if unit not in factors:
+        raise ValueError(
+            "rE-per-current inputs must have units 'V/A' or 'mV/A'."
+        )
+    values = values * factors[unit]
     freq = _as_frequency_grid(freq_mhz)
     wave_number = 2 * np.pi * freq * 1e6 / c
     scale = -4 * np.pi / (1j * wave_number * VACUUM_IMPEDANCE_OHM)
@@ -194,6 +314,7 @@ def response_content_hash(response, *, metadata=None, real_dtype=None):
         Rmoon=response.Rmoon,
         Rloss=response.Rloss,
         Vsource=response.Vsource,
+        Inorm=response.Inorm,
         Zref=response.Zref,
         metadata=response.metadata if metadata is None else metadata,
         real_dtype=real_dtype,
@@ -225,12 +346,20 @@ def _response_header(response, validated):
                     f"VALIDATED=True has unsupported {key}={metadata[key]!r}; "
                     f"expected one of {sorted(allowed)}."
                 )
+        from lusee.ResponsePhysics import validate_conversion_metadata
+
+        validate_conversion_metadata(metadata)
     required = {
         "SOURCE": metadata.pop("SOURCE", "UNKNOWN"),
         "SOURCE_ROOT": metadata.pop("SOURCE_ROOT", ""),
         "INPUT_KIND": metadata.pop("INPUT_KIND", "bare"),
         "FIELD_KIND": metadata.pop("FIELD_KIND", "effective-length"),
-        "AMP_CONV": metadata.pop("AMP_CONV", "RMS"),
+        "FIELD_UNIT": metadata.pop("FIELD_UNIT", "UNKNOWN"),
+        "FIELD_AMP": metadata.pop("FIELD_AMP", "UNKNOWN"),
+        "NORM_KIND": metadata.pop("NORM_KIND", "UNKNOWN"),
+        "NORM_UNIT": metadata.pop("NORM_UNIT", "UNKNOWN"),
+        "NORM_AMP": metadata.pop("NORM_AMP", "UNKNOWN"),
+        "CANONICAL": metadata.pop("CANONICAL", "UNKNOWN"),
         "LOSSMODEL": metadata.pop("LOSSMODEL", "UNKNOWN"),
         "RLOSSSRC": metadata.pop("RLOSSSRC", "UNKNOWN"),
         "TIMECONV": metadata.pop("TIMECONV", "e+jwt"),
@@ -380,8 +509,19 @@ def _validate_response(response, *, validated):
     if not np.all(np.isfinite(response.Rloss)):
         raise ValueError("Rloss contains non-finite values.")
     if validated:
-        from lusee.ResponsePhysics import validate_response_matrices
+        from lusee.ResponsePhysics import (
+            validate_normalization_payload,
+            validate_response_matrices,
+        )
 
+        if "NORM_KIND" in metadata:
+            validate_normalization_payload(
+                metadata,
+                Vsource=response.Vsource,
+                Inorm=response.Inorm,
+                Zref=response.Zref,
+                nfrequency=response.freq_mhz.size,
+            )
         validate_response_matrices(
             response.ZA,
             response.Rsky,
@@ -507,6 +647,8 @@ def write_response_fits(
     )
     if response.Vsource is not None:
         write_complex("Vsource", response.Vsource, "V")
+    if response.Inorm is not None:
+        write_complex("Inorm", response.Inorm, "A")
     if response.Zref is not None:
         fits.write(
             np.asarray(response.Zref, dtype=real_dtype),

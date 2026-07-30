@@ -6,11 +6,11 @@ FITS-v3 files to `InstrumentResponse`; legacy FITS-v1/v2 files continue to
 use the old scalar implementation during the migration window.
 
 The response contains the bare open-circuit effective lengths
-`H_theta/H_phi`, the full antenna impedance `ZA`, and native validation
-matrices. Every image HDU carries `BUNIT`. Frequency is stored as float64 MHz.
-The first implementation assumes a locally flat landing region whose ground
-normal is aligned with the instrument z axis, so the visible sky is
-`theta <= pi/2`.
+`H_theta/H_phi`, the full antenna impedance `ZA`, and the native
+`Rsky`/`Rmoon`/`Rloss` decomposition. Every image HDU carries `BUNIT`.
+Frequency is stored as float64 MHz. The first implementation assumes a
+locally flat landing region whose ground normal is aligned with the
+instrument z axis, so the visible sky is `theta <= pi/2`.
 
 Pair response maps are formed for the ten unique port pairs:
 
@@ -74,20 +74,40 @@ required solver and coordinate convention is present in an explicit
 `--provenance-json` object. At minimum, that object must identify
 `SOURCE`, `SOURCE_ROOT`, `ZA_SOURCE`, `GIT_SHA`, `TIMECONV`, `COORDSYS`,
 `THETADEF`, `PHIDEF`, `OMEGADEF`, `POLBASIS`, `PHASEREF`, and `PORTS`;
-the converter records the chosen input, field, and amplitude conventions
-from their command-line options. Missing or `UNKNOWN` values are rejected.
-Use `--allow-unvalidated` only for diagnostic artifacts.
+the converter records the input quantity, field unit and phasor convention,
+normalization kind, normalization unit and phasor convention, and canonical
+SI representation from their command-line options. Missing or `UNKNOWN`
+values are rejected. Use `--allow-unvalidated` only for diagnostic artifacts.
+
+The converter accepts four explicit physical input contracts:
+
+- embedded raw `rE` in V or mV, with an independently described Thevenin
+  `Vsource`;
+- direct bare raw `rE` in V or mV, with a complex `(frequency, 4)`
+  normalization-current array;
+- explicitly pre-normalized bare `rE/I` in V/A or mV/A; or
+- effective length in m.
+
+Embedded effective length is rejected because the circuit unmixing operation
+is defined on the raw embedded fields. Peak/RMS scaling is applied separately
+to raw fields and to `Vsource` or the normalization current before forming a
+ratio. No peak/RMS scaling is applied to an already-formed `rE/I` or effective
+length. For the HFSS convention in the TeX, use
+`--field-units mV --field-amplitude peak` together with a `sqrt(2) V` RMS
+Thevenin array and `--vsource-units V --vsource-amplitude rms`.
 
 Validation derives `Rsky` from `H_theta/H_phi` with the same Croissant MWSS
 monopole operator used by simulation. A supplied `Rsky` must match that
-result; `Rmoon` must be its complement in
-`(ZA + ZA^dagger)/2`, Hermitian, and positive semidefinite. The
-`InstrumentResponse` loader repeats the geometry, convention, field/matrix,
-and Moon-physicality checks, so `VALIDATED=True` is not accepted as a
+result; `Rsky + Rmoon + Rloss` must equal `(ZA + ZA^dagger)/2`; and `Rmoon`
+and `Rloss` must be Hermitian and positive semidefinite. A PEC response must
+declare its explicit zero `Rloss`. The `InstrumentResponse` loader repeats
+the geometry, convention, normalization-payload, field/matrix, and
+dissipative-matrix checks, so `VALIDATED=True` is not accepted as a
 substitute for checking the payload.
 
 `CONTENT` hashes the canonical persisted precision of every numerical
-response array together with semantic convention/provenance metadata. The
+response array, including canonical SI `Vsource` or `Inorm` data when
+applicable, together with semantic convention/provenance metadata. The
 loader recomputes and verifies it. This makes the value suitable for
 transform-cache and simulation provenance keys; it is intentionally not a
 hash of the converter's higher-precision pre-cast source arrays.
