@@ -11,6 +11,10 @@ The response contains the bare open-circuit effective lengths
 Frequency is stored as float64 MHz. The first implementation assumes a
 locally flat landing region whose ground normal is aligned with the
 instrument z axis, so the visible sky is `theta <= pi/2`.
+When the stored upper-hemisphere maps are padded with zero below the
+horizon, the shared `theta=90 degrees` ring receives half weight. This is the
+spherical-harmonic midpoint value of the horizon step and avoids an
+`O(delta theta)` endpoint bias in both `Rsky` and sky contraction.
 
 Pair response maps are formed for the ten unique port pairs:
 
@@ -123,6 +127,13 @@ embedded-field artifact it also reconstructs the current-unmixing condition
 number from the persisted `ZA`, `Vsource`, and `Zref`; its maximum is stored
 as hash-bound `MAX_ICOND`. This is report-only until a representative solver
 export and numerical-error requirement justify an acceptance threshold.
+
+The response tests include an absolute Hertzian-dipole oracle,
+`Rsky = eta0 pi leff^2 D D^T/(3 lambda^2)`, evaluated across multiple MWSS
+grids. A separate smooth-sky regression compares the harmonic contraction
+with high-order Gauss--Legendre and periodic-azimuth quadrature and verifies
+convergence through `lmax=8`. Neither expected result is computed with the
+production spherical transform.
 
 `CONTENT` hashes the canonical persisted precision of every numerical
 response array, including canonical SI `Vsource` or `Inorm` data when

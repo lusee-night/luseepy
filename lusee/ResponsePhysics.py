@@ -371,6 +371,10 @@ def compute_sky_moon_resistance(
                 dtype=pair_i.dtype,
             )
             full_i[..., : theta.size, :] = pair_i
+            # The upper-hemisphere indicator has its Fourier midpoint value
+            # at the theta=90 degree jump. Half-weighting that shared ring
+            # removes the O(dtheta) endpoint bias in the MWSS integral.
+            full_i[..., theta.size - 1, :] *= 0.5
             stokes_maps = np.stack(
                 (
                     full_i,

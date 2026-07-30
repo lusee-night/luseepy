@@ -2,12 +2,12 @@
 
 Date: 2026-07-30
 
-Status: implementation update, items 1--4 of the recommended plan complete
+Status: implementation update, items 1--5 of the recommended plan complete
 
 Reviewed revisions:
 
 - luseepy `codex/four-port-polarization-refactor`, implementation baseline
-  `e827ac12aee1ca58c7cead57f7b4b2379d1be795`
+  `23e7a2c338dadcaaa38e84b8f9648af89e05fb45`
 - companion Croissant `codex/full-stokes-pair-response-topo` at
   `daf1545bc57cb7fdf3d28cc468789a139c6eeb68`
 - TeX source of truth:
@@ -59,6 +59,12 @@ real and imaginary cross-product variances. The map-maker still uses
 diagonal weights, so it does not yet represent covariance between the two
 components or between products that share a port; that approximation is now
 explicit.
+
+An independent Hertzian-dipole oracle exposed and now fixes a
+resolution-dependent horizon-ring bias in both the native `Rsky` integral
+and the harmonic response. The corrected half-weight convention agrees with
+the closed-form resistance at machine precision and converges to independent
+angular quadrature as `lmax` increases.
 
 Finite-`lmax` positivity remains an important release-readiness risk, not a
 demonstrated operational bug: the simulator now records the relevant matrix
@@ -216,6 +222,51 @@ weights, so the omitted covariance is explicitly documented as an
 approximation. A later extension can apply the full packed-real covariance
 per time/frequency sample.
 
+### 4. Resolved in software: the horizon ring was overweighted
+
+The response is available through `theta=90 degrees`, then padded by zero
+over the lower hemisphere. Previously, both
+[`compute_sky_moon_resistance`](../lusee/ResponsePhysics.py) and
+[`InstrumentResponse._full_sphere_maps`](../lusee/InstrumentResponse.py)
+assigned the entire equatorial sample ring to the upper hemisphere. Although
+the equator has measure zero in the continuum, it has nonzero weight in the
+finite MWSS quadrature. The result was a first-order endpoint bias that
+could not be removed by raising `lmax`.
+
+For four non-orthogonal Hertzian dipoles, the independent closed form is
+
+```text
+Rsky = eta0 pi leff^2 / (3 lambda^2) D D^T,
+```
+
+where the rows of `D` are the dipole unit vectors. With the former full-ring
+convention, the maximum relative matrix error was 34.58%, 17.02%, 8.49%,
+4.24%, and 2.12% at angular steps of 45, 22.5, 11.25, 5.625, and 2.8125
+degrees. This is a realistic wrong-result bug: the excess was assigned to
+`Rsky` and removed from `Rmoon`, so equal-temperature closure could pass
+while simulations with different sky and lunar temperatures were biased.
+
+At a step discontinuity, the spherical-harmonic midpoint value is one half.
+Both response-integration paths now give the shared `theta=90 degrees` ring
+half weight before transforming. The closed-form four-dipole matrix is then
+recovered to about `1e-15` relative accuracy at every tested grid from 45 to
+5.625 degrees.
+
+A separate smooth, localized, positive sky was integrated with
+160-point Gauss--Legendre quadrature in `cos(theta)` and 512 periodic
+azimuth samples. The harmonic contraction's relative matrix errors at
+`lmax=2,4,8` were approximately
+
+```text
+1.14e-2, 7.06e-4, 2.46e-5.
+```
+
+Thus the test independently verifies both continuum normalization and
+`lmax` convergence rather than comparing two calls to the same transform.
+The reusable synthetic response now takes its dissipative matrices from the
+closed form as well; loader validation compares that independent expectation
+against the production integration.
+
 ## Resolved or corrected conclusions from the earlier review
 
 ### ENU parity is fixed
@@ -288,12 +339,12 @@ summary, are persisted in simulation FITS and exposed by `Data`. This makes
 under-resolution visible without confusing it with an algebraically invalid
 input.
 
-The remaining work is to compare representative horizon structure against
-direct angular quadrature and demonstrate `lmax` convergence. Do not
-silently clip negative eigenvalues: clipping would hide inadequate angular
-resolution.
+The analytic horizon regression now demonstrates convergence against direct
+angular quadrature. Choosing an operational `lmax` for a real response and
+sky remains data-dependent. Do not silently clip negative eigenvalues:
+clipping would hide inadequate angular resolution.
 
-### Internal response gates complete; no independent absolute oracle
+### Analytic absolute oracle complete; no realistic solver oracle
 
 [`validate_response_matrices`](../lusee/ResponsePhysics.py) now checks
 finiteness, `Rsky`/`Rmoon`/`Rloss` Hermiticity, the three-term complement,
@@ -310,12 +361,11 @@ reconstructs and reports every solver-current unmixing condition number from
 the persisted `ZA`, `Vsource`, and `Zref`. The converter records the maximum
 as hash-bound `MAX_ICOND`, but deliberately does not impose a hard threshold.
 
-The synthetic response still closes its resistance budget using the same
-harmonic operator under test, so these gates establish internal physical
-consistency, not absolute normalization. Add a grid-converged
-Hertzian-dipole analytic oracle next. A hard conditioning threshold and a
-solver accepted-power oracle should wait for a representative export and
-numerical-precision requirements.
+The independent Hertzian-dipole oracle now tests the absolute continuum
+normalization of the analytic fixture. It does not replace a realistic
+solver reference. A hard conditioning threshold and a solver accepted-power
+oracle should wait for a representative export and numerical-precision
+requirements.
 
 ### Coordinate metadata can still disagree
 
@@ -426,7 +476,7 @@ The focused new-path and converter suite, including explicit-loss and
 normalization tests, completed without a compatibility shim with
 
 ```text
-74 passed, 2 warnings
+76 passed, 2 warnings
 ```
 
 The warnings are Astropy's pre-existing assumption that two numerical
@@ -456,8 +506,8 @@ further expert input:
    the diagonal map-making approximation.
 4. **Complete:** add reciprocity, passivity, matrix-PSD,
    anti-Hermitian-residual, and condition-number diagnostics.
-5. Add the grid-converged Hertzian-dipole oracle and direct-quadrature
-   `lmax` convergence tests.
+5. **Complete:** add the grid-converged Hertzian-dipole oracle and
+   direct-quadrature `lmax` convergence tests.
 6. Reject `coord`/`frame` disagreement and document/test the positive
    astronomical-azimuth turntable convention.
 

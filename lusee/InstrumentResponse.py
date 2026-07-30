@@ -684,7 +684,9 @@ class InstrumentResponse:
             maps.shape[:-2] + (full_count, maps.shape[-1]),
             dtype=maps.dtype,
         )
-        return full.at[..., : self.Ntheta, :].set(maps)
+        full = full.at[..., : self.Ntheta, :].set(maps)
+        # Use the midpoint value of the horizon step on the shared ring
+        return full.at[..., self.Ntheta - 1, :].multiply(0.5)
 
     def pair_stokes_alms_native(self, lmax, source_indices):
         """Transform only unique native source indices through Croissant."""
