@@ -2,12 +2,12 @@
 
 Date: 2026-07-30
 
-Status: implementation update, items 1--5 of the recommended plan complete
+Status: implementation update, items 1--6 of the recommended plan complete
 
 Reviewed revisions:
 
 - luseepy `codex/four-port-polarization-refactor`, implementation baseline
-  `23e7a2c338dadcaaa38e84b8f9648af89e05fb45`
+  `400bafc8b28a8e8ae4896e12bc59fad73c24acf0`
 - companion Croissant `codex/full-stokes-pair-response-topo` at
   `daf1545bc57cb7fdf3d28cc468789a139c6eeb68`
 - TeX source of truth:
@@ -65,6 +65,10 @@ resolution-dependent horizon-ring bias in both the native `Rsky` integral
 and the harmonic response. The corrected half-weight convention agrees with
 the closed-form resistance at machine precision and converges to independent
 angular quadrature as `lmax` increases.
+
+Polarized sky `coord` and `frame` aliases are now canonicalized and required
+to agree before harmonic preparation. The whole-instrument rotation sign is
+documented and tested in both map and harmonic space.
 
 Finite-`lmax` positivity remains an important release-readiness risk, not a
 demonstrated operational bug: the simulator now records the relevant matrix
@@ -290,22 +294,35 @@ The earlier determinant `-1` and polarized-V sign reversal are therefore not
 current findings. The reviewed `FullStokesTopoJaxSimulator` now passes proper
 SO(3) matrices into the per-time Wigner rotation.
 
-### Whole-instrument rotation is not currently sign-inconsistent
+### Whole-instrument rotation is consistent and documented
 
-[`InstrumentResponse.rotate`](../lusee/InstrumentResponse.py#L707) rolls
+[`InstrumentResponse.rotate`](../lusee/InstrumentResponse.py#L806) rolls
 maps by `-bins`, moving a directional response toward decreasing ENU phi.
 On the reviewed Croissant branch, `beam_rot` applies the same
 `exp(+i m alpha)` harmonic phase and documents positive rotation using
 astronomical azimuth: North toward East. For example, positive 90 degrees
 moves an initially East-pointing axis toward South.
 
-The luseepy and Croissant operations therefore agree. The remaining issue is
-documentation: `PHIDEF=right-handed-about-+z` describes the spatial
-coordinate, while the sign of `rotation_deg` is not stated in the luseepy
-API or example config. Document the positive astronomical-azimuth convention
-and add one directional map/harmonic regression. Reversing the operation
-would be a new convention change, not a bug fix justified by the current
-code.
+The luseepy method, instrument-response documentation, and example
+`rotation_deg` configuration now state this convention. A directional
+regression starts with an intensity response peaking at ENU `phi=0`
+(East), applies `+90 degrees`, and verifies both a new peak at
+`phi=270 degrees` (South) and the `exp(+i m alpha)` phase of every retained
+harmonic mode. Reversing the operation would be a convention change, not a
+bug fix justified by the code or Croissant.
+
+### Coordinate metadata disagreement is now rejected
+
+Croissant `PolarizedSky` stores both `coord` and `frame` and permits
+contradictory values. Its own coordinate transport consults `coord`, while
+[`FullStokesSimulatorBase.simulate`](../lusee/FullStokesSimulator.py#L445)
+uses `frame` to select the luseepy transport.
+
+The polarized-sky boundary now canonicalizes both fields through the same
+aliases and rejects disagreement before preparing harmonic coefficients.
+Equivalent names such as `equatorial`, `fk5`, and `icrs` remain compatible,
+while contradictory physical frames can no longer silently select different
+transforms in the two packages.
 
 ## Resolution and validation risks
 
@@ -366,18 +383,6 @@ normalization of the analytic fixture. It does not replace a realistic
 solver reference. A hard conditioning threshold and a solver accepted-power
 oracle should wait for a representative export and numerical-precision
 requirements.
-
-### Coordinate metadata can still disagree
-
-Croissant `PolarizedSky` stores both `coord` and `frame` and still permits
-contradictory values. Its own coordinate transport consults `coord`, while
-[`FullStokesSimulatorBase.simulate`](../lusee/FullStokesSimulator.py#L391)
-prefers `frame`. Correctly constructed objects use matching values, so this
-is interface hardening rather than a realistic wrong-result finding under
-the stated review scope.
-
-Make one field authoritative or reject disagreement at construction and at
-the luseepy boundary.
 
 ### Physical-input diagnostics remain optional
 
@@ -476,7 +481,7 @@ The focused new-path and converter suite, including explicit-loss and
 normalization tests, completed without a compatibility shim with
 
 ```text
-76 passed, 2 warnings
+78 passed, 2 warnings
 ```
 
 The warnings are Astropy's pre-existing assumption that two numerical
@@ -508,8 +513,8 @@ further expert input:
    anti-Hermitian-residual, and condition-number diagnostics.
 5. **Complete:** add the grid-converged Hertzian-dipole oracle and
    direct-quadrature `lmax` convergence tests.
-6. Reject `coord`/`frame` disagreement and document/test the positive
-   astronomical-azimuth turntable convention.
+6. **Complete:** reject `coord`/`frame` disagreement and document/test the
+   positive astronomical-azimuth turntable convention.
 
 Items that still require expert input or new data are the actual
 lossy-versus-PEC `Rloss` artifact, the antenna temperature model, acceptance

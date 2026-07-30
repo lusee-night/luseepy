@@ -107,7 +107,14 @@ def _validate_polarized_sky_metadata(
     if tuple(sky_model.stokes) != ("I", "Q", "U", "V"):
         raise ValueError("Polarized sky Stokes order must be exactly IQUV.")
     _canonical_tangent_basis(sky_model.tangent_basis)
-    _frame_name(sky_model.frame)
+    frame = _frame_name(sky_model.frame)
+    if hasattr(sky_model, "coord"):
+        coord = _frame_name(sky_model.coord)
+        if coord != frame:
+            raise ValueError(
+                "Polarized sky coord and frame disagree: "
+                f"{sky_model.coord!r} != {sky_model.frame!r}."
+            )
 
 
 def _validate_instrument_metadata(beam):

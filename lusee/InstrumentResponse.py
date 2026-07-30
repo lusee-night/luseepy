@@ -804,7 +804,12 @@ class InstrumentResponse:
         return ZA, Rsky, Rmoon, Rloss, frequency_map
 
     def rotate(self, degrees):
-        """Rotate the complete instrument by an integer number of phi bins."""
+        """Rotate the instrument using positive astronomical azimuth.
+
+        Positive angles run from North toward East. Since response phi=0 is
+        local East in ENU, +90 degrees moves that axis toward local South.
+        The angle must be an integer number of phi bins.
+        """
         if self.Nphi < 2:
             raise ValueError("Response phi grid is too short to rotate.")
         step = float(self.phi_deg[1] - self.phi_deg[0])

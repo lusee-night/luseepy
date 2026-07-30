@@ -16,6 +16,18 @@ horizon, the shared `theta=90 degrees` ring receives half weight. This is the
 spherical-harmonic midpoint value of the horizon step and avoids an
 `O(delta theta)` endpoint bias in both `Rsky` and sky contraction.
 
+`InstrumentResponse.rotate` and the configuration's `rotation_deg` use
+positive astronomical azimuth, from North toward East. The response grid is
+right-handed ENU with `phi=0` at East, so `+90 degrees` moves a directional
+response initially at `phi=0` to `phi=270 degrees`, or South. In map space
+this is a roll by negative phi bins; in harmonic space it is the equivalent
+`exp(+i m alpha)` phase.
+
+Polarized sky providers must use consistent `coord` and `frame` metadata.
+Equivalent aliases such as `equatorial` and `fk5` are accepted after
+canonicalization, but contradictory physical frames are rejected before any
+harmonic contraction.
+
 Pair response maps are formed for the ten unique port pairs:
 
 ```text

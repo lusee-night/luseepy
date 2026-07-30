@@ -4,6 +4,7 @@ paths:
 
 response:
   file: responses/lusee_four_port_v3.fits
+  # Positive astronomical azimuth; +90 moves phi=0 (East) toward South
   rotation_deg: 0
   require_validated: true
 

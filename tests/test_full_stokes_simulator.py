@@ -179,6 +179,7 @@ def make_galactic_anisotropic_sky():
         ("stokes", ("I", "Q", "V", "U"), "Stokes order"),
         ("tangent_basis", "north-east", "Unsupported tangent basis"),
         ("frame", "mystery", "Unsupported sky frame"),
+        ("coord", "galactic", "coord and frame disagree"),
     ),
 )
 def test_polarized_provider_metadata_is_validated(
@@ -193,6 +194,7 @@ def test_polarized_provider_metadata_is_validated(
         stokes = ("I", "Q", "U", "V")
         tangent_basis = "theta-phi"
         frame = "topo"
+        coord = "topo"
 
         def polarized_alm_at_freq(self, target, lmax):
             return jnp.zeros((len(target), 4, lmax + 1, 2 * lmax + 1))

@@ -561,3 +561,40 @@ def test_rotation_moves_all_ports_and_keeps_wraparound():
     rotated = response.rotate(45.0)
     assert jnp.array_equal(rotated.H_theta[..., 0], rotated.H_theta[..., -1])
     assert jnp.array_equal(rotated.H_theta[..., 0], response.H_theta[..., 1])
+
+
+def test_positive_rotation_moves_east_response_south_with_positive_m_phase():
+    arrays = make_response_arrays(freq=(10.0,))
+    phi = np.radians(arrays.phi_deg)
+    pattern = 2.0 + np.cos(phi)
+    H_theta = np.zeros_like(arrays.H_theta)
+    H_phi = np.zeros_like(arrays.H_phi)
+    H_theta[0] = np.sqrt(pattern)[None, None, :]
+    response = InstrumentResponse.from_arrays(
+        arrays.freq_mhz,
+        arrays.theta_deg,
+        arrays.phi_deg,
+        H_theta,
+        H_phi,
+        arrays.ZA,
+        arrays.Rsky,
+        arrays.Rmoon,
+        arrays.Rloss,
+    )
+
+    rotated = response.rotate(90.0)
+    original_i = np.asarray(response.pair_stokes_maps(0, 0)[0, 0, 1])
+    rotated_i = np.asarray(rotated.pair_stokes_maps(0, 0)[0, 0, 1])
+    assert arrays.phi_deg[np.argmax(original_i[:-1])] == 0.0
+    assert arrays.phi_deg[np.argmax(rotated_i[:-1])] == 270.0
+
+    lmax = 2
+    original_alm = np.asarray(
+        response.pair_stokes_alms_native(lmax, [0])[0, 0, 0]
+    )
+    rotated_alm = np.asarray(
+        rotated.pair_stokes_alms_native(lmax, [0])[0, 0, 0]
+    )
+    m = np.arange(-lmax, lmax + 1)
+    expected = original_alm * np.exp(1j * m * np.radians(90.0))[None]
+    np.testing.assert_allclose(rotated_alm, expected, rtol=2e-6, atol=2e-8)
