@@ -2,12 +2,12 @@
 
 Date: 2026-07-30
 
-Status: implementation update, items 1--2 of the recommended plan complete
+Status: implementation update, items 1--3 of the recommended plan complete
 
 Reviewed revisions:
 
 - luseepy `codex/four-port-polarization-refactor`, implementation baseline
-  `daf7d793c70344dc489ce798f7177671d789bb73`
+  `6849c2594ece58b3aca438dd381eebba30b24645`
 - companion Croissant `codex/full-stokes-pair-response-topo` at
   `daf1545bc57cb7fdf3d28cc468789a139c6eeb68`
 - TeX source of truth:
@@ -54,9 +54,11 @@ A scientifically validated realistic response still requires a new solver
 export and an independent accepted-power or plane-wave terminal-voltage
 check; no such artifact is currently available.
 
-The map-making radiometric-noise calculation also has a definite factor and
-complex-covariance error. It does not alter simulator voltage covariances,
-but it does make map-making uncertainties and weights wrong.
+The map-making radiometric-noise calculation now uses the correct separate
+real and imaginary cross-product variances. The map-maker still uses
+diagonal weights, so it does not yet represent covariance between the two
+components or between products that share a port; that approximation is now
+explicit.
 
 Finite-`lmax` positivity and the remaining validation gaps are important
 release-readiness risks, not demonstrated operational bugs: there is no real
@@ -176,14 +178,7 @@ normalization payloads. These close the identified software hole. Certifying
 a real artifact still requires one raw solver export and an independent
 accepted-power or plane-wave terminal-voltage check.
 
-### 3. High for map-making: radiometric cross-product covariance is wrong
-
-[`compute_radiometric_noise`](../lusee/MapMaker.py#L319) assigns the same
-variance to the real and imaginary parts of a cross-product:
-
-```text
-(Caa Cbb + |Cab|^2) / (4 delta_f delta_t).
-```
+### 3. Resolved at diagonal order: radiometric component variances
 
 For a proper complex Gaussian voltage vector and
 `N = delta_f delta_t` independent complex samples, the component statistics
@@ -196,21 +191,28 @@ Var(Re C_hat_ab) =
 Var(Im C_hat_ab) =
     [Caa Cbb - Re(Cab^2)] / (2 N)
 
-Cov(Re C_hat_ab, Im C_hat_ab) =
-    Im(Cab^2) / (2 N).
+Cov(Re C_hat_ab, Im C_hat_ab) = Im(Cab^2) / (2 N).
 ```
 
-For nonzero `Cab`, the equal-component estimate can under- or overestimate a
-particular real or imaginary variance, depending on `Re(Cab^2)`. In the
-important `Cab = 0` limit, both implemented variances are low by a factor of
-two, so both standard deviations are low by `sqrt(2)`. Real and imaginary
-channels are not generally equal or independent. Products that share ports
-also have nonzero sampling covariance, while
-[`solve`](../lusee/MapMaker.py#L178) currently accepts diagonal weights.
+[`compute_radiometric_noise`](../lusee/MapMaker.py) now evaluates those two
+variances separately in both the response-v3 product-label path and the
+legacy combination path. Autos retain `Var(Caa) = Caa^2/N`. A previous
+absolute variance floor of `1e-30` was also removed: it was unit-dependent
+and overwhelmed realistic `V^2/Hz` covariance scales. Only negative
+values are clamped to zero before the square root; for a physical covariance
+such negatives can arise only from roundoff.
 
-At minimum, use the correct separate real/imaginary variances and label the
-remaining diagonal-noise treatment as an approximation. A later extension
-can apply the full packed real covariance per time/frequency sample.
+Deterministic formula tests cover complex phase and very small physical
+units, and a proper-complex Gaussian Monte Carlo independently reproduces
+the real variance, imaginary variance, and their nonzero covariance.
+
+This fixes every diagonal variance passed to the current solver. It does not
+make the likelihood fully exact: real and imaginary channels are not
+generally independent, and products that share ports also have sampling
+covariance. [`solve`](../lusee/MapMaker.py) currently accepts diagonal
+weights, so the omitted covariance is explicitly documented as an
+approximation. A later extension can apply the full packed-real covariance
+per time/frequency sample.
 
 ## Resolved or corrected conclusions from the earlier review
 
@@ -409,7 +411,7 @@ The focused new-path and converter suite, including explicit-loss and
 normalization tests, completed without a compatibility shim with
 
 ```text
-65 passed, 2 warnings
+68 passed, 2 warnings
 ```
 
 The warnings are Astropy's pre-existing assumption that two numerical
@@ -435,8 +437,8 @@ further expert input:
 2. **Complete:** replace the converter's single amplitude flag with explicit
    field-unit, field-amplitude, and normalization conventions; add HFSS and
    representation-invariance tests.
-3. Correct real/imaginary radiometric variances and document the diagonal
-   map-making approximation.
+3. **Complete:** correct real/imaginary radiometric variances and document
+   the diagonal map-making approximation.
 4. Add reciprocity, passivity, matrix-PSD, anti-Hermitian-residual, and
    condition-number diagnostics.
 5. Add the grid-converged Hertzian-dipole oracle and direct-quadrature

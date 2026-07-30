@@ -325,16 +325,18 @@ def compute_radiometric_noise(data, combinations=None,
                               products=None):
     """Compute per-sample radiometric noise sigma from packed covariance.
 
-    Implements the radiometer equation (Camacho et al. 2026, Eq. 9):
+    Let ``N = delta_f_hz * delta_t_sec`` be the effective number of proper
+    complex Gaussian voltage samples. For a cross-product
+    ``Cab = x + 1j*y``, the packed component variances are
 
-        sigma^2_ij = (T_ii T_jj + |V_ij|^2) / (2 df dt)
+        Var(Re Cab) = (Caa Cbb + x^2 - y^2) / (2 N)
+        Var(Im Cab) = (Caa Cbb - x^2 + y^2) / (2 N)
 
-    For auto-correlations (real): sigma^2 = T_ii^2 / (df dt).
-    For each Re/Im component of a cross-correlation:
-        sigma^2 = (T_ii T_jj + |V_ij|^2) / (4 df dt).
-    The latter is half of the complex-sample Eq. 9 variance, assigned to
-    each Cartesian component under the circular-complex-noise convention.
-    Both packed components are therefore required to evaluate |V_ij|^2.
+    Auto-correlations have ``Var(Caa) = Caa^2 / N``. The returned array is a
+    diagonal-noise approximation: it omits
+    ``Cov(Re Cab, Im Cab) = Im(Cab^2) / (2 N)`` and covariances between
+    products that share a port. ``solve`` currently accepts only diagonal
+    sample weights.
 
     The data itself is used to estimate the system temperatures T_ii(t).
     This is a good approximation when SNR >> 1 (always true for
@@ -399,10 +401,17 @@ def compute_radiometric_noise(data, combinations=None,
             imag_channel = channel_for.get(f"{a}{b}I")
             real = data_np[:, real_channel, :]
             imag = data_np[:, imag_channel, :]
-            variance = (
-                T_aa * T_bb + real**2 + imag**2
-            ) / (4.0 * delta_f_hz * delta_t_sec)
-            sigma[:, channel, :] = np.sqrt(np.maximum(variance, 1e-30))
+            signed_square = real**2 - imag**2
+            common = T_aa * T_bb
+            denominator = 2.0 * delta_f_hz * delta_t_sec
+            real_variance = (common + signed_square) / denominator
+            imag_variance = (common - signed_square) / denominator
+            sigma[:, real_channel, :] = np.sqrt(
+                np.maximum(real_variance, 0.0)
+            )
+            sigma[:, imag_channel, :] = np.sqrt(
+                np.maximum(imag_variance, 0.0)
+            )
         return jnp.asarray(sigma)
 
     combinations = tuple(combinations)
@@ -426,17 +435,22 @@ def compute_radiometric_noise(data, combinations=None,
             sigma[:, ch, :] = T_ii / np.sqrt(delta_f_hz * delta_t_sec)
             ch += 1
         else:
-            # Cross-correlation: each Re/Im component has
-            # σ² = (T_ii T_jj + |V_ij|²) / (4 Δf Δt)
+            # Cross-correlation real and imaginary component variances
             T_ii = np.abs(data_np[:, auto_ch[i], :])
             T_jj = np.abs(data_np[:, auto_ch[j], :])
             V_re = data_np[:, ch, :]
             V_im = data_np[:, ch + 1, :]
-            V_sq = V_re**2 + V_im**2
-            var = (T_ii * T_jj + V_sq) / (4.0 * delta_f_hz * delta_t_sec)
-            sig = np.sqrt(np.maximum(var, 1e-30))
-            sigma[:, ch, :] = sig
-            sigma[:, ch + 1, :] = sig
+            signed_square = V_re**2 - V_im**2
+            common = T_ii * T_jj
+            denominator = 2.0 * delta_f_hz * delta_t_sec
+            real_variance = (common + signed_square) / denominator
+            imag_variance = (common - signed_square) / denominator
+            sigma[:, ch, :] = np.sqrt(
+                np.maximum(real_variance, 0.0)
+            )
+            sigma[:, ch + 1, :] = np.sqrt(
+                np.maximum(imag_variance, 0.0)
+            )
             ch += 2
 
     return jnp.asarray(sigma)

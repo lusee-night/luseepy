@@ -171,9 +171,118 @@ def test_mapmaker_noise_uses_response_v3_product_order():
         sigma[:, channel["00R"], :],
         2.0 / np.sqrt(10.0),
     )
-    cross = np.sqrt((2.0 * 3.0 + 0.4**2 + 0.3**2) / 40.0)
-    np.testing.assert_allclose(sigma[:, channel["01R"], :], cross)
-    np.testing.assert_allclose(sigma[:, channel["01I"], :], cross)
+    real_sigma = np.sqrt((2.0 * 3.0 + 0.4**2 - 0.3**2) / 20.0)
+    imag_sigma = np.sqrt((2.0 * 3.0 - 0.4**2 + 0.3**2) / 20.0)
+    np.testing.assert_allclose(
+        sigma[:, channel["01R"], :],
+        real_sigma,
+    )
+    np.testing.assert_allclose(
+        sigma[:, channel["01I"], :],
+        imag_sigma,
+    )
+    assert not np.isclose(real_sigma, imag_sigma)
+
+
+def test_mapmaker_noise_matches_proper_complex_gaussian_monte_carlo():
+    labels = default_product_labels()
+    channel = {label: index for index, label in enumerate(labels)}
+    Caa = 2.0
+    Cbb = 3.0
+    Cab = 0.4 - 0.3j
+    effective_samples = 20.0
+    data = np.zeros((1, len(labels), 1))
+    data[:, channel["00R"], :] = Caa
+    data[:, channel["11R"], :] = Cbb
+    data[:, channel["01R"], :] = Cab.real
+    data[:, channel["01I"], :] = Cab.imag
+    sigma = np.asarray(
+        compute_radiometric_noise(
+            data,
+            delta_f_hz=4.0,
+            delta_t_sec=5.0,
+        )
+    )
+
+    covariance = np.asarray(
+        [[Caa, Cab], [Cab.conjugate(), Cbb]],
+        dtype=np.complex128,
+    )
+    factor = np.linalg.cholesky(covariance)
+    rng = np.random.default_rng(29)
+    standard = (
+        rng.normal(size=(500_000, 2))
+        + 1j * rng.normal(size=(500_000, 2))
+    ) / np.sqrt(2.0)
+    voltage = standard @ factor.T
+    product = voltage[:, 0] * voltage[:, 1].conjugate()
+    empirical_real_variance = np.var(product.real) / effective_samples
+    empirical_imag_variance = np.var(product.imag) / effective_samples
+    empirical_covariance = (
+        np.cov(product.real, product.imag, ddof=0)[0, 1]
+        / effective_samples
+    )
+    np.testing.assert_allclose(
+        sigma[0, channel["01R"], 0] ** 2,
+        empirical_real_variance,
+        rtol=1e-2,
+    )
+    np.testing.assert_allclose(
+        sigma[0, channel["01I"], 0] ** 2,
+        empirical_imag_variance,
+        rtol=1e-2,
+    )
+    np.testing.assert_allclose(
+        empirical_covariance,
+        np.imag(Cab**2) / (2.0 * effective_samples),
+        rtol=7e-2,
+    )
+
+
+def test_mapmaker_noise_has_no_unit_dependent_variance_floor():
+    labels = default_product_labels()
+    channel = {label: index for index, label in enumerate(labels)}
+    scale = 1e-20
+    data = np.zeros((1, len(labels), 1))
+    data[:, channel["00R"], :] = 2.0 * scale
+    data[:, channel["11R"], :] = 3.0 * scale
+    data[:, channel["01R"], :] = 0.4 * scale
+    data[:, channel["01I"], :] = -0.3 * scale
+    sigma = np.asarray(
+        compute_radiometric_noise(
+            data,
+            delta_f_hz=2.0,
+            delta_t_sec=5.0,
+        )
+    )
+    expected = scale * np.sqrt((6.0 + 0.16 - 0.09) / 20.0)
+    np.testing.assert_allclose(
+        sigma[:, channel["01R"], :],
+        expected,
+        rtol=1e-12,
+    )
+    assert sigma[0, channel["01R"], 0] < 1e-19
+
+
+def test_legacy_mapmaker_noise_uses_separate_cross_component_variances():
+    combinations = ((0, 0), (1, 1), (0, 1))
+    data = np.asarray([[[2.0], [3.0], [0.4], [-0.3]]])
+    sigma = np.asarray(
+        compute_radiometric_noise(
+            data,
+            combinations=combinations,
+            delta_f_hz=2.0,
+            delta_t_sec=5.0,
+        )
+    )
+    np.testing.assert_allclose(
+        sigma[0, 2, 0] ** 2,
+        (6.0 + 0.16 - 0.09) / 20.0,
+    )
+    np.testing.assert_allclose(
+        sigma[0, 3, 0] ** 2,
+        (6.0 - 0.16 + 0.09) / 20.0,
+    )
 
 
 def test_mapmaker_noise_rejects_partial_complex_cross_product():

@@ -53,7 +53,7 @@ t0 = time.time()
 data_clean = sim.simulate(sky=sky)
 print(f"Simulated in {time.time() - t0:.1f}s, data shape = {data_clean.shape}")
 
-# Radiometric noise: σ²_ij(t) = (T_ii T_jj + |V_ij|²) / (2 Δf Δt)
+# Packed real/imag radiometric variances are evaluated separately
 # Paper uses Δf = 1 MHz, Δt = 7200 s (2-hour integration)
 sigma = lusee.mapmaker.compute_radiometric_noise(
     data_clean, delta_f_hz=1e6, delta_t_sec=7200.0,

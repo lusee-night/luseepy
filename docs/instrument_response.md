@@ -143,9 +143,11 @@ remaining release gates are recorded in
 [`four_port_evaluation.md`](four_port_evaluation.md).
 
 MapMaker accepts FITS v3 directly as one four-port instrument and uses the
-same physical 16-channel product order for radiometric-noise estimates. The
-complex Eq. 9 cross variance is split equally between the stored real and
-imaginary components, giving the documented factor of four in each packed
-channel; both components are required to evaluate `|V_ij|^2`.
+same physical 16-channel product order for radiometric-noise estimates. For
+`Cab = x + i y` and `N = delta_f delta_t`, the packed diagonal variances are
+`(Caa Cbb + x^2 - y^2)/(2N)` for the real channel and
+`(Caa Cbb - x^2 + y^2)/(2N)` for the imaginary channel. The current solver
+uses these correct component variances but still neglects their mutual
+covariance and covariance between products that share a port.
 Legacy beam files remain available through the compatibility branch while
 existing callers migrate.
