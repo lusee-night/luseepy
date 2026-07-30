@@ -41,7 +41,8 @@ DEFAULT_COMBINATIONS = [
 def build_instrument(beam_file, obs_range, freq, lmax,
                      layout=DEFAULT_LAYOUT, combinations=DEFAULT_COMBINATIONS,
                      taper=0.03, dt_sec=3600.0,
-                     lun_lat_deg=-10.0, lun_long_deg=180.0):
+                     lun_lat_deg=-10.0, lun_long_deg=180.0,
+                     frequency_policy="exact"):
     """Build a CroSimulator with correctly rotated and tapered beams.
 
     Returns (simulator, beams, observation).
@@ -56,6 +57,7 @@ def build_instrument(beam_file, obs_range, freq, lmax,
     :param dt_sec: Time step in seconds
     :param lun_lat_deg: Lunar latitude in degrees
     :param lun_long_deg: Lunar longitude in degrees
+    :param frequency_policy: Frequency alignment policy passed to CroSimulator
     """
     beams = []
     for name, angle in layout:
@@ -78,6 +80,7 @@ def build_instrument(beam_file, obs_range, freq, lmax,
     sim = CroSimulator(
         obs, beams, sky_dummy, Tground=0.0,
         combinations=combinations, freq=freq, lmax=lmax,
+        frequency_policy=frequency_policy,
     )
     return sim, beams, obs
 
