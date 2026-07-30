@@ -43,6 +43,8 @@ def main(argv=None):
         metadata={
             "SOURCE": str(args.response_npz),
             "ZA_SOURCE": "PLACEHOLDER",
+            "LOSSMODEL": "PEC",
+            "RLOSSSRC": "placeholder-explicit-zero",
             "VALIDATED": False,
         },
     )

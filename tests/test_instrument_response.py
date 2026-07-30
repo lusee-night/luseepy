@@ -42,8 +42,9 @@ def make_response_arrays(freq=(10.0, 20.0)):
         (30.0 + 5.0j) * np.eye(4)[None],
         (freq.size, 4, 4),
     ).copy()
+    Rloss = np.zeros_like(ZA)
     Rsky, Rmoon = compute_sky_moon_resistance(
-        freq, theta, phi, H_theta, H_phi, ZA
+        freq, theta, phi, H_theta, H_phi, ZA, Rloss
     )
     return ResponseArrays(
         freq,
@@ -54,12 +55,15 @@ def make_response_arrays(freq=(10.0, 20.0)):
         ZA,
         Rsky,
         Rmoon,
+        Rloss,
         metadata={
             "SOURCE": "synthetic",
             "SOURCE_ROOT": "pytest",
             "INPUT_KIND": "bare",
             "FIELD_KIND": "effective-length",
             "AMP_CONV": "RMS",
+            "LOSSMODEL": "PEC",
+            "RLOSSSRC": "explicit-zero-test-fixture",
             "ZA_SOURCE": "analytic",
             "GIT_SHA": "test",
             "TIMECONV": "e+jwt",
@@ -90,6 +94,44 @@ def test_response_fits_round_trip_preserves_float64_grid_and_units(tmp_path):
         rtol=2e-6,
         atol=2e-6,
     )
+    assert np.all(np.asarray(response.Rloss_native) == 0.0)
+
+
+def test_lossy_response_round_trip_preserves_moon_and_metal_split(tmp_path):
+    arrays = make_response_arrays()
+    arrays.Rloss = 0.2 * arrays.Rmoon
+    arrays.Rmoon = 0.8 * arrays.Rmoon
+    arrays.metadata["LOSSMODEL"] = "lossy"
+    arrays.metadata["RLOSSSRC"] = "synthetic-pec-baseline"
+    filename = tmp_path / "lossy_response.fits"
+    write_response_fits(filename, arrays, dtype="float64")
+    response = InstrumentResponse(filename)
+    np.testing.assert_allclose(response.Rmoon_native, arrays.Rmoon)
+    np.testing.assert_allclose(response.Rloss_native, arrays.Rloss, atol=1e-30)
+    np.testing.assert_allclose(
+        response.Rsky_native + response.Rmoon_native + response.Rloss_native,
+        0.5 * (
+            response.ZA
+            + np.swapaxes(response.ZA.conjugate(), -1, -2)
+        ),
+        atol=1e-30,
+    )
+
+
+def test_pec_response_rejects_nonzero_metal_loss(tmp_path):
+    arrays = make_response_arrays()
+    shift = 0.1 * arrays.Rmoon
+    arrays.Rloss = shift
+    arrays.Rmoon = arrays.Rmoon - shift
+    with pytest.raises(ValueError, match="requires Rloss=0"):
+        write_response_fits(tmp_path / "false_pec.fits", arrays)
+
+
+def test_response_requires_explicit_loss_model(tmp_path):
+    arrays = make_response_arrays()
+    arrays.metadata.pop("LOSSMODEL")
+    with pytest.raises(ValueError, match="must declare LOSSMODEL"):
+        write_response_fits(tmp_path / "missing_loss_model.fits", arrays)
 
 
 def test_response_loader_rejects_unvalidated_by_default(tmp_path):
@@ -178,7 +220,11 @@ def test_validated_loader_binds_stored_resistance_to_fields(tmp_path):
 
 def test_validated_writer_requires_explicit_provenance(tmp_path):
     arrays = make_response_arrays()
-    arrays.metadata = {"SOURCE": "synthetic"}
+    arrays.metadata = {
+        "SOURCE": "synthetic",
+        "LOSSMODEL": "PEC",
+        "RLOSSSRC": "explicit-zero-test-fixture",
+    }
     with pytest.raises(ValueError, match="explicit response provenance"):
         write_response_fits(tmp_path / "missing.fits", arrays)
 
@@ -249,6 +295,7 @@ def test_validated_loader_rechecks_horizon_geometry(tmp_path):
             arrays.ZA,
             arrays.Rsky,
             arrays.Rmoon,
+            arrays.Rloss,
             validated=True,
             metadata=arrays.metadata,
         )
@@ -320,6 +367,7 @@ def test_pair_stokes_maps_obey_baseline_conjugation():
         arrays.ZA,
         arrays.Rsky,
         arrays.Rmoon,
+        arrays.Rloss,
     )
     for a, b in PORT_PAIRS:
         forward = response.pair_stokes_maps(a, b)
@@ -345,6 +393,7 @@ def test_pair_stokes_positive_v_sign_matches_exp_plus_i_fixture():
         arrays.ZA,
         arrays.Rsky,
         arrays.Rmoon,
+        arrays.Rloss,
     )
     matched = response.pair_stokes_maps(0, 0)
     rejected = response.pair_stokes_maps(1, 1)
@@ -365,6 +414,7 @@ def test_target_pair_alms_preserve_order_duplicates_and_unique_sht_endpoints():
         arrays.ZA,
         arrays.Rsky,
         arrays.Rmoon,
+        arrays.Rloss,
     )
     target = np.asarray([17.5, 10.0, 17.5])
     alms, frequency_map = response.pair_stokes_alms(2, target)
@@ -389,6 +439,7 @@ def test_response_transform_chunks_pairs_and_frequencies_under_budget():
             arrays.ZA,
             arrays.Rsky,
             arrays.Rmoon,
+            arrays.Rloss,
         )
 
     reference = build()
@@ -412,6 +463,7 @@ def test_rotation_moves_all_ports_and_keeps_wraparound():
         arrays.ZA,
         arrays.Rsky,
         arrays.Rmoon,
+        arrays.Rloss,
     )
     rotated = response.rotate(45.0)
     assert jnp.array_equal(rotated.H_theta[..., 0], rotated.H_theta[..., -1])

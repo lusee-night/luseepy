@@ -2,12 +2,12 @@
 
 Date: 2026-07-30
 
-Status: current-state update
+Status: implementation update, item 1 of the recommended plan complete
 
 Reviewed revisions:
 
-- luseepy `codex/four-port-polarization-refactor`, parent revision
-  `b22e8514c36aba4c3d3b0cd11f641407785b9b9f`
+- luseepy `codex/four-port-polarization-refactor`, implementation baseline
+  `9589d7b9f5f463db1c2778a6f6a9c1613d60b6ec`
 - companion Croissant `codex/full-stokes-pair-response-topo` at
   `daf1545bc57cb7fdf3d28cc468789a139c6eeb68`
 - TeX source of truth:
@@ -43,12 +43,16 @@ required by the TeX. Depending on preprocessing, the current converter can be
 correct, can be wrong by a factor of two in covariance, or can be wrong by
 six orders of magnitude from untreated HFSS mV units.
 
-Two changes are required before producing a scientifically validated,
-realistic four-port response:
+The response and covariance schema now represents antenna metal loss
+separately and applies its own antenna temperature. This removes the
+previous software error for unequal lunar and antenna temperatures.
+Producing a realistic lossy response still requires new lossy and PEC
+solver products, which are not currently available.
 
-1. represent antenna metal loss separately from lunar absorption and heat it
-   at `T_ant`, as required by the TeX; and
-2. make the response-conversion unit and normalization contract explicit.
+One further change remains required before producing a scientifically
+validated, realistic four-port response:
+
+1. make the response-conversion unit and normalization contract explicit.
 
 The map-making radiometric-noise calculation also has a definite factor and
 complex-covariance error. It does not alter simulator voltage covariances,
@@ -60,7 +64,7 @@ four-port response on which to quantify them yet.
 
 ## Wrong-result findings
 
-### 1. Blocker for lossy responses: antenna metal loss is assigned `T_moon`
+### 1. Resolved in software: antenna metal loss is separate from lunar loss
 
 The TeX explicitly decomposes the physical covariance into sky, lunar, and
 antenna-loss terms
@@ -81,57 +85,49 @@ Rloss = Herm(ZA_lossy) - Herm(ZA_PEC)
 K_ant = 4 k_B T_ant Rloss.
 ```
 
-The current response schema stores only `Rsky` and `Rmoon`.
-[`compute_sky_moon_resistance`](../lusee/ResponsePhysics.py#L258) instead
-defines
+The response schema now stores `Rsky`, `Rmoon`, and `Rloss`, and binds all
+three into the content hash. `LOSSMODEL` and `RLOSSSRC` are required
+provenance. A PEC response must explicitly declare `LOSSMODEL=PEC` and has a
+validated zero `Rloss`; a lossy response must supply the matrix rather than
+silently treating a missing matrix as zero.
+
+[`compute_sky_moon_resistance`](../lusee/ResponsePhysics.py) now defines
 
 ```text
-Rmoon_code = Herm(ZA) - Rsky = Rmoon_physical + Rloss.
+Rmoon = Herm(ZA) - Rsky - Rloss.
 ```
 
-[`validate_response_matrices`](../lusee/ResponsePhysics.py#L272) then requires
-this two-term identity, and
-[`prepare_pair_alms`](../lusee/FullStokesSimulator.py#L361) reconstructs the
-same complement at target frequencies. Finally,
-[`assemble_open_covariance`](../lusee/Covariance.py#L62) applies `T_moon` to
-the entire complement. There is no `Rloss` or `T_ant` in the forward model.
-
-For a lossy response, the open-circuit error is therefore
+The writer and loader validate Hermiticity, the three-term resistance
+identity, and PSD of `Rmoon` and `Rloss`. The interpolated target-frequency
+matrices are checked again before simulation.
+[`assemble_open_covariance`](../lusee/Covariance.py) now assembles
 
 ```text
-Delta K_open = 4 k_B (T_moon - T_ant) Rloss,
+K_open =
+    K_sky
+    + 4 k_B T_moon Rmoon
+    + 4 k_B T_ant Rloss.
 ```
 
-and the loaded error is
+`T_ant` is propagated by the driver, full-Stokes simulator, and calibrator
+and, when specified, recorded with `T_moon` in output provenance. An omitted
+temperature for a PEC response remains unspecified in the output rather than
+being misreported as a physical 0 K; zero is used only as the internal
+multiplier of its zero loss matrix. Output also carries `LOSSMODEL` and
+`RLOSSSRC`, and loading it exposes the loss provenance, temperatures, and
+`Rloss`. A nonzero lossy response without an explicit antenna temperature is
+rejected. Unequal-temperature, off-grid tests now distinguish Moon and metal
+heating through both the simulator and calibrator, while lossy
+equal-temperature blackbody closure verifies the complete resistance budget.
+MapMaker explicitly sets both thermal multipliers to zero because its
+forward operator is intentionally sky-linear and offset-free.
 
-```text
-Delta C = M Delta K_open M^dagger.
-```
-
-The present result is exact only when the antenna model is PEC
-(`Rloss = 0`) or when `T_ant = T_moon`. Neither equality follows from the
-general TeX model.
-
-Equal-temperature blackbody closure cannot reveal this error. At
-`T_ant = T_moon = T`, the incorrectly combined term still sums to
-`4 k_B T Herm(ZA)`. Synthetic fixtures based on the same two-term complement
-are not independent tests of the missing thermodynamic decomposition.
-
-Required software changes:
-
-1. Add `Rloss` to the persisted response and carry it through interpolation,
-   hashing, JAX pytrees, calibration, and result provenance.
-2. Derive `Rmoon = Herm(ZA) - Rsky - Rloss`.
-3. Add `T_ant` and assemble
-   `4 k_B (T_moon Rmoon + T_ant Rloss)`.
-4. Validate Hermiticity and PSD of all three dissipative matrices and their
-   sum against `Herm(ZA)`.
-5. Permit a zero `Rloss` only as an explicit PEC assumption; do not silently
-   infer losslessness from a missing matrix.
-
-The software mechanics and tests do not require further physics input. A
-production value of `Rloss`, and a physical antenna-temperature model, do
-require new solver products or instrument-expert input.
+This resolves the identified programming bug. It does not manufacture the
+missing physical inputs: a production `Rloss` and antenna-temperature model
+still require new solver products or instrument-expert input. The current
+schema revision was updated in place because no production version-3
+four-port artifact exists; any experimental pre-change version-3 file is
+intentionally incompatible with the new required provenance.
 
 ### 2. Blocker for response production: converter normalization is underspecified
 
@@ -324,15 +320,14 @@ resolution.
 
 ### Response validation has no independent absolute oracle
 
-[`validate_response_matrices`](../lusee/ResponsePhysics.py#L272) checks
-finiteness, `Rsky`/`Rmoon` Hermiticity, the current two-term complement,
-`Rmoon` PSD, and agreement between stored and field-derived `Rsky`. It does
-not explicitly gate or report:
+[`validate_response_matrices`](../lusee/ResponsePhysics.py) now checks
+finiteness, `Rsky`/`Rmoon`/`Rloss` Hermiticity, the three-term complement,
+`Rmoon` and `Rloss` PSD, the PEC-zero-loss constraint, and agreement between
+stored and field-derived `Rsky`. It does not yet explicitly gate or report:
 
 - reciprocity, `ZA approximately ZA.T`, for the reciprocal antenna model;
 - PSD of field-derived `Rsky`;
 - passivity of `Herm(ZA)`;
-- PSD of `Rloss` once it is added; or
 - an acceptable condition number for embedded-current unmixing.
 
 The converter records `MAX_ICOND`, but it has no justified acceptance
@@ -442,20 +437,20 @@ convention errors can be distinguished from roundoff.
 
 ## Verification record and limitations
 
-The current luseepy/Croissant checkouts have a constructor-API skew:
-luseepy supplies `frequency_units` metadata that the reviewed Croissant
-classes no longer accept. This is an integration failure, not a physical
-result, and it is outside the wrong-result focus of this review.
+The luseepy constructors now match the reviewed Croissant API. The
+topocentric synthetic fixture also uses Croissant's current canonical
+`coord="topo"` spelling instead of the removed `mcmf` alias.
 
-With a no-file, in-memory compatibility shim that only dropped or supplied
-the changed metadata, the focused new-path suite completed with
+The focused new-path suite, including the explicit-loss tests, completed
+without a compatibility shim with
 
 ```text
-48 passed, 1 warning
+57 passed, 2 warnings
 ```
 
-and the independent ENU basis check passed at machine precision. No
-repository file was changed for those checks.
+The warnings are Astropy's pre-existing assumption that two numerical
+`TimeDelta` inputs are days. The independent ENU basis check passed at
+machine precision.
 
 These tests use synthetic responses. They do not replace validation against
 a new lossy/PEC antenna simulation, because no such artifact is available.
@@ -465,8 +460,8 @@ a new lossy/PEC antenna simulation, because no such artifact is available.
 The following work is mechanically and mathematically specified without
 further expert input:
 
-1. Extend the response and covariance model with explicit `Rloss` and
-   `T_ant`, including unequal-temperature closure tests.
+1. **Complete:** extend the response and covariance model with explicit
+   `Rloss` and `T_ant`, including unequal-temperature closure tests.
 2. Replace the converter's single amplitude flag with explicit field-unit,
    field-amplitude, and source-amplitude conventions; add HFSS and
    representation-invariance tests.

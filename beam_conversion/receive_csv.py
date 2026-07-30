@@ -134,6 +134,7 @@ def convert_receive_csvs(
     input_kind,
     field_kind,
     amplitude_convention,
+    rloss=None,
     zref=None,
     vsource=None,
     dtype="float32",
@@ -163,6 +164,13 @@ def convert_receive_csvs(
     if ZA.shape[0] != loaded[0][0].size:
         raise ValueError("ZA and receive CSV frequency axes have different lengths.")
     ZA = ZA[selection]
+    if rloss is not None:
+        rloss = np.asarray(rloss)
+        if rloss.shape[0] != loaded[0][0].size:
+            raise ValueError(
+                "Rloss and receive CSV frequency axes have different lengths."
+            )
+        rloss = rloss[selection]
     if vsource is not None:
         vsource = np.asarray(vsource)[selection]
     if zref is not None:
@@ -209,6 +217,7 @@ def convert_receive_csvs(
         Htheta,
         Hphi,
         ZA,
+        Rloss=rloss,
         Vsource=vsource,
         Zref=zref,
         metadata=meta,
@@ -227,6 +236,23 @@ def main(argv=None):
     parser.add_argument("csv", nargs=4)
     parser.add_argument("--output", required=True)
     parser.add_argument("--touchstone", required=True)
+    loss_group = parser.add_mutually_exclusive_group(required=True)
+    loss_group.add_argument(
+        "--pec",
+        action="store_true",
+        help="Declare an explicit zero antenna-metal loss matrix",
+    )
+    loss_group.add_argument(
+        "--rloss-npy",
+        help="Dense complex (frequency,4,4) antenna-metal loss matrix",
+    )
+    loss_group.add_argument(
+        "--za-pec-npy",
+        help=(
+            "Dense complex PEC impedance matrix; derive "
+            "Rloss=Herm(ZA_lossy)-Herm(ZA_PEC)"
+        ),
+    )
     parser.add_argument(
         "--vsource-npy",
         help=(
@@ -281,6 +307,33 @@ def main(argv=None):
             raise ValueError("--provenance-json must contain a JSON object.")
     metadata.setdefault("SOURCE", ",".join(args.csv))
     metadata.setdefault("ZA_SOURCE", str(args.touchstone))
+    if args.pec:
+        rloss = np.zeros_like(ZA)
+        loss_model = "PEC"
+        loss_source = "explicit-cli-pec"
+    elif args.rloss_npy is not None:
+        rloss = np.load(args.rloss_npy)
+        loss_model = "lossy"
+        loss_source = str(args.rloss_npy)
+    else:
+        ZA_pec = np.asarray(np.load(args.za_pec_npy))
+        if ZA_pec.shape != ZA.shape:
+            raise ValueError("--za-pec-npy must have the same shape as ZA.")
+        hermitian = lambda value: 0.5 * (
+            value + np.swapaxes(value.conjugate(), -1, -2)
+        )
+        rloss = hermitian(ZA) - hermitian(ZA_pec)
+        loss_model = "lossy"
+        loss_source = str(args.za_pec_npy)
+    declared_loss_model = str(
+        metadata.get("LOSSMODEL", loss_model)
+    ).strip().lower()
+    if declared_loss_model != loss_model.lower():
+        raise ValueError(
+            "Provenance LOSSMODEL contradicts the selected loss input."
+        )
+    metadata["LOSSMODEL"] = loss_model
+    metadata.setdefault("RLOSSSRC", loss_source)
     return convert_receive_csvs(
         args.csv,
         args.output,
@@ -288,6 +341,7 @@ def main(argv=None):
         input_kind=args.input_kind,
         field_kind=args.field_kind,
         amplitude_convention=args.amplitude_convention,
+        rloss=rloss,
         zref=zref if args.input_kind == "embedded" else None,
         vsource=vsource,
         dtype=args.dtype,

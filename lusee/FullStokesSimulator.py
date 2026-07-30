@@ -67,15 +67,20 @@ def _canonical_tangent_basis(value):
     return aliases[normalized]
 
 
-def _validate_polarized_sky_metadata(sky_model):
+def _validate_polarized_sky_metadata(
+    sky_model,
+    *,
+    require_frequency_units,
+):
     required = (
         "units",
         "frame",
         "convention",
         "stokes",
         "tangent_basis",
-        "frequency_units",
     )
+    if require_frequency_units:
+        required = required + ("frequency_units",)
     missing = [name for name in required if not hasattr(sky_model, name)]
     if missing:
         raise ValueError(
@@ -86,7 +91,9 @@ def _validate_polarized_sky_metadata(sky_model):
         raise ValueError(
             f"Polarized sky units must be 'K'; got {sky_model.units!r}."
         )
-    if str(sky_model.frequency_units).strip() != "MHz":
+    if require_frequency_units and (
+        str(sky_model.frequency_units).strip() != "MHz"
+    ):
         raise ValueError(
             "Polarized sky frequency_units must be 'MHz'; got "
             f"{sky_model.frequency_units!r}."
@@ -207,14 +214,20 @@ def prepare_polarized_sky_alms(sky_model, target_freqs, lmax):
     import croissant as cro
 
     if hasattr(sky_model, "polarized_alm_at_freq"):
-        _validate_polarized_sky_metadata(sky_model)
+        _validate_polarized_sky_metadata(
+            sky_model,
+            require_frequency_units=True,
+        )
         result = jnp.asarray(
             sky_model.polarized_alm_at_freq(target_freqs, lmax=lmax)
         )
     elif hasattr(cro, "PolarizedSky") and isinstance(
         sky_model, cro.PolarizedSky
     ):
-        _validate_polarized_sky_metadata(sky_model)
+        _validate_polarized_sky_metadata(
+            sky_model,
+            require_frequency_units=False,
+        )
         source_freqs = np.asarray(sky_model.freqs, dtype=np.float64)
         frequency_map = FrequencyMap.build(target_freqs, source_freqs)
         source_indices = frequency_map.source_indices
@@ -226,7 +239,6 @@ def prepare_polarized_sky_alms(sky_model, target_freqs, lmax):
             convention=sky_model.convention,
             stokes=sky_model.stokes,
             units=sky_model.units,
-            frequency_units=sky_model.frequency_units,
             frame=sky_model.frame,
             tangent_basis=sky_model.tangent_basis,
             niter=sky_model._niter,
@@ -302,6 +314,7 @@ class FullStokesSimulatorBase:
         sky_model,
         receiver,
         T_moon=250.0,
+        T_ant=None,
         products="all",
         freq=None,
         lmax=128,
@@ -314,6 +327,7 @@ class FullStokesSimulatorBase:
         self.sky_model = sky_model
         self.receiver = receiver
         self.T_moon = T_moon
+        self.T_ant = T_ant
         self.products = products
         if freq is None:
             target_freq, removed = default_target_frequencies(
@@ -341,6 +355,8 @@ class FullStokesSimulatorBase:
         self.M_target = None
         self.Rsky_target = None
         self.Rmoon_target = None
+        self.Rloss_target = None
+        self.result_T_ant = None
         self.blackbody_normalization = None
         self.result_beam = None
         self.result_receiver = None
@@ -370,20 +386,36 @@ class FullStokesSimulatorBase:
         from .InstrumentResponse import assemble_pair_matrix
 
         Rsky = assemble_pair_matrix(jnp.swapaxes(pair_rsky, 0, 1))
+        Rloss = frequency_map.from_native(beam.Rloss_native)
         dissipative = 0.5 * (
             ZA + jnp.swapaxes(ZA.conjugate(), -1, -2)
         )
-        Rmoon = dissipative - Rsky
+        Rmoon = dissipative - Rsky - Rloss
         if not _contains_tracer(Rmoon):
-            moon = np.asarray(Rmoon)
-            scale = max(1.0, float(np.max(np.abs(moon))))
-            minimum = float(np.min(np.linalg.eigvalsh(moon)))
-            if minimum < -1e-8 * scale:
-                raise ValueError(
-                    "Target-derived Rmoon has a negative eigenvalue "
-                    f"({minimum:.6g} Ohm)."
-                )
-        return pair_alms, ZA, Rsky, Rmoon
+            for name, matrix in (("Rmoon", Rmoon), ("Rloss", Rloss)):
+                value = np.asarray(matrix)
+                scale = max(1.0, float(np.max(np.abs(value))))
+                minimum = float(np.min(np.linalg.eigvalsh(value)))
+                if minimum < -1e-8 * scale:
+                    raise ValueError(
+                        f"Target-derived {name} has a negative eigenvalue "
+                        f"({minimum:.6g} Ohm)."
+                    )
+        return pair_alms, ZA, Rsky, Rmoon, Rloss
+
+    def _antenna_temperature(self, beam):
+        if self.T_ant is not None:
+            return self.T_ant
+        loss_model = str(beam.header.get("LOSSMODEL", "")).strip().lower()
+        if loss_model == "pec":
+            return 0.0
+        if not _contains_tracer(beam.Rloss_native) and np.all(
+            np.asarray(beam.Rloss_native) == 0
+        ):
+            return 0.0
+        raise ValueError(
+            "A lossy four-port response requires an explicit T_ant."
+        )
 
     def _convolve(self, pair_alms, sky_alms, sky_frame, times):
         raise NotImplementedError
@@ -407,7 +439,9 @@ class FullStokesSimulatorBase:
             raise TypeError("beam override must be an InstrumentResponse.")
         _validate_instrument_metadata(effective_beam)
 
-        pair_alms, ZA, Rsky, Rmoon = self.prepare_pair_alms(effective_beam)
+        pair_alms, ZA, Rsky, Rmoon, Rloss = self.prepare_pair_alms(
+            effective_beam
+        )
         sky_alms = prepare_polarized_sky_alms(
             effective_sky,
             self.freq,
@@ -424,10 +458,13 @@ class FullStokesSimulatorBase:
             sky_frame,
             times,
         )
+        T_ant = self._antenna_temperature(effective_beam)
         open_covariance = assemble_open_covariance(
             pair_integrals,
             Rmoon,
-            self.T_moon,
+            Rloss,
+            T_moon=self.T_moon,
+            T_ant=T_ant,
         )
         ZL = effective_receiver.Z(self.freq)
         covariance, M = load_covariance(open_covariance, ZA, ZL)
@@ -445,6 +482,8 @@ class FullStokesSimulatorBase:
         self.M_target = M
         self.Rsky_target = Rsky
         self.Rmoon_target = Rmoon
+        self.Rloss_target = Rloss
+        self.result_T_ant = self.T_ant
         self.blackbody_normalization = blackbody_normalization(ZA, M)
         self.result_beam = effective_beam
         self.result_receiver = effective_receiver
@@ -484,6 +523,8 @@ class FullStokesSimulatorBase:
             "RESPONSE": str(response.filename or "in-memory"),
             "RESPHASH": response.content_hash,
             "RESPVAL": bool(response.validated),
+            "LOSSMODEL": str(response.header.get("LOSSMODEL", "UNKNOWN")),
+            "RLOSSSRC": str(response.header.get("RLOSSSRC", "UNKNOWN")),
             "FREQINT": "linear-native-alm",
             "TIMESYS": self.result_times.scale.upper(),
             "TIMEUNIT": "d",
@@ -512,7 +553,10 @@ class FullStokesSimulatorBase:
             "LUSEEVER": _package_version("lusee"),
             "CROVER": _package_version("croissant-sim"),
             "S2FFTVER": _package_version("s2fft"),
+            "TMOON_K": float(self.T_moon),
         }
+        if self.result_T_ant is not None:
+            header["TANT_K"] = float(self.result_T_ant)
         fits = fitsio.FITS(filename, "rw", clobber=True)
         fits.write(
             np.asarray(self.result),
@@ -571,6 +615,7 @@ class FullStokesSimulatorBase:
         write_complex("M", self.M_target, "1")
         write_complex("Rsky", self.Rsky_target, "Ohm")
         write_complex("Rmoon", self.Rmoon_target, "Ohm")
+        write_complex("Rloss", self.Rloss_target, "Ohm")
         write_complex(
             "blackbody_normalization",
             self.blackbody_normalization,

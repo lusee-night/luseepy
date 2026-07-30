@@ -20,6 +20,7 @@ def test_driver_parses_response_receiver_and_value_frequencies(tmp_path):
         np.asarray(response.ZA),
         np.asarray(response.Rsky_native),
         np.asarray(response.Rmoon_native),
+        np.asarray(response.Rloss_native),
         metadata=response.header,
     )
     write_response_fits(tmp_path / "response.fits", payload)
@@ -46,6 +47,7 @@ def test_driver_parses_response_receiver_and_value_frequencies(tmp_path):
             "long": 182.258,
             "lmax": 2,
             "T_moon": 250.0,
+            "T_ant": 230.0,
             "products": "all",
             "freq": {"values": [17.5, 10.0, 17.5]},
         },

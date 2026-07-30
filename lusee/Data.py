@@ -100,6 +100,8 @@ class Data(Observation):
             "RESPONSE",
             "RESPHASH",
             "RESPVAL",
+            "LOSSMODEL",
+            "RLOSSSRC",
             "FREQINT",
             "RECMODEL",
             "RECCHANS",
@@ -112,6 +114,8 @@ class Data(Observation):
             "S2FFTVER",
             "CLOCKSRC",
             "SCALEASM",
+            "TMOON_K",
+            "TANT_K",
         )
         self.provenance = {
             key: header[key]
@@ -122,6 +126,8 @@ class Data(Observation):
             "path": header.get("RESPONSE"),
             "content_hash": header.get("RESPHASH"),
             "validated": bool(header.get("RESPVAL", False)),
+            "loss_model": header.get("LOSSMODEL"),
+            "loss_source": header.get("RLOSSSRC"),
             "frequency_interpolation": header.get("FREQINT"),
         }
         self.receiver_provenance = {
@@ -262,6 +268,13 @@ class Data(Observation):
         self.M = read_complex("M", "1")
         self.Rsky = read_complex("Rsky", "Ohm")
         self.Rmoon = read_complex("Rmoon", "Ohm")
+        self.Rloss = read_complex("Rloss", "Ohm")
+        self.T_moon = float(header["TMOON_K"])
+        self.T_ant = (
+            float(header["TANT_K"])
+            if "TANT_K" in header
+            else None
+        )
         self.blackbody_normalization = read_complex(
             "blackbody_normalization",
             "V^2/(Hz K)",

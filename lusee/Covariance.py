@@ -62,16 +62,20 @@ def normalize_products(products):
 def assemble_open_covariance(
     pair_sky_integrals,
     Rmoon,
+    Rloss,
+    *,
     T_moon,
+    T_ant,
 ):
-    """Assemble open-circuit covariance from pair integrals and Moon term."""
+    """Assemble open covariance from sky, Moon, and antenna-metal terms."""
     pair_sky_integrals = jnp.asarray(pair_sky_integrals)
     K_sky = K_BOLTZMANN * assemble_pair_matrix(
         pair_sky_integrals,
         PORT_PAIRS,
     )
     K_moon = 4 * K_BOLTZMANN * jnp.asarray(T_moon) * jnp.asarray(Rmoon)
-    return K_sky + K_moon[None]
+    K_ant = 4 * K_BOLTZMANN * jnp.asarray(T_ant) * jnp.asarray(Rloss)
+    return K_sky + K_moon[None] + K_ant[None]
 
 
 @jax.jit

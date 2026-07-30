@@ -23,6 +23,8 @@ REQUIRED_PROVENANCE_KEYS = (
     "INPUT_KIND",
     "FIELD_KIND",
     "AMP_CONV",
+    "LOSSMODEL",
+    "RLOSSSRC",
     "TIMECONV",
     "ZA_SOURCE",
     "GIT_SHA",
@@ -45,6 +47,7 @@ CANONICAL_CONVENTIONS = {
     "INPUT_KIND": {"bare", "embedded"},
     "FIELD_KIND": {"re", "r_e", "effective-length", "effective_length"},
     "AMP_CONV": {"rms", "peak"},
+    "LOSSMODEL": {"pec", "lossy"},
 }
 
 
@@ -60,6 +63,7 @@ class ResponseArrays:
     ZA: np.ndarray
     Rsky: np.ndarray | None = None
     Rmoon: np.ndarray | None = None
+    Rloss: np.ndarray | None = None
     Vsource: np.ndarray | None = None
     Zref: np.ndarray | None = None
     metadata: dict | None = None
@@ -81,6 +85,7 @@ def compute_sky_moon_resistance(
     H_theta,
     H_phi,
     ZA,
+    Rloss=None,
 ):
     """Compute native matrices with the simulator's harmonic operator."""
     from lusee.ResponsePhysics import compute_sky_moon_resistance as derive
@@ -92,6 +97,7 @@ def compute_sky_moon_resistance(
         H_theta,
         H_phi,
         ZA,
+        Rloss,
     )
 
 
@@ -186,6 +192,7 @@ def response_content_hash(response, *, metadata=None, real_dtype=None):
         ZA=response.ZA,
         Rsky=response.Rsky,
         Rmoon=response.Rmoon,
+        Rloss=response.Rloss,
         Vsource=response.Vsource,
         Zref=response.Zref,
         metadata=response.metadata if metadata is None else metadata,
@@ -224,6 +231,8 @@ def _response_header(response, validated):
         "INPUT_KIND": metadata.pop("INPUT_KIND", "bare"),
         "FIELD_KIND": metadata.pop("FIELD_KIND", "effective-length"),
         "AMP_CONV": metadata.pop("AMP_CONV", "RMS"),
+        "LOSSMODEL": metadata.pop("LOSSMODEL", "UNKNOWN"),
+        "RLOSSSRC": metadata.pop("RLOSSSRC", "UNKNOWN"),
         "TIMECONV": metadata.pop("TIMECONV", "e+jwt"),
         "ZA_SOURCE": metadata.pop("ZA_SOURCE", "UNKNOWN"),
         "GIT_SHA": metadata.pop("GIT_SHA", "UNKNOWN"),
@@ -324,6 +333,23 @@ def _validate_response(response, *, validated):
     if not np.all(np.isfinite(response.H_phi)):
         raise ValueError("H_phi contains non-finite values.")
 
+    metadata = {
+        str(key).upper(): value
+        for key, value in dict(response.metadata or {}).items()
+    }
+    loss_model = str(metadata.get("LOSSMODEL", "")).strip().lower()
+    if loss_model not in {"pec", "lossy"}:
+        raise ValueError(
+            "Response metadata must declare LOSSMODEL='PEC' or 'lossy'."
+        )
+    if response.Rloss is None:
+        if loss_model != "pec":
+            raise ValueError(
+                "A lossy response requires an explicit Rloss matrix."
+            )
+        response.Rloss = np.zeros_like(response.ZA)
+    response.Rloss = np.asarray(response.Rloss)
+
     computed_rsky, computed_rmoon = compute_sky_moon_resistance(
         response.freq_mhz,
         response.theta_deg,
@@ -331,6 +357,7 @@ def _validate_response(response, *, validated):
         response.H_theta,
         response.H_phi,
         response.ZA,
+        response.Rloss,
     )
     if response.Rsky is None:
         response.Rsky = computed_rsky
@@ -339,14 +366,19 @@ def _validate_response(response, *, validated):
     response.Rsky = np.asarray(response.Rsky)
     response.Rmoon = np.asarray(response.Rmoon)
     matrix_shape = (response.freq_mhz.size, 4, 4)
-    if response.Rsky.shape != matrix_shape or response.Rmoon.shape != matrix_shape:
-        raise ValueError("Rsky and Rmoon must have shape (frequency, 4, 4).")
+    for name in ("Rsky", "Rmoon", "Rloss"):
+        if getattr(response, name).shape != matrix_shape:
+            raise ValueError(
+                f"{name} must have shape (frequency, 4, 4)."
+            )
     if not np.all(np.isfinite(response.ZA)):
         raise ValueError("ZA contains non-finite values.")
     if not np.all(np.isfinite(response.Rsky)):
         raise ValueError("Rsky contains non-finite values.")
     if not np.all(np.isfinite(response.Rmoon)):
         raise ValueError("Rmoon contains non-finite values.")
+    if not np.all(np.isfinite(response.Rloss)):
+        raise ValueError("Rloss contains non-finite values.")
     if validated:
         from lusee.ResponsePhysics import validate_response_matrices
 
@@ -354,7 +386,9 @@ def _validate_response(response, *, validated):
             response.ZA,
             response.Rsky,
             response.Rmoon,
+            response.Rloss,
             field_rsky=computed_rsky,
+            loss_model=loss_model,
         )
         return response
 
@@ -363,17 +397,18 @@ def _validate_response(response, *, validated):
         + np.swapaxes(response.ZA.conjugate(), -1, -2)
     )
     if not np.allclose(
-        response.Rsky + response.Rmoon,
+        response.Rsky + response.Rmoon + response.Rloss,
         dissipative,
         rtol=1e-7,
         atol=1e-10,
     ):
         raise ValueError(
-            "Rsky + Rmoon does not equal the dissipative part of ZA."
+            "Rsky + Rmoon + Rloss does not equal the dissipative part of ZA."
         )
     for name, matrix in (
         ("Rsky", response.Rsky),
         ("Rmoon", response.Rmoon),
+        ("Rloss", response.Rloss),
     ):
         if not np.allclose(
             matrix,
@@ -382,26 +417,32 @@ def _validate_response(response, *, validated):
             atol=1e-10,
         ):
             raise ValueError(f"{name} must be Hermitian.")
-    moon_hermitian = 0.5 * (
-        response.Rmoon
-        + np.swapaxes(response.Rmoon.conjugate(), -1, -2)
-    )
-    minimum_moon_eigenvalue = float(
-        np.min(np.linalg.eigvalsh(moon_hermitian))
-    )
-    scale = max(
-        1.0,
-        float(np.max(np.abs(moon_hermitian))),
-    )
-    if minimum_moon_eigenvalue < -1e-8 * scale:
-        message = (
-            "Rmoon has a negative eigenvalue "
-            f"({minimum_moon_eigenvalue:.6g} Ohm); check response "
-            "normalization and ZA provenance."
+    for name, matrix in (
+        ("Rmoon", response.Rmoon),
+        ("Rloss", response.Rloss),
+    ):
+        hermitian = 0.5 * (
+            matrix + np.swapaxes(matrix.conjugate(), -1, -2)
         )
-        if validated:
-            raise ValueError(message)
-        warnings.warn(message, RuntimeWarning, stacklevel=2)
+        minimum_eigenvalue = float(
+            np.min(np.linalg.eigvalsh(hermitian))
+        )
+        scale = max(1.0, float(np.max(np.abs(hermitian))))
+        if minimum_eigenvalue < -1e-8 * scale:
+            warnings.warn(
+                f"{name} has a negative eigenvalue "
+                f"({minimum_eigenvalue:.6g} Ohm); check response "
+                "normalization and ZA provenance.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+    if loss_model == "pec" and not np.allclose(
+        response.Rloss,
+        0.0,
+        rtol=0.0,
+        atol=1e-10,
+    ):
+        raise ValueError("LOSSMODEL='PEC' requires Rloss=0.")
     return response
 
 
@@ -448,6 +489,7 @@ def write_response_fits(
     write_complex("ZA", response.ZA, "Ohm")
     write_complex("Rsky", response.Rsky, "Ohm")
     write_complex("Rmoon", response.Rmoon, "Ohm")
+    write_complex("Rloss", response.Rloss, "Ohm")
     fits.write(
         np.asarray(response.freq_mhz, dtype=np.float64),
         extname="freq",

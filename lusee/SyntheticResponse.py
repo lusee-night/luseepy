@@ -99,6 +99,7 @@ def synthetic_four_port_response(
     # harmonic operator used by the simulator.
     ZA = 2.0 * Rsky + 1j * reactance
     Rmoon = Rsky.copy()
+    Rloss = np.zeros_like(Rsky)
     return InstrumentResponse.from_arrays(
         freq,
         theta,
@@ -108,6 +109,7 @@ def synthetic_four_port_response(
         ZA,
         Rsky,
         Rmoon,
+        Rloss,
         metadata={
             "SOURCE": "analytic-short-dipoles",
             "SOURCE_ROOT": "lusee.SyntheticResponse",
@@ -115,6 +117,8 @@ def synthetic_four_port_response(
             "INPUT_KIND": "bare",
             "FIELD_KIND": "effective-length",
             "AMP_CONV": "RMS",
+            "LOSSMODEL": "PEC",
+            "RLOSSSRC": "explicit-zero-analytic-fixture",
             "TIMECONV": "e+jwt",
             "GIT_SHA": "analytic-fixture",
             "COORDSYS": "instrument-topocentric",

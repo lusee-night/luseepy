@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from lusee.Covariance import (
+    K_BOLTZMANN,
     assemble_open_covariance,
     blackbody_normalization,
     default_product_labels,
@@ -63,7 +64,8 @@ def test_blackbody_identity_native_and_off_grid():
     ZA, ZL = random_well_conditioned_matrices(nfreq=nfreq)
     dissipative = 0.5 * (ZA + jnp.swapaxes(ZA.conjugate(), -1, -2))
     Rsky = 0.35 * dissipative
-    Rmoon = dissipative - Rsky
+    Rmoon = 0.45 * dissipative
+    Rloss = dissipative - Rsky - Rmoon
     pair_values = []
     for a, b in PORT_PAIRS:
         pair_values.append(4 * temperature * Rsky[:, a, b])
@@ -71,7 +73,9 @@ def test_blackbody_identity_native_and_off_grid():
     open_covariance = assemble_open_covariance(
         pair_values,
         Rmoon,
-        temperature,
+        Rloss,
+        T_moon=temperature,
+        T_ant=temperature,
     )
     covariance, M = load_covariance(open_covariance, ZA, ZL)
     expected = temperature * blackbody_normalization(ZA, M)
@@ -81,8 +85,15 @@ def test_blackbody_identity_native_and_off_grid():
 def test_covariance_is_hermitian_and_packs_16_real_channels():
     ZA, ZL = random_well_conditioned_matrices(nfreq=2)
     Rmoon = jnp.broadcast_to(jnp.eye(4)[None], (2, 4, 4))
+    Rloss = jnp.zeros_like(Rmoon)
     pair_values = jnp.zeros((3, 2, 10), dtype=jnp.complex128)
-    open_covariance = assemble_open_covariance(pair_values, Rmoon, 250.0)
+    open_covariance = assemble_open_covariance(
+        pair_values,
+        Rmoon,
+        Rloss,
+        T_moon=250.0,
+        T_ant=0.0,
+    )
     covariance, _ = load_covariance(open_covariance, ZA, ZL)
     packed, labels = pack_covariance(covariance)
     assert packed.shape == (3, 16, 2)
@@ -92,6 +103,25 @@ def test_covariance_is_hermitian_and_packs_16_real_channels():
         covariance,
         jnp.swapaxes(covariance.conjugate(), -1, -2),
     )
+
+
+def test_moon_and_antenna_loss_use_independent_temperatures():
+    pair_values = jnp.zeros((1, 1, len(PORT_PAIRS)), dtype=jnp.complex128)
+    Rmoon = jnp.asarray([2.0 * np.eye(4)])
+    Rloss = jnp.asarray([0.5 * np.eye(4)])
+    T_moon = 240.0
+    T_ant = 180.0
+    result = assemble_open_covariance(
+        pair_values,
+        Rmoon,
+        Rloss,
+        T_moon=T_moon,
+        T_ant=T_ant,
+    )
+    expected = 4 * (
+        T_moon * Rmoon + T_ant * Rloss
+    ) * jnp.asarray(K_BOLTZMANN)
+    np.testing.assert_allclose(result[0], expected, rtol=1e-12)
 
 
 def test_receiver_parameter_gradient_is_finite():

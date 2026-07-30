@@ -38,6 +38,8 @@ RESPONSE_UNITS = {
     "Rsky_imag": "Ohm",
     "Rmoon_real": "Ohm",
     "Rmoon_imag": "Ohm",
+    "Rloss_real": "Ohm",
+    "Rloss_imag": "Ohm",
 }
 REQUIRED_PROVENANCE = (
     "SOURCE",
@@ -45,6 +47,8 @@ REQUIRED_PROVENANCE = (
     "INPUT_KIND",
     "FIELD_KIND",
     "AMP_CONV",
+    "LOSSMODEL",
+    "RLOSSSRC",
     "TIMECONV",
     "ZA_SOURCE",
     "GIT_SHA",
@@ -67,6 +71,7 @@ CANONICAL_CONVENTIONS = {
     "INPUT_KIND": {"bare", "embedded"},
     "FIELD_KIND": {"re", "r_e", "effective-length", "effective_length"},
     "AMP_CONV": {"rms", "peak"},
+    "LOSSMODEL": {"pec", "lossy"},
 }
 
 
@@ -173,6 +178,7 @@ class InstrumentResponse:
         ZA = _read_complex(fits, "ZA", "Ohm")
         Rsky = _read_complex(fits, "Rsky", "Ohm")
         Rmoon = _read_complex(fits, "Rmoon", "Ohm")
+        Rloss = _read_complex(fits, "Rloss", "Ohm")
         names = _hdu_names(fits)
         Vsource = (
             _read_complex(fits, "Vsource", "V")
@@ -194,6 +200,7 @@ class InstrumentResponse:
         self.ZA = jnp.asarray(ZA)
         self.Rsky_native = jnp.asarray(Rsky)
         self.Rmoon_native = jnp.asarray(Rmoon)
+        self.Rloss_native = jnp.asarray(Rloss)
         self.header = header
         self.validated = validated
         self.id = header.get("PORTS", "0123")
@@ -217,12 +224,15 @@ class InstrumentResponse:
                 H_theta,
                 H_phi,
                 ZA,
+                Rloss,
             )
             validate_response_matrices(
                 ZA,
                 Rsky,
                 Rmoon,
+                Rloss,
                 field_rsky=field_rsky,
+                loss_model=header["LOSSMODEL"],
             )
         computed_hash = response_payload_hash(
             freq=self.freq,
@@ -233,6 +243,7 @@ class InstrumentResponse:
             ZA=ZA,
             Rsky=Rsky,
             Rmoon=Rmoon,
+            Rloss=Rloss,
             Vsource=Vsource,
             Zref=Zref,
             metadata=header,
@@ -257,6 +268,7 @@ class InstrumentResponse:
         ZA,
         Rsky,
         Rmoon,
+        Rloss,
         *,
         validated=None,
         metadata=None,
@@ -272,6 +284,7 @@ class InstrumentResponse:
         obj.ZA = jnp.asarray(ZA)
         obj.Rsky_native = jnp.asarray(Rsky)
         obj.Rmoon_native = jnp.asarray(Rmoon)
+        obj.Rloss_native = jnp.asarray(Rloss)
         obj.header = {
             str(key).upper(): value
             for key, value in dict(metadata or {}).items()
@@ -309,6 +322,7 @@ class InstrumentResponse:
                     obj.H_theta,
                     obj.H_phi,
                     obj.ZA,
+                    obj.Rloss_native,
                 )
             except jax.errors.TracerArrayConversionError as error:
                 raise ValueError(
@@ -320,7 +334,9 @@ class InstrumentResponse:
                 obj.ZA,
                 obj.Rsky_native,
                 obj.Rmoon_native,
+                obj.Rloss_native,
                 field_rsky=field_rsky,
+                loss_model=obj.header.get("LOSSMODEL"),
             )
         try:
             obj.content_hash = response_payload_hash(
@@ -332,6 +348,7 @@ class InstrumentResponse:
                 ZA=obj.ZA,
                 Rsky=obj.Rsky_native,
                 Rmoon=obj.Rmoon_native,
+                Rloss=obj.Rloss_native,
                 metadata=obj.header,
             )
         except jax.errors.TracerArrayConversionError:
@@ -350,6 +367,10 @@ class InstrumentResponse:
     @property
     def Rmoon(self):
         return self.Rmoon_native
+
+    @property
+    def Rloss(self):
+        return self.Rloss_native
 
     def _validate(self):
         if self.frame.strip().lower() not in {
@@ -378,7 +399,7 @@ class InstrumentResponse:
         if self.H_theta.shape != expected or self.H_phi.shape != expected:
             raise ValueError(f"Response fields must have shape {expected}.")
         matrix_shape = (self.Nfreq, 4, 4)
-        for name in ("ZA", "Rsky_native", "Rmoon_native"):
+        for name in ("ZA", "Rsky_native", "Rmoon_native", "Rloss_native"):
             if getattr(self, name).shape != matrix_shape:
                 raise ValueError(f"{name} must have shape {matrix_shape}.")
         if not np.isclose(self.phi_deg[0], 0.0):
@@ -427,6 +448,7 @@ class InstrumentResponse:
             self.ZA,
             self.Rsky_native,
             self.Rmoon_native,
+            self.Rloss_native,
         )
         aux = (
             tuple(self.freq.tolist()),
@@ -463,7 +485,7 @@ class InstrumentResponse:
             content_hash,
             transform_memory_budget_bytes,
         ) = aux
-        H_theta, H_phi, ZA, Rsky, Rmoon = children
+        H_theta, H_phi, ZA, Rsky, Rmoon, Rloss = children
         obj = cls.__new__(cls)
         obj.filename = filename
         obj.freq = np.asarray(freq, dtype=np.float64)
@@ -474,6 +496,7 @@ class InstrumentResponse:
         obj.ZA = ZA
         obj.Rsky_native = Rsky
         obj.Rmoon_native = Rmoon
+        obj.Rloss_native = Rloss
         obj.validated = validated
         obj.id = id_value
         obj.frame = frame
@@ -630,7 +653,6 @@ class InstrumentResponse:
                         sampling="mwss",
                         convention="IAU",
                         units="m^2",
-                        frequency_units="MHz",
                         frame="topo",
                         tangent_basis=self.tangent_basis,
                         baseline_direction="a<=b",
@@ -698,11 +720,12 @@ class InstrumentResponse:
             self.pairs,
         )
         ZA = frequency_map.from_native(self.ZA)
+        Rloss = frequency_map.from_native(self.Rloss_native)
         dissipative = 0.5 * (
             ZA + jnp.swapaxes(ZA.conjugate(), -1, -2)
         )
-        Rmoon = dissipative - Rsky
-        return ZA, Rsky, Rmoon, frequency_map
+        Rmoon = dissipative - Rsky - Rloss
+        return ZA, Rsky, Rmoon, Rloss, frequency_map
 
     def rotate(self, degrees):
         """Rotate the complete instrument by an integer number of phi bins."""
@@ -734,6 +757,7 @@ class InstrumentResponse:
             ZA=result.ZA,
             Rsky=result.Rsky_native,
             Rmoon=result.Rmoon_native,
+            Rloss=result.Rloss_native,
             metadata=result.header,
         )
         return result
@@ -827,19 +851,34 @@ class InstrumentResponse:
         )
 
     def sky_coupling_check(self, tolerance=1e-10):
-        """Return eigenvalue diagnostics for native Moon resistance."""
-        hermitian_error = jnp.max(
+        """Return eigenvalue diagnostics for native Moon and metal loss."""
+        moon_hermitian_error = jnp.max(
             jnp.abs(
                 self.Rmoon_native
                 - jnp.swapaxes(self.Rmoon_native.conjugate(), -1, -2)
             ),
             axis=(-2, -1),
         )
-        eigenvalues = jnp.linalg.eigvalsh(self.Rmoon_native)
+        loss_hermitian_error = jnp.max(
+            jnp.abs(
+                self.Rloss_native
+                - jnp.swapaxes(self.Rloss_native.conjugate(), -1, -2)
+            ),
+            axis=(-2, -1),
+        )
+        moon_eigenvalues = jnp.linalg.eigvalsh(self.Rmoon_native)
+        loss_eigenvalues = jnp.linalg.eigvalsh(self.Rloss_native)
         return {
-            "hermitian_error": hermitian_error,
-            "eigenvalues": eigenvalues,
-            "physical": jnp.all(eigenvalues >= -tolerance),
+            "hermitian_error": moon_hermitian_error,
+            "eigenvalues": moon_eigenvalues,
+            "moon_hermitian_error": moon_hermitian_error,
+            "loss_hermitian_error": loss_hermitian_error,
+            "moon_eigenvalues": moon_eigenvalues,
+            "loss_eigenvalues": loss_eigenvalues,
+            "physical": jnp.logical_and(
+                jnp.all(moon_eigenvalues >= -tolerance),
+                jnp.all(loss_eigenvalues >= -tolerance),
+            ),
         }
 
 

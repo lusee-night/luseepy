@@ -12,6 +12,7 @@ import lusee
 from beam_conversion.common import (
     compute_sky_moon_resistance,
 )
+from lusee.Covariance import K_BOLTZMANN
 from lusee.Data import Data
 from lusee.FullStokesSimulator import (
     FullStokesCroSimulator,
@@ -64,8 +65,9 @@ def make_in_memory_response():
         (30.0 + 4.0j) * np.eye(4)[None],
         (2, 4, 4),
     ).copy()
+    Rloss = np.zeros_like(ZA)
     Rsky, Rmoon = compute_sky_moon_resistance(
-        freq, theta, phi, Htheta, Hphi, ZA
+        freq, theta, phi, Htheta, Hphi, ZA, Rloss
     )
     return InstrumentResponse.from_arrays(
         freq,
@@ -76,12 +78,15 @@ def make_in_memory_response():
         ZA,
         Rsky,
         Rmoon,
+        Rloss,
         metadata={
             "SOURCE": "analytic",
             "SOURCE_ROOT": "pytest",
             "INPUT_KIND": "bare",
             "FIELD_KIND": "effective-length",
             "AMP_CONV": "RMS",
+            "LOSSMODEL": "PEC",
+            "RLOSSSRC": "explicit-zero-test-fixture",
             "TIMECONV": "e+jwt",
             "ZA_SOURCE": "analytic",
             "GIT_SHA": "test",
@@ -97,6 +102,27 @@ def make_in_memory_response():
     )
 
 
+def make_lossy_in_memory_response():
+    base = make_in_memory_response()
+    Rloss = 0.25 * np.asarray(base.Rmoon_native)
+    Rmoon = np.asarray(base.Rmoon_native) - Rloss
+    metadata = dict(base.header)
+    metadata["LOSSMODEL"] = "lossy"
+    metadata["RLOSSSRC"] = "synthetic-pec-baseline"
+    return InstrumentResponse.from_arrays(
+        base.freq,
+        base.theta_deg,
+        base.phi_deg,
+        base.H_theta,
+        base.H_phi,
+        base.ZA,
+        base.Rsky_native,
+        Rmoon,
+        Rloss,
+        metadata=metadata,
+    )
+
+
 def make_topocentric_blackbody_sky(temperature):
     theta_count = 5
     phi_count = 8
@@ -106,7 +132,7 @@ def make_topocentric_blackbody_sky(temperature):
         data,
         [10.0, 20.0],
         sampling="mwss",
-        coord="mcmf",
+        coord="topo",
         frame="topo",
         convention="IAU",
     )
@@ -219,6 +245,82 @@ def test_cro_simulator_blackbody_off_grid_timestamps_and_boundaries(monkeypatch)
     assert labeled.frame == FRAME_TOPO
 
 
+def test_lossy_response_blackbody_closes_only_with_antenna_temperature():
+    times = Time(["2028-01-01T00:00:00"], scale="utc")
+    temperature = 237.0
+    simulator = FullStokesTopoJaxSimulator(
+        SyntheticObservation(times),
+        make_lossy_in_memory_response(),
+        make_topocentric_blackbody_sky(temperature),
+        IdealCapacitorReceiver(30.0),
+        T_moon=temperature,
+        T_ant=temperature,
+        freq=[10.0, 20.0],
+        lmax=2,
+    )
+    simulator.simulate(times)
+    expected = temperature * simulator.blackbody_normalization
+    np.testing.assert_allclose(
+        simulator.covariance[0],
+        expected,
+        rtol=2e-5,
+        atol=1e-25,
+    )
+    assert np.any(np.asarray(simulator.Rloss_target) != 0)
+
+
+def test_lossy_response_uses_distinct_temperatures_at_off_grid_frequency():
+    times = Time(["2028-01-01T00:00:00"], scale="utc")
+    response = make_lossy_in_memory_response()
+    T_moon = 241.0
+    T_ant = 173.0
+    simulator = FullStokesTopoJaxSimulator(
+        SyntheticObservation(times),
+        response,
+        make_topocentric_blackbody_sky(0.0),
+        IdealCapacitorReceiver(30.0),
+        T_moon=T_moon,
+        T_ant=T_ant,
+        freq=[15.0],
+        lmax=2,
+    )
+    simulator.simulate(times)
+    Rmoon = 0.5 * (
+        np.asarray(response.Rmoon_native[0])
+        + np.asarray(response.Rmoon_native[1])
+    )
+    Rloss = 0.5 * (
+        np.asarray(response.Rloss_native[0])
+        + np.asarray(response.Rloss_native[1])
+    )
+    open_covariance = 4 * K_BOLTZMANN * (
+        T_moon * Rmoon + T_ant * Rloss
+    )
+    M = np.asarray(simulator.M_target[0])
+    expected = M @ open_covariance @ M.conjugate().T
+    np.testing.assert_allclose(
+        simulator.covariance[0, 0],
+        expected,
+        rtol=2e-5,
+        atol=1e-25,
+    )
+
+
+def test_lossy_response_requires_explicit_antenna_temperature():
+    times = Time(["2028-01-01T00:00:00"], scale="utc")
+    simulator = FullStokesTopoJaxSimulator(
+        SyntheticObservation(times),
+        make_lossy_in_memory_response(),
+        make_topocentric_blackbody_sky(0.0),
+        IdealCapacitorReceiver(),
+        T_moon=250.0,
+        freq=[10.0],
+        lmax=2,
+    )
+    with pytest.raises(ValueError, match="requires an explicit T_ant"):
+        simulator.simulate(times)
+
+
 def test_topo_and_cro_independent_contractions_agree_for_topo_sky():
     times = Time(
         ["2028-01-01T00:00:00", "2028-01-01T00:03:00"],
@@ -312,6 +414,7 @@ def test_public_beam_and_simulator_facades_dispatch_v3(tmp_path):
         np.asarray(response.ZA),
         np.asarray(response.Rsky_native),
         np.asarray(response.Rmoon_native),
+        np.asarray(response.Rloss_native),
         metadata=response.header,
     )
     filename = tmp_path / "public_response.fits"
@@ -334,7 +437,7 @@ def test_public_beam_and_simulator_facades_dispatch_v3(tmp_path):
 def test_mapmaker_builds_response_v3_instrument(tmp_path):
     from beam_conversion.common import ResponseArrays, write_response_fits
 
-    response = make_in_memory_response()
+    response = make_lossy_in_memory_response()
     filename = tmp_path / "mapmaker_response.fits"
     write_response_fits(
         filename,
@@ -347,6 +450,7 @@ def test_mapmaker_builds_response_v3_instrument(tmp_path):
             np.asarray(response.ZA),
             np.asarray(response.Rsky_native),
             np.asarray(response.Rmoon_native),
+            np.asarray(response.Rloss_native),
             metadata=response.header,
         ),
     )
@@ -361,6 +465,7 @@ def test_mapmaker_builds_response_v3_instrument(tmp_path):
     assert isinstance(simulator, FullStokesCroSimulator)
     assert isinstance(loaded, InstrumentResponse)
     assert np.array_equal(simulator.freq, [17.5, 10.0, 17.5])
+    assert simulator.T_ant == 0.0
     assert simulator.obs is observation
     target = np.asarray([17.5, 10.0, 17.5])
     sky_template = lusee.sky.HealpixSky(
@@ -422,6 +527,9 @@ def test_covariance_fits_data_round_trip_preserves_exact_time_and_units(
     assert header["RECCHANS"] == "0,1,2,3"
     assert header["SKYMODEL"] == "PolarizedSky"
     assert header["SKYFRAME"] == "topo"
+    assert header["LOSSMODEL"] == "PEC"
+    assert header["RLOSSSRC"] == "explicit-zero-test-fixture"
+    assert "TANT_K" not in header
     assert header["LUSEEVER"] != ""
     assert header["CROVER"] != ""
     assert header["S2FFTVER"] != ""
@@ -436,6 +544,13 @@ def test_covariance_fits_data_round_trip_preserves_exact_time_and_units(
     assert data.receiver_params["C_pf"] == [30.0, 30.0, 30.0, 30.0]
     assert data.sky_provenance["frame"] == "topo"
     assert data.software_versions["croissant"]
+    assert data.T_moon == temperature
+    assert data.T_ant is None
+    assert data.response_provenance["loss_model"] == "PEC"
+    assert data.response_provenance["loss_source"] == (
+        "explicit-zero-test-fixture"
+    )
+    assert np.all(data.Rloss == 0.0)
     assert np.array_equal(data.times.utc.mjd, times.utc.mjd)
     assert np.array_equal(data.times.jd1, times.jd1)
     assert np.array_equal(data.times.jd2, times.jd2)
@@ -539,6 +654,43 @@ def test_calibrator_pair_kernel_matches_direct_loaded_response_for_iquv():
         )
 
 
+def test_lossy_calibrator_uses_distinct_moon_and_antenna_temperatures():
+    response = make_lossy_in_memory_response()
+    T_moon = 233.0
+    T_ant = 181.0
+    simulator = FullStokesCalibratorSimulator(
+        response,
+        IdealCapacitorReceiver(),
+        freq=[15.0],
+    )
+    simulator.simulate(
+        np.radians(30.0),
+        np.radians(22.5),
+        np.zeros(4),
+        T_moon=T_moon,
+        T_ant=T_ant,
+    )
+    Rmoon = 0.5 * (
+        np.asarray(response.Rmoon_native[0])
+        + np.asarray(response.Rmoon_native[1])
+    )
+    Rloss = 0.5 * (
+        np.asarray(response.Rloss_native[0])
+        + np.asarray(response.Rloss_native[1])
+    )
+    open_covariance = 4 * K_BOLTZMANN * (
+        T_moon * Rmoon + T_ant * Rloss
+    )
+    M = np.asarray(simulator.M[0])
+    expected = M @ open_covariance @ M.conjugate().T
+    np.testing.assert_allclose(
+        simulator.covariance[0, 0],
+        expected,
+        rtol=2e-5,
+        atol=1e-25,
+    )
+
+
 def test_gradients_flow_through_off_grid_sky_and_response_overrides(
     monkeypatch,
 ):
@@ -594,6 +746,7 @@ def test_gradients_flow_through_off_grid_sky_and_response_overrides(
             base_response.ZA,
             base_response.Rsky_native,
             base_response.Rmoon_native,
+            base_response.Rloss_native,
             validated=False,
             metadata=base_response.header,
         )
@@ -626,6 +779,7 @@ def test_gradients_flow_through_off_grid_sky_and_response_overrides(
             base_response.ZA + scale * diagonal,
             base_response.Rsky_native,
             base_response.Rmoon_native,
+            base_response.Rloss_native,
             validated=False,
             metadata=base_response.header,
         )

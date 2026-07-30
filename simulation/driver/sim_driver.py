@@ -284,6 +284,7 @@ class SimDriver:
                 self.sky,
                 self.receiver,
                 T_moon=od.get("T_moon", 250.0),
+                T_ant=od.get("T_ant"),
                 products=products,
                 freq=self.freq,
                 lmax=self.lmax,

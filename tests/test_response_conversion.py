@@ -153,6 +153,7 @@ def test_response_loader_rejects_contradictory_machine_unit(tmp_path):
         np.asarray(synthetic.ZA),
         np.asarray(synthetic.Rsky_native),
         np.asarray(synthetic.Rmoon_native),
+        np.asarray(synthetic.Rloss_native),
         metadata=synthetic.header,
     )
     filename = tmp_path / "bad_unit.fits"

@@ -21,6 +21,8 @@ RESPONSE_HASH_METADATA_KEYS = (
     "INPUT_KIND",
     "FIELD_KIND",
     "AMP_CONV",
+    "LOSSMODEL",
+    "RLOSSSRC",
     "TIMECONV",
     "ZA_SOURCE",
     "GIT_SHA",
@@ -117,12 +119,16 @@ def compute_sky_moon_resistance(
     H_theta,
     H_phi,
     ZA,
+    Rloss=None,
 ):
     """Derive native sky and Moon resistances with the simulator's SHT.
 
     The l=0 coefficient is formed by the same Croissant MWSS operator used
     later by :class:`lusee.InstrumentResponse`. This avoids assigning a
     validated resistance with one quadrature and simulating with another.
+
+    ``Rloss`` is the antenna-metal loss matrix. Passing ``None`` is
+    equivalent to an explicit zero matrix for analytic PEC calculations.
     """
     import croissant as cro
 
@@ -145,10 +151,20 @@ def compute_sky_moon_resistance(
         raise ValueError(
             f"ZA must have shape {(freq.size, 4, 4)}; got {ZA.shape}."
         )
+    if Rloss is None:
+        Rloss = np.zeros_like(ZA)
+    else:
+        Rloss = np.asarray(Rloss)
+    if Rloss.shape != ZA.shape:
+        raise ValueError(
+            f"Rloss must have shape {ZA.shape}; got {Rloss.shape}."
+        )
     if not np.all(np.isfinite(H_theta)) or not np.all(np.isfinite(H_phi)):
         raise ValueError("Response fields contain non-finite values.")
     if not np.all(np.isfinite(ZA)):
         raise ValueError("ZA contains non-finite values.")
+    if not np.all(np.isfinite(Rloss)):
+        raise ValueError("Rloss contains non-finite values.")
 
     unique_phi = phi.size - 1
     full_theta = 2 * (theta.size - 1) + 1
@@ -234,7 +250,6 @@ def compute_sky_moon_resistance(
                 sampling="mwss",
                 convention="IAU",
                 units="m^2",
-                frequency_units="MHz",
                 frame="topo",
                 tangent_basis="theta-phi",
                 baseline_direction="a<=b",
@@ -256,7 +271,7 @@ def compute_sky_moon_resistance(
                     pair_rsky[pair_position].conjugate()
                 )
     dissipative = 0.5 * (ZA + np.swapaxes(ZA.conjugate(), -1, -2))
-    Rmoon = dissipative - Rsky
+    Rmoon = dissipative - Rsky - Rloss
     return Rsky, Rmoon
 
 
@@ -273,18 +288,31 @@ def validate_response_matrices(
     ZA,
     Rsky,
     Rmoon,
+    Rloss,
     *,
     field_rsky=None,
+    loss_model=None,
 ):
     """Validate physical matrices and optionally bind them to the fields."""
     ZA = np.asarray(ZA)
     Rsky = np.asarray(Rsky)
     Rmoon = np.asarray(Rmoon)
-    for name, value in (("ZA", ZA), ("Rsky", Rsky), ("Rmoon", Rmoon)):
+    Rloss = np.asarray(Rloss)
+    matrices = (
+        ("ZA", ZA),
+        ("Rsky", Rsky),
+        ("Rmoon", Rmoon),
+        ("Rloss", Rloss),
+    )
+    for name, value in matrices:
         if not np.all(np.isfinite(value)):
             raise ValueError(f"{name} contains non-finite values.")
-    rtol, atol = _validation_tolerances(ZA, Rsky, Rmoon)
-    for name, value in (("Rsky", Rsky), ("Rmoon", Rmoon)):
+    rtol, atol = _validation_tolerances(ZA, Rsky, Rmoon, Rloss)
+    for name, value in (
+        ("Rsky", Rsky),
+        ("Rmoon", Rmoon),
+        ("Rloss", Rloss),
+    ):
         if not np.allclose(
             value,
             np.swapaxes(value.conjugate(), -1, -2),
@@ -294,20 +322,32 @@ def validate_response_matrices(
             raise ValueError(f"{name} must be Hermitian.")
     dissipative = 0.5 * (ZA + np.swapaxes(ZA.conjugate(), -1, -2))
     if not np.allclose(
-        Rsky + Rmoon,
+        Rsky + Rmoon + Rloss,
         dissipative,
         rtol=rtol,
         atol=atol,
     ):
         raise ValueError(
-            "Rsky + Rmoon does not equal the dissipative part of ZA."
+            "Rsky + Rmoon + Rloss does not equal the dissipative part of ZA."
         )
-    scale = max(1.0, float(np.max(np.abs(Rmoon))))
-    minimum = float(np.min(np.linalg.eigvalsh(Rmoon)))
-    if minimum < -max(1e-8, 10 * atol) * scale:
+    for name, value in (("Rmoon", Rmoon), ("Rloss", Rloss)):
+        scale = max(1.0, float(np.max(np.abs(value))))
+        minimum = float(np.min(np.linalg.eigvalsh(value)))
+        if minimum < -max(1e-8, 10 * atol) * scale:
+            raise ValueError(
+                f"{name} has a negative eigenvalue "
+                f"({minimum:.6g} Ohm); response is not physically validated."
+            )
+    if str(loss_model).strip().lower() == "pec" and not np.allclose(
+        Rloss,
+        0.0,
+        rtol=0.0,
+        atol=atol,
+    ):
+        maximum = float(np.max(np.abs(Rloss)))
         raise ValueError(
-            "Rmoon has a negative eigenvalue "
-            f"({minimum:.6g} Ohm); response is not physically validated."
+            "LOSSMODEL='PEC' requires Rloss=0; "
+            f"maximum magnitude is {maximum:.6g} Ohm."
         )
     if field_rsky is not None:
         field_rsky = np.asarray(field_rsky)
@@ -351,6 +391,7 @@ def response_payload_hash(
     ZA,
     Rsky,
     Rmoon,
+    Rloss,
     metadata,
     Vsource=None,
     Zref=None,
@@ -372,6 +413,7 @@ def response_payload_hash(
         ZA = persisted_complex(ZA)
         Rsky = persisted_complex(Rsky)
         Rmoon = persisted_complex(Rmoon)
+        Rloss = persisted_complex(Rloss)
         if Vsource is not None:
             Vsource = persisted_complex(Vsource)
         if Zref is not None:
@@ -387,6 +429,7 @@ def response_payload_hash(
         ("ZA", ZA),
         ("Rsky", Rsky),
         ("Rmoon", Rmoon),
+        ("Rloss", Rloss),
         ("Vsource", Vsource),
         ("Zref", Zref),
     ):

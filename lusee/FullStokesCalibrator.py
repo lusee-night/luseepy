@@ -50,6 +50,7 @@ class FullStokesCalibratorSimulator:
         stokes_K_sr,
         *,
         T_moon=0.0,
+        T_ant=None,
     ):
         """Simulate one source direction using the shared interpolated W kernel."""
         pair_kernel = self.beam.pair_stokes_at(
@@ -69,11 +70,25 @@ class FullStokesCalibratorSimulator:
             pair_kernel,
             stokes,
         )[None]
-        ZA, _, Rmoon, _ = self.beam.target_matrices(self.freq)
+        ZA, _, Rmoon, Rloss, _ = self.beam.target_matrices(self.freq)
+        if T_ant is None:
+            loss_model = str(
+                self.beam.header.get("LOSSMODEL", "")
+            ).strip().lower()
+            if loss_model == "pec" or np.all(
+                np.asarray(self.beam.Rloss_native) == 0
+            ):
+                T_ant = 0.0
+            else:
+                raise ValueError(
+                    "A lossy four-port response requires an explicit T_ant."
+                )
         open_covariance = assemble_open_covariance(
             pair_integrals,
             Rmoon,
-            T_moon,
+            Rloss,
+            T_moon=T_moon,
+            T_ant=T_ant,
         )
         ZL = self.receiver.Z(self.freq)
         covariance, M = load_covariance(open_covariance, ZA, ZL)
@@ -82,6 +97,10 @@ class FullStokesCalibratorSimulator:
         self.covariance = covariance
         self.product_labels = labels
         self.M = M
+        self.Rmoon = Rmoon
+        self.Rloss = Rloss
+        self.T_moon = T_moon
+        self.T_ant = T_ant
         return packed
 
     def direct_native_covariance(

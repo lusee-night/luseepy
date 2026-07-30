@@ -20,6 +20,7 @@ observation:
   height_m: 0
   lmax: 128
   T_moon: 250.0
+  T_ant: 250.0
   products: all
   freq:
     values: [12.5, 17.3, 12.5, 25.0]
