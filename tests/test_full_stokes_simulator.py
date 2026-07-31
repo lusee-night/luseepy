@@ -170,6 +170,19 @@ def make_galactic_anisotropic_sky():
     )
 
 
+def make_mepa_anisotropic_sky():
+    source = make_galactic_anisotropic_sky()
+    return cro.PolarizedSky(
+        source.data,
+        source.freqs,
+        sampling=source.sampling,
+        coord="mepa",
+        frame="mepa",
+        convention=source.convention,
+        niter=source._niter,
+    )
+
+
 @pytest.mark.parametrize(
     ("attribute", "value", "message"),
     (
@@ -179,7 +192,7 @@ def make_galactic_anisotropic_sky():
         ("stokes", ("I", "Q", "V", "U"), "Stokes order"),
         ("tangent_basis", "north-east", "Unsupported tangent basis"),
         ("frame", "mystery", "Unsupported sky frame"),
-        ("coord", "galactic", "coord and frame disagree"),
+        ("coord", "galactic", "contradictory coordinate metadata"),
     ),
 )
 def test_polarized_provider_metadata_is_validated(
@@ -203,6 +216,51 @@ def test_polarized_provider_metadata_is_validated(
     setattr(provider, attribute, value)
     with pytest.raises(ValueError, match=message):
         prepare_polarized_sky_alms(provider, [10.0], 2)
+
+
+def test_mcmf_sky_is_rejected_without_epoch_dependent_transport():
+    class McmfProvider:
+        units = "K"
+        frequency_units = "MHz"
+        convention = "IAU"
+        stokes = ("I", "Q", "U", "V")
+        tangent_basis = "theta-phi"
+        frame = "MCMF"
+
+        def polarized_alm_at_freq(self, target, lmax):
+            return jnp.zeros((len(target), 4, lmax + 1, 2 * lmax + 1))
+
+    with pytest.raises(ValueError, match="MCMF is body-fixed"):
+        prepare_polarized_sky_alms(McmfProvider(), [10.0], 2)
+
+
+def test_simulator_rejects_mcmf_before_response_preparation(monkeypatch):
+    times = Time(["2028-01-01T00:00:00"], scale="utc")
+    sky = lusee.sky.ConstSky(
+        Nside=2,
+        lmax=2,
+        T=100.0,
+        freq=[10.0, 20.0],
+    )
+    simulator = FullStokesCroSimulator(
+        SyntheticObservation(times),
+        make_in_memory_response(),
+        sky,
+        IdealCapacitorReceiver(),
+        freq=[10.0],
+        lmax=2,
+    )
+
+    def unexpected_preparation(*args, **kwargs):
+        raise AssertionError("response preparation ran before frame validation")
+
+    monkeypatch.setattr(
+        simulator,
+        "prepare_pair_alms",
+        unexpected_preparation,
+    )
+    with pytest.raises(ValueError, match="MCMF is body-fixed"):
+        simulator.simulate(times)
 
 
 def test_cro_simulator_blackbody_off_grid_timestamps_and_boundaries(monkeypatch):
@@ -380,6 +438,147 @@ def test_topo_and_cro_agree_for_celestial_sky_away_from_lunar_pole():
     topo_result = FullStokesTopoJaxSimulator(
         observation, beam, sky, receiver, **kwargs
     ).simulate(times)
+    np.testing.assert_allclose(
+        cro_result,
+        topo_result,
+        rtol=2e-4,
+        atol=1e-24,
+    )
+
+
+def test_cro_and_topo_agree_for_isolated_v_over_lunar_cycle():
+    times = Time(
+        [
+            "2028-01-01T00:00:00",
+            "2028-01-08T00:00:00",
+            "2028-01-15T00:00:00",
+            "2028-01-22T00:00:00",
+            "2028-01-29T00:00:00",
+        ],
+        scale="utc",
+    )
+    observation = lusee.Observation(
+        "2028-01-01 00:00:00 to 2028-01-29 00:01:00",
+        lun_lat_deg=-23.814,
+        lun_long_deg=182.258,
+        deltaT_sec=7 * 86400.0,
+    )
+    source = make_galactic_anisotropic_sky()
+    stokes_v = jnp.zeros_like(source.data).at[:, 3].set(source.data[:, 3])
+    sky = cro.PolarizedSky(
+        stokes_v,
+        source.freqs,
+        sampling=source.sampling,
+        coord="galactic",
+        frame="galactic",
+    )
+    kwargs = {
+        "T_moon": 0.0,
+        "freq": [12.5],
+        "lmax": 2,
+    }
+    cro_result = FullStokesCroSimulator(
+        observation,
+        make_in_memory_response(),
+        sky,
+        IdealCapacitorReceiver(),
+        **kwargs,
+    ).simulate(times)
+    topo_result = FullStokesTopoJaxSimulator(
+        observation,
+        make_in_memory_response(),
+        sky,
+        IdealCapacitorReceiver(),
+        **kwargs,
+    ).simulate(times)
+    np.testing.assert_allclose(
+        cro_result,
+        topo_result,
+        rtol=1e-4,
+        atol=1e-28,
+    )
+
+
+def test_native_mepa_uses_reference_epoch_and_skips_identity_rotation(
+    monkeypatch,
+    tmp_path,
+):
+    times = Time(
+        ["2028-01-01T00:00:00", "2028-01-01T03:00:00"],
+        scale="utc",
+    )
+    observation = lusee.Observation(
+        "2028-01-01 00:00:00 to 2028-01-01 03:01:00",
+        lun_lat_deg=-23.814,
+        lun_long_deg=182.258,
+        deltaT_sec=3 * 3600.0,
+    )
+    real_generate = cro.rotations.generate_euler_dl
+    rotations = []
+
+    def record_generate(lmax, from_frame, to_frame, et=None):
+        source = getattr(from_frame, "name", from_frame)
+        target = getattr(to_frame, "name", to_frame)
+        rotations.append((str(source).lower(), str(target).lower(), et))
+        return real_generate(
+            lmax,
+            from_frame,
+            to_frame,
+            et=et,
+        )
+
+    monkeypatch.setattr(
+        cro.rotations,
+        "generate_euler_dl",
+        record_generate,
+    )
+    sky = make_mepa_anisotropic_sky()
+    kwargs = {
+        "T_moon": 0.0,
+        "freq": [12.5],
+        "lmax": 2,
+    }
+    cro_simulator = FullStokesCroSimulator(
+        observation,
+        make_in_memory_response(),
+        sky,
+        IdealCapacitorReceiver(),
+        **kwargs,
+    )
+    cro_result = cro_simulator.simulate(times)
+    assert not any(
+        source == "mepa" and target == "mepa"
+        for source, target, _ in rotations
+    )
+    expected_jd = float(times[0].tdb.jd)
+    filename = tmp_path / "native_mepa.fits"
+    cro_simulator.write_fits(filename)
+    with fitsio.FITS(filename) as fits:
+        header = fits["data"].read_header()
+    assert header["SKYFRAME"] == "mepa"
+    assert header["SKYREFJD"] == pytest.approx(expected_jd)
+    assert header["SKYREFSY"] == "TDB"
+    stored = Data(filename)
+    assert stored.sky_provenance["frame"] == "mepa"
+    assert stored.sky_provenance["reference_jd"] == pytest.approx(expected_jd)
+    assert stored.sky_provenance["reference_time_scale"] == "TDB"
+
+    rotations.clear()
+    topo_result = FullStokesTopoJaxSimulator(
+        observation,
+        make_in_memory_response(),
+        sky,
+        IdealCapacitorReceiver(),
+        **kwargs,
+    ).simulate(times)
+    expected_et = cro.rotations.jd_to_et(expected_jd)
+    mepa_rotations = [
+        et
+        for source, target, et in rotations
+        if source == "mepa" and target == "lunartopo"
+    ]
+    assert len(mepa_rotations) == len(times)
+    assert all(et == pytest.approx(expected_et) for et in mepa_rotations)
     np.testing.assert_allclose(
         cro_result,
         topo_result,

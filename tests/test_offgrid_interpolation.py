@@ -89,7 +89,7 @@ def test_mapmaker_build_instrument_forwards_frequency_policy(monkeypatch):
     class DummyBeam:
         freq = np.asarray([25.0, 26.0])
 
-        def __init__(self, beam_file, id):
+        def __init__(self, beam_file, id=None):
             self.id = id
 
         def rotate(self, angle):

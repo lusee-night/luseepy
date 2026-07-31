@@ -62,6 +62,31 @@ def test_driver_parses_response_receiver_and_value_frequencies(tmp_path):
     assert np.array_equal(driver.freq, [17.5, 10.0, 17.5])
     assert driver.response.nports == 4
     assert driver.receiver.Z(driver.freq).shape == (3, 4, 4)
+    assert driver.sky.frame == "galactic"
+    assert driver.sky.mapalm[0] == np.sqrt(4.0 * np.pi)
+    assert np.count_nonzero(driver.sky.mapalm[1:]) == 0
+    simulator = driver.run()
+    assert simulator.result.shape == (len(simulator.obs.times), 16, 3)
+    assert (tmp_path / "result.fits").exists()
+
+    cane_config = copy.deepcopy(config)
+    cane_config["sky"] = {"type": "Cane1979"}
+    cane_config["simulation"]["output"] = "cane_result.fits"
+    cane_driver = SimDriver(cane_config)
+    assert cane_driver.sky.frame == "galactic"
+    cane_simulator = cane_driver.run()
+    assert cane_simulator.result.shape == (
+        len(cane_simulator.obs.times),
+        16,
+        3,
+    )
+    assert (tmp_path / "cane_result.fits").exists()
+
+    dark_config = copy.deepcopy(config)
+    dark_config["sky"] = {"type": "DarkAges", "scaled": False}
+    dark_driver = SimDriver(dark_config)
+    assert dark_driver.sky.frame == "galactic"
+    assert dark_driver.sky._scaled is False
 
     default_config = copy.deepcopy(config)
     default_config["observation"].pop("freq")

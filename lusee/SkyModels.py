@@ -22,26 +22,40 @@ class ConstSky:
     :type T: int, float, or list
     :param freq: List of frequencies at which to make sky maps
     :type freq: list
-    :param zero_cone: Explicitly zero pixels below horizon
+    :param zero_cone: Apply the legacy hard-coded lower-sky cone mask
     :type zero_cone: bool
+    :param frame: Coordinate frame assigned to the harmonic map
+    :type frame: str
     """
-    def __init__ (self,Nside, lmax, T, freq=None, zero_cone = True):
+    def __init__(
+        self,
+        Nside,
+        lmax,
+        T,
+        freq=None,
+        zero_cone=True,
+        frame="MCMF",
+    ):
         self.Nside = Nside
         self.Npix = Nside**2 * 12
-        Tmap = jnp.ones(self.Npix)
         if type(T) == int:
             T = float(T)
         if type(T) == list:
             T = jnp.array(T)
         self._T = T
-        theta,phi = hp.pix2ang(self.Nside,np.arange(self.Npix))
-        theta = jnp.asarray(theta)
         if zero_cone:
-            # this is strictly speaking not needed, but we want to make sure
-            # sky below horizon is ignored
+            Tmap = jnp.ones(self.Npix)
+            theta = jnp.asarray(
+                hp.pix2ang(self.Nside, np.arange(self.Npix))[0]
+            )
+            # Preserve the legacy 45-degree cone mask about the map's -z axis
             Tmap = jnp.where(theta>0.75*jnp.pi, 0.0, Tmap)
-        self.mapalm = jnp.asarray(hp.map2alm(np.asarray(Tmap), lmax=lmax))
-        self.frame = "MCMF"
+            mapalm = hp.map2alm(np.asarray(Tmap), lmax=lmax)
+        else:
+            mapalm = np.zeros(hp.Alm.getsize(lmax), dtype=np.complex128)
+            mapalm[0] = np.sqrt(4.0 * np.pi)
+        self.mapalm = jnp.asarray(mapalm)
+        self.frame = frame
         self.freq = None if freq is None else np.asarray(freq, dtype=np.float64)
 
     def tree_flatten(self):
@@ -106,11 +120,30 @@ class ConstSkyCane1979(ConstSky):
     :type lmax: int
     :param freq: List of frequencies at which to make sky maps. If freq=None, defaults to 1-50 MHz with 1 MHz spacing.
     :type freq: list
+    :param zero_cone: Apply the legacy hard-coded lower-sky cone mask
+    :type zero_cone: bool
+    :param frame: Coordinate frame assigned to the harmonic map
+    :type frame: str
     """
-    def __init__(self, Nside, lmax, freq=None):
+    def __init__(
+        self,
+        Nside,
+        lmax,
+        freq=None,
+        zero_cone=True,
+        frame="MCMF",
+    ):
         self.freq = ALL_FREQUENCIES_MHZ_NP if freq is None else np.asarray(freq, dtype=np.float64)
         T = T_C(self.freq).value
-        ConstSky.__init__(self, Nside, lmax, T, self.freq)
+        ConstSky.__init__(
+            self,
+            Nside,
+            lmax,
+            T,
+            self.freq,
+            zero_cone=zero_cone,
+            frame=frame,
+        )
 
     def get_alm_at_freq(self, target_freqs):
         """Evaluate alm at arbitrary target frequencies in MHz.
@@ -141,9 +174,23 @@ class DarkAgesMonopole(ConstSky):
     :type A: float
     :param freq: List of frequencies at which to make sky maps.
     :type freq: list
+    :param zero_cone: Apply the legacy hard-coded lower-sky cone mask
+    :type zero_cone: bool
+    :param frame: Coordinate frame assigned to the harmonic map
+    :type frame: str
     """
-    def __init__(self, Nside, lmax, scaled = True, nu_min = 16.4,
-                     nu_rms = 14.0, A = 0.04, freq=None):
+    def __init__(
+        self,
+        Nside,
+        lmax,
+        scaled=True,
+        nu_min=16.4,
+        nu_rms=14.0,
+        A=0.04,
+        freq=None,
+        zero_cone=True,
+        frame="MCMF",
+    ):
         self.freq = ALL_FREQUENCIES_MHZ_NP if freq is None else np.asarray(freq, dtype=np.float64)
         self._scaled = scaled
         self._nu_min = nu_min
@@ -153,7 +200,15 @@ class DarkAgesMonopole(ConstSky):
             T = T_DarkAges_Scaled(self.freq, nu_min, nu_rms, A)
         else:
             T = T_DarkAges(self.freq)
-        ConstSky.__init__(self, Nside, lmax, T, self.freq)
+        ConstSky.__init__(
+            self,
+            Nside,
+            lmax,
+            T,
+            self.freq,
+            zero_cone=zero_cone,
+            frame=frame,
+        )
 
     def get_alm_at_freq(self, target_freqs):
         """Evaluate alm at arbitrary target frequencies in MHz.

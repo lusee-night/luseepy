@@ -108,6 +108,8 @@ class Data(Observation):
             "RECSRC",
             "SKYMODEL",
             "SKYFRAME",
+            "SKYREFJD",
+            "SKYREFSY",
             "SKYSRC",
             "LUSEEVER",
             "CROVER",
@@ -143,6 +145,8 @@ class Data(Observation):
         self.sky_provenance = {
             "model": header.get("SKYMODEL"),
             "frame": header.get("SKYFRAME"),
+            "reference_jd": header.get("SKYREFJD"),
+            "reference_time_scale": header.get("SKYREFSY"),
             "source": header.get("SKYSRC"),
         }
         self.software_versions = {

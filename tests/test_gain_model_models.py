@@ -160,4 +160,3 @@ def test_set_models_is_atomic_and_returned_dicts_are_not_live_state():
     with pytest.raises(ValueError):
         gm.set_models(pc1="not-a-model", pc2="quadratic")
     assert gm.get_models() == {"pc1": "quadratic", "pc2": "linear"}
-

@@ -34,9 +34,9 @@ class SimDriver:
         # and needs nothing.
         if self.engine in (SimEngine.CRO, SimEngine.TOPO):
             jax.config.update("jax_enable_x64", True)
+        self.new_response_schema = "response" in self.cfg
         self._parse_base()
         self._parse_sky()
-        self.new_response_schema = "response" in self.cfg
         if self.new_response_schema:
             self._parse_response()
         else:
@@ -99,16 +99,32 @@ class SimDriver:
     def _parse_sky(self):
         lusee = self._lusee
         sky_type = self.cfg["sky"].get("type", "file")
+        monopole_options = (
+            {"zero_cone": False, "frame": "galactic"}
+            if self.new_response_schema
+            else {}
+        )
         if sky_type == "file":
             fname = os.path.join(self.root, self.cfg["paths"]["sky_dir"], self.cfg["sky"]["file"])
             print("Loading sky: ", fname)
             self.sky = lusee.sky.FitsSky(fname, lmax=self.lmax)
         elif sky_type == "CMB":
             print("Using CMB sky")
-            self.sky = lusee.sky.ConstSky(self.lmax, lmax=self.lmax, T=2.73, freq=self.freq)
+            self.sky = lusee.sky.ConstSky(
+                self.lmax,
+                lmax=self.lmax,
+                T=2.73,
+                freq=None if self.new_response_schema else self.freq,
+                **monopole_options,
+            )
         elif sky_type == "Cane1979":
             print("Using Cane1979 sky")
-            self.sky = lusee.sky.ConstSkyCane1979(self.lmax, lmax=self.lmax, freq=self.freq)
+            self.sky = lusee.sky.ConstSkyCane1979(
+                self.lmax,
+                lmax=self.lmax,
+                freq=self.freq,
+                **monopole_options,
+            )
         elif sky_type == "DarkAges":
             d = self.cfg["sky"]
             scaled = d.get("scaled", True)
@@ -122,10 +138,12 @@ class SimDriver:
             self.sky = lusee.sky.DarkAgesMonopole(
                 self.lmax,
                 lmax=self.lmax,
+                scaled=scaled,
                 freq=self.freq,
                 nu_min=nu_min,
                 nu_rms=nu_rms,
                 A=A,
+                **monopole_options,
             )
         else:
             raise ValueError(f"Unknown sky.type={sky_type!r}")

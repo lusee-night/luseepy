@@ -26,7 +26,27 @@ this is a roll by negative phi bins; in harmonic space it is the equivalent
 Polarized sky providers must use consistent `coord` and `frame` metadata.
 Equivalent aliases such as `equatorial` and `fk5` are accepted after
 canonicalization, but contradictory physical frames are rejected before any
-harmonic contraction.
+harmonic contraction. MCMF is body-fixed and is not accepted as an alias for
+MEPA; it requires an epoch-dependent transport. A native MEPA sky is
+understood in the MEPA frame frozen at the simulation's first timestamp,
+while a native topocentric sky stays fixed in the instrument frame.
+Croissant's sky object does not carry the MEPA epoch itself, so this is an
+explicit caller contract; covariance FITS provenance records that reference
+as `SKYREFJD`/`SKYREFSY`.
+
+The Croissant engine rotates the topocentric response and celestial sky into
+that frozen MEPA frame once, then advances the contraction with
+`exp(-i m phi(t))` phases about the MEPA z axis. This is the intended fast
+lunar-rotation approximation. It neglects small nonuniform-rotation and
+non-z-axis libration/nutation corrections; the independent topocentric
+engine remains available for direct per-timestamp rotations and comparison.
+
+The four-port driver constructs its analytic CMB, Cane1979, and Dark Ages
+monopoles as full-sky Galactic maps. It does not reuse the legacy monopole
+fixture's MCMF label or hard-coded lower-sky cone mask; the four-port
+response already applies its own horizon. Full-sky monopoles use an exact
+`l=0` coefficient rather than a pixelized map transform. Legacy simulator
+defaults are unchanged.
 
 Pair response maps are formed for the ten unique port pairs:
 
@@ -42,6 +62,10 @@ Croissant transforms only the unique native bracket endpoints required by a
 `eta0/lambda^2` and linearly interpolates those physical response
 coefficients. Irregular, unsorted, duplicate in-range target arrays are
 preserved exactly; extrapolation is rejected.
+The four-port response, polarized-sky, and measured-receiver paths select
+the `linear` frequency policy explicitly. This preserves their intentional
+interpolation while the legacy simulator API retains its safer `exact`
+default.
 
 Response transforms are chunked over native frequency and pair axes under a
 512 MiB default workspace budget. Set

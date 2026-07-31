@@ -770,7 +770,11 @@ class InstrumentResponse:
 
     def pair_stokes_alms(self, lmax, target_freqs):
         """Return target-aligned physical W alms and their FrequencyMap."""
-        frequency_map = FrequencyMap.build(target_freqs, self.freq)
+        frequency_map = FrequencyMap.build(
+            target_freqs,
+            self.freq,
+            policy="linear",
+        )
         native = self.pair_stokes_alms_native(
             lmax,
             frequency_map.source_indices,
@@ -876,7 +880,11 @@ class InstrumentResponse:
         freq_mhz,
     ):
         """Bilinearly sample the loaded voltage response for diagnostics."""
-        frequency_map = FrequencyMap.build(freq_mhz, self.freq)
+        frequency_map = FrequencyMap.build(
+            freq_mhz,
+            self.freq,
+            policy="linear",
+        )
         Ht = frequency_map.from_native(jnp.swapaxes(self.H_theta, 0, 1))
         Hp = frequency_map.from_native(jnp.swapaxes(self.H_phi, 0, 1))
         ZA = frequency_map.from_native(self.ZA)
@@ -919,7 +927,11 @@ class InstrumentResponse:
         target_freqs,
     ):
         """Sample the frequency-interpolated physical W pair kernel."""
-        frequency_map = FrequencyMap.build(target_freqs, self.freq)
+        frequency_map = FrequencyMap.build(
+            target_freqs,
+            self.freq,
+            policy="linear",
+        )
         native = self.all_pair_stokes_maps()
         wavelength = c / (self.freq * 1e6)
         scaled = native * jnp.asarray(

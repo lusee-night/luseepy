@@ -158,7 +158,11 @@ class MeasuredReceiver:
 
     def Z(self, freq_mhz):
         """Interpolate the measured matrix without extrapolation."""
-        frequency_map = FrequencyMap.build(freq_mhz, self.freq)
+        frequency_map = FrequencyMap.build(
+            freq_mhz,
+            self.freq,
+            policy="linear",
+        )
         return frequency_map.from_native(self.impedance)
 
     @property

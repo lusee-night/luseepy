@@ -112,32 +112,74 @@ def main():
         print(json.dumps(report, indent=2, sort_keys=True))
         return
 
+    from astropy.time import Time
+    from lunarsky import LunarTopo, MoonLocation
+
+    from lusee.spice_utils import ensure_lunarsky_moon_frame
+
+    ensure_lunarsky_moon_frame()
+    reference_time = Time("2028-01-01T00:00:00", scale="utc")
+    location = MoonLocation(lon=182.258, lat=-23.814)
+    reference_et = cro.rotations.jd_to_et(reference_time.tdb.jd)
+    topo = LunarTopo(obstime=reference_time, location=location)
+    response_rotation, response_dl = cro.rotations.generate_euler_dl(
+        lmax,
+        topo,
+        "mepa",
+        et=reference_et,
+    )
+    pair_alms_mepa, response_transform = timed(
+        lambda: cro.rotations.rotate_alm(
+            pair_alms,
+            response_rotation,
+            dl_array=response_dl,
+        )
+    )
+
     shape = response._full_sphere_maps(
         response.all_pair_stokes_maps([0])
     ).shape[-2:]
     rng = np.random.default_rng(14)
-    sky_maps = rng.normal(size=(native_freq.size, 4) + shape)
+    intensity = 100.0 + 20.0 * rng.random((native_freq.size,) + shape)
+    polarization = rng.normal(size=(native_freq.size, 3) + shape)
+    polarization /= np.maximum(
+        np.linalg.norm(polarization, axis=1, keepdims=True),
+        np.finfo(np.float64).tiny,
+    )
+    polarization *= 0.2 * intensity[:, None]
+    sky_maps = np.concatenate((intensity[:, None], polarization), axis=1)
+    # This MEPA label is frozen at reference_time, matching pair_alms_mepa
     sky = cro.PolarizedSky(
         sky_maps,
         native_freq,
         sampling="mwss",
-        coord="mcmf",
-        frame="topo",
+        coord="mepa",
+        frame="mepa",
     )
     sky_native, sky_transform = timed(lambda: sky.compute_alm(lmax=lmax))
-    frequency_map = FrequencyMap.build(target, native_freq)
+    frequency_map = FrequencyMap.build(
+        target,
+        native_freq,
+        policy="linear",
+    )
     sky_target = frequency_map.from_native(sky_native)
-    phases = jnp.exp(
-        -1j
-        * jnp.linspace(0.0, 2 * jnp.pi, args.times)[:, None]
-        * jnp.arange(-lmax, lmax + 1)[None]
+    phase_times = jnp.linspace(
+        0.0,
+        cro.constants.sidereal_day["moon"],
+        args.times,
+        endpoint=False,
+    )
+    phases = cro.simulator.rot_alm_z(
+        lmax,
+        times=phase_times,
+        world="moon",
     )
     convolve = jax.jit(cro.polarized_convolve)
     result, convolve_first = timed(
-        lambda: convolve(pair_alms, sky_target, phases)
+        lambda: convolve(pair_alms_mepa, sky_target, phases)
     )
     _, convolve_cached = timed(
-        lambda: convolve(pair_alms, sky_target, phases)
+        lambda: convolve(pair_alms_mepa, sky_target, phases)
     )
 
     ZA = jnp.broadcast_to(
@@ -152,10 +194,16 @@ def main():
     _, solve_cached = timed(lambda: loading_matrix(ZA, ZL))
 
     report["times"] = int(phases.shape[0])
+    report["reference_epoch_tdb_jd"] = float(reference_time.tdb.jd)
+    report["reference_location_deg"] = {
+        "longitude": float(location.lon.deg),
+        "latitude": float(location.lat.deg),
+    }
     report["result_shape"] = tuple(int(value) for value in result.shape)
     report["memory_after_full_benchmark"] = memory_stats()
     report["seconds"].update(
         {
+            "response_topo_to_mepa": response_transform,
             "sky_transform": sky_transform,
             "convolve_first_compile_and_run": convolve_first,
             "convolve_cached": convolve_cached,

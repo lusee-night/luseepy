@@ -42,19 +42,43 @@ def _as_time_array(times):
 
 
 def _frame_name(frame):
-    value = str(frame).lower()
+    value = str(frame).strip().lower()
+    if value == "mcmf":
+        raise ValueError(
+            "MCMF sky input is not supported by the full-Stokes "
+            "simulators. MCMF is body-fixed and cannot be relabeled as "
+            "MEPA; provide an epoch-dependent transport or an explicitly "
+            "MEPA/topocentric sky."
+        )
     aliases = {
-        "mcmf": "mcmf",
         "galactic": "galactic",
         "equatorial": "fk5",
         "fk5": "fk5",
         "icrs": "fk5",
+        "mepa": "mepa",
         "topo": "topo",
         "instrument-topocentric": "topo",
     }
     if value not in aliases:
         raise ValueError(f"Unsupported sky frame {frame!r}.")
     return aliases[value]
+
+
+def _sky_frame(sky_model):
+    """Return the sky frame after rejecting contradictory metadata."""
+    coord = getattr(sky_model, "coord", None)
+    frame = getattr(sky_model, "frame", None)
+    if coord is None and frame is None:
+        raise ValueError("Polarized sky must declare coord or frame.")
+    result = _frame_name(coord if coord is not None else frame)
+    if coord is not None and frame is not None:
+        frame_result = _frame_name(frame)
+        if frame_result != result:
+            raise ValueError(
+                "Polarized sky has contradictory coordinate metadata: "
+                f"coord={coord!r}, frame={frame!r}."
+            )
+    return result
 
 
 def _canonical_tangent_basis(value):
@@ -78,7 +102,6 @@ def _validate_polarized_sky_metadata(
 ):
     required = (
         "units",
-        "frame",
         "convention",
         "stokes",
         "tangent_basis",
@@ -107,14 +130,7 @@ def _validate_polarized_sky_metadata(
     if tuple(sky_model.stokes) != ("I", "Q", "U", "V"):
         raise ValueError("Polarized sky Stokes order must be exactly IQUV.")
     _canonical_tangent_basis(sky_model.tangent_basis)
-    frame = _frame_name(sky_model.frame)
-    if hasattr(sky_model, "coord"):
-        coord = _frame_name(sky_model.coord)
-        if coord != frame:
-            raise ValueError(
-                "Polarized sky coord and frame disagree: "
-                f"{sky_model.coord!r} != {sky_model.frame!r}."
-            )
+    _sky_frame(sky_model)
 
 
 def _validate_instrument_metadata(beam):
@@ -207,7 +223,11 @@ def _i_only_sky_alms(sky_model, target_freqs, lmax):
             )
         )
     else:
-        frequency_map = FrequencyMap.build(target_freqs, sky_model.freq)
+        frequency_map = FrequencyMap.build(
+            target_freqs,
+            sky_model.freq,
+            policy="linear",
+        )
         native = jnp.asarray(
             sky_model.get_alm(frequency_map.source_indices)
         )
@@ -240,7 +260,11 @@ def prepare_polarized_sky_alms(sky_model, target_freqs, lmax):
             require_frequency_units=False,
         )
         source_freqs = np.asarray(sky_model.freqs, dtype=np.float64)
-        frequency_map = FrequencyMap.build(target_freqs, source_freqs)
+        frequency_map = FrequencyMap.build(
+            target_freqs,
+            source_freqs,
+            policy="linear",
+        )
         source_indices = frequency_map.source_indices
         selected = cro.PolarizedSky(
             sky_model.data[source_indices],
@@ -269,26 +293,6 @@ def prepare_polarized_sky_alms(sky_model, target_freqs, lmax):
             f"{result.shape}."
         )
     return result
-
-
-def _rotate_sky_to_topo(sky_alms, sky_frame, obs, time, lmax):
-    import croissant as cro
-    from lunarsky import LunarTopo
-
-    source = _frame_name(sky_frame)
-    if source == "topo":
-        return sky_alms
-    topo = LunarTopo(obstime=time, location=obs.loc)
-    rotation, dl_array = cro.rotations.generate_euler_dl(
-        lmax,
-        source,
-        topo,
-    )
-    return cro.rotations.rotate_alm(
-        sky_alms,
-        rotation,
-        dl_array=dl_array,
-    )
 
 
 @jax.jit
@@ -453,6 +457,7 @@ class FullStokesSimulatorBase:
         if not isinstance(effective_beam, InstrumentResponse):
             raise TypeError("beam override must be an InstrumentResponse.")
         _validate_instrument_metadata(effective_beam)
+        sky_frame = _sky_frame(effective_sky)
 
         pair_alms, ZA, Rsky, Rmoon, Rloss = self.prepare_pair_alms(
             effective_beam
@@ -461,11 +466,6 @@ class FullStokesSimulatorBase:
             effective_sky,
             self.freq,
             self.lmax,
-        )
-        sky_frame = getattr(
-            effective_sky,
-            "frame",
-            getattr(effective_sky, "coord", None),
         )
         pair_integrals = self._convolve(
             pair_alms,
@@ -546,6 +546,7 @@ class FullStokesSimulatorBase:
         response = self.result_beam
         receiver = self.result_receiver
         sky = self.result_sky
+        sky_frame = _sky_frame(sky)
         header = {
             "VERSION": 3,
             "ENGINE": self.engine,
@@ -570,13 +571,7 @@ class FullStokesSimulatorBase:
             ),
             "RECSRC": str(getattr(receiver, "source", None) or "analytic"),
             "SKYMODEL": type(sky).__name__,
-            "SKYFRAME": str(
-                getattr(
-                    sky,
-                    "frame",
-                    getattr(sky, "coord", "unknown"),
-                )
-            ),
+            "SKYFRAME": sky_frame,
             "SKYSRC": str(
                 getattr(
                     sky,
@@ -616,6 +611,9 @@ class FullStokesSimulatorBase:
                 )
             ),
         }
+        if sky_frame == "mepa":
+            header["SKYREFJD"] = float(self.result_epoch_tdb_jd)
+            header["SKYREFSY"] = "TDB"
         if self.result_T_ant is not None:
             header["TANT_K"] = float(self.result_T_ant)
         fits = fitsio.FITS(filename, "rw", clobber=True)
@@ -767,6 +765,8 @@ class FullStokesCroSimulator(FullStokesSimulatorBase):
             )
             if source == "galactic":
                 sky_work = cro.rotations.gal2mepa(sky_alms, et=et)
+            elif source == "mepa":
+                sky_work = sky_alms
             else:
                 sky_rotation, sky_dl = cro.rotations.generate_euler_dl(
                     self.lmax,
@@ -815,6 +815,12 @@ class FullStokesTopoJaxSimulator(FullStokesSimulatorBase):
                 (len(times), pair_value.shape[1], pair_value.shape[0]),
             )
         else:
+            reference_et = None
+            if source == "mepa":
+                from .spice_utils import ensure_lunarsky_moon_frame
+
+                ensure_lunarsky_moon_frame()
+                reference_et = cro.rotations.jd_to_et(times[0].tdb.jd)
             rotations = []
             dl_arrays = []
             for time in times:
@@ -823,6 +829,7 @@ class FullStokesTopoJaxSimulator(FullStokesSimulatorBase):
                     self.lmax,
                     source,
                     topo,
+                    et=reference_et,
                 )
                 rotations.append(jnp.asarray(rotation))
                 dl_arrays.append(jnp.asarray(dl_array))

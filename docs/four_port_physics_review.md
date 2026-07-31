@@ -6,8 +6,11 @@ Status: implementation update, items 1--6 of the recommended plan complete
 
 Reviewed revisions:
 
-- luseepy `codex/four-port-polarization-refactor`, implementation baseline
-  `400bafc8b28a8e8ae4896e12bc59fad73c24acf0`
+- luseepy `codex/four-port-polarization-refactor`, six-finding
+  implementation baseline `b1e3534194c372658d1823a708a8adb2557d9eec`,
+  plus the integration changes recorded below
+- frequency-policy base `origin/an/fix_freqs_clean` at
+  `0c622cf90e844eec2975a2596c2f477dd75c0c64`
 - companion Croissant `codex/full-stokes-pair-response-topo` at
   `daf1545bc57cb7fdf3d28cc468789a139c6eeb68`
 - TeX source of truth:
@@ -311,18 +314,40 @@ regression starts with an intensity response peaking at ENU `phi=0`
 harmonic mode. Reversing the operation would be a convention change, not a
 bug fix justified by the code or Croissant.
 
-### Coordinate metadata disagreement is now rejected
+### Coordinate-frame contracts are now explicit
 
-Croissant `PolarizedSky` stores both `coord` and `frame` and permits
-contradictory values. Its own coordinate transport consults `coord`, while
-[`FullStokesSimulatorBase.simulate`](../lusee/FullStokesSimulator.py#L445)
-uses `frame` to select the luseepy transport.
+Croissant `PolarizedSky` accepts `galactic`, `equatorial`, `mepa`, and
+`topo`. MEPA is the inertial frame obtained by freezing SPICE's `MOON_ME`
+orientation at a reference epoch; it is not the body-fixed MCMF frame.
+Croissant stores both `coord` and `frame`, so contradictory metadata must
+not select different transforms across the two packages.
 
 The polarized-sky boundary now canonicalizes both fields through the same
 aliases and rejects disagreement before preparing harmonic coefficients.
 Equivalent names such as `equatorial`, `fk5`, and `icrs` remain compatible,
-while contradictory physical frames can no longer silently select different
-transforms in the two packages.
+but MCMF is rejected with an explicit request for epoch-dependent transport.
+A native MEPA sky is left in the MEPA frame frozen at the first simulation
+timestamp. A native topocentric sky remains fixed in the local frame.
+Croissant `PolarizedSky` does not store a MEPA epoch, so native MEPA input
+uses that first-timestamp interpretation as an explicit caller contract.
+The output FITS records the canonical sky frame and the assumed TDB
+reference epoch.
+
+For celestial input, the Croissant engine rotates the response and sky into
+the frozen MEPA frame once and evolves the contraction with
+`exp(-i m phi(t))`. This is the intended efficient approximation to lunar
+sidereal rotation. It omits small nonuniform-rotation and non-z-axis
+libration/nutation corrections; the independent topocentric engine instead
+performs a full rotation at every timestamp, using the same fixed MEPA
+reference epoch when its input is native MEPA.
+
+The new four-port driver path also constructs analytic CMB, Cane1979, and
+Dark Ages monopoles as full-sky Galactic maps. It does not reuse the legacy
+monopole fixture's MCMF label or its hard-coded lower-sky cone mask, because
+the four-port response already supplies the local horizon. Full-sky
+monopoles are constructed directly as an exact `l=0` coefficient, avoiding
+HEALPix quadrature leakage into artificial time-varying modes. The legacy
+simulator defaults remain unchanged.
 
 ## Resolution and validation risks
 
@@ -473,26 +498,53 @@ roundoff while retaining the explicitly Hermitian science output.
 
 ## Verification record and limitations
 
-The luseepy constructors now match the reviewed Croissant API. The
-topocentric synthetic fixture also uses Croissant's current canonical
-`coord="topo"` spelling instead of the removed `mcmf` alias.
+The luseepy constructors now match the reviewed Croissant API. The benchmark
+rotates its response from a concrete lunar topocentric frame into MEPA at a
+recorded reference epoch, declares its synthetic sky in that same MEPA
+frame, generates physically admissible 20-percent-polarized IQUV samples,
+and advances one nonduplicated sidereal cycle with Croissant's z-rotation
+helper. It no longer combines the distinct body-fixed `coord="mcmf"` with
+`frame="topo"`.
 
 The focused new-path and converter suite, including explicit-loss and
 normalization tests, completed without a compatibility shim with
 
 ```text
-78 passed, 2 warnings
+82 passed, 6 warnings
 ```
 
-The warnings are Astropy's pre-existing assumption that two numerical
+The warnings are Astropy's pre-existing assumption that numerical
 `TimeDelta` inputs are days. The independent ENU basis check passed at
-machine precision.
+machine precision. The suite includes an isolated-V comparison between the
+MEPA/z-phase and per-timestamp engines at five points spanning a lunar cycle.
 
-The broader non-ingest suite reached 230 passing tests with no failures
-before a remaining slow legacy Healpy rotation test was manually
-interrupted after five minutes. Collecting the ingest suite is independently
-blocked by the sibling `uncrater` checkout not exporting the `Packet` API
-expected by this luseepy revision.
+After rebasing onto the explicit frequency-policy work, every four-port
+response, polarized-sky, and measured-receiver interpolation now opts into
+the `linear` policy rather than inheriting the legacy simulator's `exact`
+default. A small end-to-end off-grid benchmark completed with output shape
+`(2, 10, 4)`. The combined frequency-policy and four-port seam suite passed
+with
+
+```text
+148 passed, 13 warnings
+```
+
+The complete automated non-ingest suite passed with
+
+```text
+279 passed, 1 manual test deselected, 35 warnings
+```
+
+The broader warnings are the same Astropy time-unit assumptions plus two
+Healpy deprecation warnings. With the sibling `uncrater` checkout on
+`PYTHONPATH`, the ingest suite also completed with
+
+```text
+28 passed, 1 skipped, 1 warning
+```
+
+The skipped test requires optional regression data; the warning is ERFA's
+expected dubious-year warning for a synthetic mission timestamp.
 
 These tests use synthetic responses. They do not replace validation against
 a new lossy/PEC antenna simulation, because no such artifact is available.
