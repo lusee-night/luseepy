@@ -73,3 +73,22 @@ Cross-based analyses calibrated on the old model should be revisited.
   equivalent term with Tground=0.
 - Old crosses used sign=-1 two-port couplings for opposite pairs only.
 - lmax=32 both; dt=3600; single lunar day (2025-02).
+
+## C4 symmetry breaking (actual vs group-averaged response, 2026-08-04)
+
+Same ULSA sky-only run with the actual BGL_V16 response vs its C4
+group average (circulant ZA, rotation-averaged patterns; see
+beam_conversion/symmetrize_response.py and c4_* figures).
+
+Autos, 5-45 MHz: median |dP/P| = 6.4%, 90th pct 21%, max 41%.
+Crosses:         median |dC|/sqrt(PaPb) = 6.1%, 90th pct 16%, max 19%.
+
+Structure, not noise: the difference waterfalls are nearly constant in
+time (pure frequency bands) - the asymmetry is a stable instrument
+signature, in principle calibratable. It is largest at 15-28 MHz
+(port-to-port spread peaks at 60% near 21 MHz) and SMALLEST in the
+resonance region (median 3.3% at 27-33 MHz): the 30 MHz resonance is a
+property of the rods, while off-resonance the lander scattering shapes
+the patterns. The breaking is strongly N-S anti-correlated (N +40%
+where S -25% around 20 MHz) with mild E/W deviations, pointing at a
+dominant asymmetry along the N-S axis of the lander layout.
