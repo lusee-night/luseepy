@@ -49,7 +49,7 @@ CANONICAL_CONVENTIONS = {
     "OMEGADEF": {"source-arrival-direction"},
     "POLBASIS": {"e_theta,e_phi"},
     "PORTS": {"0123"},
-    "INPUT_KIND": {"bare", "embedded"},
+    "INPUT_KIND": {"bare", "embedded", "loaded"},
     "FIELD_KIND": {"re", "re-per-current", "effective-length"},
     "FIELD_UNIT": {"v", "mv", "v/a", "mv/a", "m"},
     "FIELD_AMP": {"rms", "peak", "ratio"},
@@ -58,8 +58,9 @@ CANONICAL_CONVENTIONS = {
         "current",
         "already-per-ampere",
         "already-effective-length",
+        "unloaded-zl",
     },
-    "NORM_UNIT": {"v", "mv", "a", "ma", "not-applicable"},
+    "NORM_UNIT": {"v", "mv", "a", "ma", "ohm", "not-applicable"},
     "NORM_AMP": {"rms", "peak", "ratio"},
     "CANONICAL": {"h[m],si-rms"},
     "LOSSMODEL": {"pec", "lossy"},
@@ -82,6 +83,7 @@ class ResponseArrays:
     Vsource: np.ndarray | None = None
     Inorm: np.ndarray | None = None
     Zref: np.ndarray | None = None
+    ZLoad: np.ndarray | None = None
     metadata: dict | None = None
 
 
@@ -316,6 +318,7 @@ def response_content_hash(response, *, metadata=None, real_dtype=None):
         Vsource=response.Vsource,
         Inorm=response.Inorm,
         Zref=response.Zref,
+        ZLoad=response.ZLoad,
         metadata=response.metadata if metadata is None else metadata,
         real_dtype=real_dtype,
     )
@@ -521,6 +524,7 @@ def _validate_response(response, *, validated):
                 Inorm=response.Inorm,
                 Zref=response.Zref,
                 nfrequency=response.freq_mhz.size,
+                ZLoad=response.ZLoad,
             )
         validate_response_matrices(
             response.ZA,
@@ -673,6 +677,8 @@ def write_response_fits(
         write_complex("Vsource", response.Vsource, "V")
     if response.Inorm is not None:
         write_complex("Inorm", response.Inorm, "A")
+    if response.ZLoad is not None:
+        write_complex("ZLoad", response.ZLoad, "Ohm")
     if response.Zref is not None:
         fits.write(
             np.asarray(response.Zref, dtype=real_dtype),

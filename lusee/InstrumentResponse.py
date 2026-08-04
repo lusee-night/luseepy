@@ -78,7 +78,7 @@ CANONICAL_CONVENTIONS = {
     "OMEGADEF": {"source-arrival-direction"},
     "POLBASIS": {"e_theta,e_phi"},
     "PORTS": {"0123"},
-    "INPUT_KIND": {"bare", "embedded"},
+    "INPUT_KIND": {"bare", "embedded", "loaded"},
     "FIELD_KIND": {"re", "re-per-current", "effective-length"},
     "FIELD_UNIT": {"v", "mv", "v/a", "mv/a", "m"},
     "FIELD_AMP": {"rms", "peak", "ratio"},
@@ -87,8 +87,9 @@ CANONICAL_CONVENTIONS = {
         "current",
         "already-per-ampere",
         "already-effective-length",
+        "unloaded-zl",
     },
-    "NORM_UNIT": {"v", "mv", "a", "ma", "not-applicable"},
+    "NORM_UNIT": {"v", "mv", "a", "ma", "ohm", "not-applicable"},
     "NORM_AMP": {"rms", "peak", "ratio"},
     "CANONICAL": {"h[m],si-rms"},
     "LOSSMODEL": {"pec", "lossy"},
@@ -216,6 +217,11 @@ class InstrumentResponse:
             if "zref" in names
             else None
         )
+        ZLoad = (
+            _read_complex(fits, "ZLoad", "Ohm")
+            if "zload_real" in names
+            else None
+        )
         fits.close()
         if validated:
             validate_normalization_payload(
@@ -224,6 +230,7 @@ class InstrumentResponse:
                 Inorm=Inorm,
                 Zref=Zref,
                 nfrequency=self.freq.size,
+                ZLoad=ZLoad,
             )
         if not np.all(np.isfinite(H_theta)):
             raise ValueError("H_theta contains non-finite values.")
@@ -240,6 +247,7 @@ class InstrumentResponse:
         )
         self.Inorm = None if Inorm is None else jnp.asarray(Inorm)
         self.Zref = None if Zref is None else jnp.asarray(Zref)
+        self.ZLoad = None if ZLoad is None else jnp.asarray(ZLoad)
         self.header = header
         self.validated = validated
         self.id = header.get("PORTS", "0123")
@@ -286,6 +294,7 @@ class InstrumentResponse:
             Vsource=Vsource,
             Inorm=Inorm,
             Zref=Zref,
+            ZLoad=ZLoad,
             metadata=header,
         )
         if "CONTENT" in header and str(header["CONTENT"]) != computed_hash:
@@ -315,6 +324,7 @@ class InstrumentResponse:
         Vsource=None,
         Inorm=None,
         Zref=None,
+        ZLoad=None,
     ):
         """Construct a response in memory for analytic fixtures and tests."""
         obj = cls.__new__(cls)
@@ -333,6 +343,7 @@ class InstrumentResponse:
         )
         obj.Inorm = None if Inorm is None else jnp.asarray(Inorm)
         obj.Zref = None if Zref is None else jnp.asarray(Zref)
+        obj.ZLoad = None if ZLoad is None else jnp.asarray(ZLoad)
         obj.header = {
             str(key).upper(): value
             for key, value in dict(metadata or {}).items()
@@ -368,6 +379,7 @@ class InstrumentResponse:
                 Inorm=obj.Inorm,
                 Zref=obj.Zref,
                 nfrequency=obj.freq.size,
+                ZLoad=obj.ZLoad,
             )
             try:
                 field_rsky, _ = compute_sky_moon_resistance(
@@ -407,6 +419,7 @@ class InstrumentResponse:
                 Vsource=obj.Vsource,
                 Inorm=obj.Inorm,
                 Zref=obj.Zref,
+                ZLoad=obj.ZLoad,
                 metadata=obj.header,
             )
         except jax.errors.TracerArrayConversionError:
@@ -510,6 +523,7 @@ class InstrumentResponse:
             self.Vsource,
             self.Inorm,
             self.Zref,
+            self.ZLoad,
         )
         aux = (
             tuple(self.freq.tolist()),
@@ -556,6 +570,7 @@ class InstrumentResponse:
             Vsource,
             Inorm,
             Zref,
+            ZLoad,
         ) = children
         obj = cls.__new__(cls)
         obj.filename = filename
@@ -571,6 +586,7 @@ class InstrumentResponse:
         obj.Vsource = Vsource
         obj.Inorm = Inorm
         obj.Zref = Zref
+        obj.ZLoad = ZLoad
         obj.validated = validated
         obj.id = id_value
         obj.frame = frame
@@ -846,6 +862,7 @@ class InstrumentResponse:
             Vsource=result.Vsource,
             Inorm=result.Inorm,
             Zref=result.Zref,
+            ZLoad=result.ZLoad,
             metadata=result.header,
         )
         return result

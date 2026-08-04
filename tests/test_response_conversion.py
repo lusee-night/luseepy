@@ -421,3 +421,136 @@ def test_response_loader_rejects_contradictory_machine_unit(tmp_path):
         fits["freq"].write_key("BUNIT", "Hz")
     with pytest.raises(ValueError, match="expected 'MHz'"):
         InstrumentResponse(filename)
+
+
+def _write_loaded_csvs(tmp_path, R_theta, R_phi, freq, theta, phi):
+    fieldnames = [
+        "freq_MHz",
+        "phi_deg",
+        "theta_deg",
+        "re(rx_Phi)",
+        "im(rx_Phi)",
+        "re(rx_Theta)",
+        "im(rx_Theta)",
+    ]
+    paths = []
+    for port in range(4):
+        path = tmp_path / f"loaded_{port}.csv"
+        with path.open("w", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=fieldnames)
+            writer.writeheader()
+            for fi, frequency in enumerate(freq):
+                for ti, tv in enumerate(theta):
+                    for pi, pv in enumerate(phi):
+                        writer.writerow(
+                            {
+                                "freq_MHz": frequency,
+                                "phi_deg": pv,
+                                "theta_deg": tv,
+                                "re(rx_Phi)": R_phi[port, fi, ti, pi].real,
+                                "im(rx_Phi)": R_phi[port, fi, ti, pi].imag,
+                                "re(rx_Theta)": R_theta[port, fi, ti, pi].real,
+                                "im(rx_Theta)": R_theta[port, fi, ti, pi].imag,
+                            }
+                        )
+        paths.append(path)
+    return paths
+
+
+def test_loaded_receive_fields_unload_to_bare_effective_length(tmp_path):
+    rng = np.random.default_rng(7)
+    freq = np.asarray([10.0, 20.0])
+    theta = np.asarray([0.0, 90.0])
+    phi = np.asarray([0.0, 90.0, 180.0, 270.0, 360.0])
+    shape = (4, freq.size, theta.size, phi.size)
+    H_theta = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    H_phi = rng.standard_normal(shape) + 1j * rng.standard_normal(shape)
+    # keep the periodic wrap column consistent
+    H_theta[..., -1] = H_theta[..., 0]
+    H_phi[..., -1] = H_phi[..., 0]
+    base = rng.standard_normal((freq.size, 4, 4))
+    ZA = 30 * np.eye(4)[None] + 2.0 * (base + np.swapaxes(base, -1, -2)) \
+        - 5j * np.eye(4)[None]
+    ZL = np.zeros((freq.size, 4, 4), dtype=complex)
+    ZL[:, np.arange(4), np.arange(4)] = 2.0 - 150.0j
+    mismatch = np.einsum(
+        "fab,fbc->fac",
+        ZL,
+        np.linalg.inv(ZA + ZL),
+    )
+    R_theta = np.einsum("fab,bfij->afij", mismatch, H_theta)
+    R_phi = np.einsum("fab,bfij->afij", mismatch, H_phi)
+    paths = _write_loaded_csvs(tmp_path, R_theta, R_phi, freq, theta, phi)
+    output = tmp_path / "loaded_response.fits"
+    convert_receive_csvs(
+        paths,
+        output,
+        za=ZA,
+        input_kind="loaded",
+        field_kind="effective-length",
+        field_units="m",
+        field_amplitude_convention="ratio",
+        rloss=np.zeros_like(ZA),
+        zload=ZL,
+        dtype="float64",
+        metadata={"LOSSMODEL": "PEC", "RLOSSSRC": "test"},
+        allow_unvalidated=True,
+    )
+    with fitsio.FITS(output, "r") as fits:
+        recovered = (
+            fits["H_theta_real"].read() + 1j * fits["H_theta_imag"].read()
+        )
+        recovered_phi = (
+            fits["H_phi_real"].read() + 1j * fits["H_phi_imag"].read()
+        )
+        stored_zl = fits["ZLoad_real"].read() + 1j * fits["ZLoad_imag"].read()
+        header = dict(fits[0].read_header())
+    np.testing.assert_allclose(recovered, H_theta, rtol=1e-10, atol=1e-12)
+    np.testing.assert_allclose(recovered_phi, H_phi, rtol=1e-10, atol=1e-12)
+    np.testing.assert_allclose(stored_zl, ZL, rtol=1e-12, atol=0)
+    assert header["INPUT_KIND"] == "loaded"
+    assert header["NORM_KIND"] == "unloaded-zl"
+    response = InstrumentResponse(output, require_validated=False)
+    assert response.ZLoad is not None
+    np.testing.assert_allclose(np.asarray(response.ZLoad), ZL)
+
+
+def test_loaded_conversion_requires_zload(tmp_path):
+    rng = np.random.default_rng(3)
+    freq = np.asarray([10.0])
+    theta = np.asarray([0.0, 90.0])
+    phi = np.asarray([0.0, 90.0, 180.0, 270.0, 360.0])
+    shape = (4, freq.size, theta.size, phi.size)
+    fields = rng.standard_normal(shape) + 0j
+    paths = _write_loaded_csvs(tmp_path, fields, fields, freq, theta, phi)
+    with pytest.raises(ValueError, match="require the solver-side ZLoad"):
+        convert_receive_csvs(
+            paths,
+            tmp_path / "out.fits",
+            za=np.broadcast_to(50 * np.eye(4), (1, 4, 4)),
+            input_kind="loaded",
+            field_kind="effective-length",
+            field_units="m",
+            field_amplitude_convention="ratio",
+            metadata={"LOSSMODEL": "PEC", "RLOSSSRC": "test"},
+            allow_unvalidated=True,
+        )
+
+
+def test_phi_source_zero_rolls_maps_to_east_zero():
+    from beam_conversion.receive_csv import _roll_phi_to_enu
+
+    phi = np.asarray([0.0, 90.0, 180.0, 270.0, 360.0])
+    field = np.zeros((4, 1, 2, phi.size), dtype=complex)
+    field[..., 0] = 1.0  # feature on the solver's phi=0 axis
+    field[..., -1] = field[..., 0]
+    rolled_theta, rolled_phi = _roll_phi_to_enu(field, field, phi, 180.0)
+    # solver phi=0 pointed West (ENU azimuth 180): feature must move there
+    assert np.all(rolled_theta[..., 2] == 1.0)
+    assert np.all(rolled_theta[..., 0] == 0.0)
+    # wraparound column mirrors the new first column
+    np.testing.assert_array_equal(
+        rolled_theta[..., -1],
+        rolled_theta[..., 0],
+    )
+    np.testing.assert_array_equal(rolled_phi, rolled_theta)

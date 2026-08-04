@@ -101,6 +101,16 @@ def validate_conversion_metadata(metadata):
             "NORM_UNIT": (normalization_unit, {"not-applicable"}),
             "NORM_AMP": (normalization_amplitude, {"ratio"}),
         }
+    elif input_kind == "loaded" and field_kind == "effective-length":
+        # Solver-side loaded receive fields ZL (ZA + ZL)^-1 H in meters;
+        # the converter unloads them with the documented ZLoad matrix.
+        expected = {
+            "FIELD_UNIT": (field_unit, {"m"}),
+            "FIELD_AMP": (field_amplitude, {"ratio"}),
+            "NORM_KIND": (normalization_kind, {"unloaded-zl"}),
+            "NORM_UNIT": (normalization_unit, {"ohm"}),
+            "NORM_AMP": (normalization_amplitude, {"ratio"}),
+        }
     else:
         raise ValueError(
             "Validated response has an unsupported INPUT_KIND/FIELD_KIND "
@@ -123,11 +133,16 @@ def validate_normalization_payload(
     Inorm,
     Zref,
     nfrequency,
+    ZLoad=None,
 ):
     """Bind normalization provenance to the numerical payload."""
     normalization_kind = str(
         dict(metadata).get("NORM_KIND", "")
     ).strip().lower()
+    if normalization_kind != "unloaded-zl" and ZLoad is not None:
+        raise ValueError(
+            f"NORM_KIND={normalization_kind!r} forbids a ZLoad payload."
+        )
     if normalization_kind == "vsource":
         if Vsource is None or Zref is None or Inorm is not None:
             raise ValueError(
@@ -168,6 +183,21 @@ def validate_normalization_payload(
                 f"NORM_KIND={normalization_kind!r} forbids Vsource and "
                 "Inorm and Zref payloads."
             )
+    elif normalization_kind == "unloaded-zl":
+        if ZLoad is None or Vsource is not None or Inorm is not None:
+            raise ValueError(
+                "NORM_KIND='unloaded-zl' requires a ZLoad matrix and "
+                "forbids Vsource and Inorm."
+            )
+        ZLoad = np.asarray(ZLoad)
+        if ZLoad.shape != (nfrequency, 4, 4):
+            raise ValueError("ZLoad must have shape (frequency, 4, 4).")
+        if not np.all(np.isfinite(ZLoad)):
+            raise ValueError("ZLoad contains non-finite values.")
+        if np.any(~np.isfinite(np.linalg.cond(ZLoad))) or np.any(
+            np.linalg.cond(ZLoad) > 1e12
+        ):
+            raise ValueError("ZLoad must be numerically invertible.")
     else:
         raise ValueError(
             f"Unsupported NORM_KIND={normalization_kind!r}."
@@ -669,6 +699,7 @@ def response_payload_hash(
     Vsource=None,
     Inorm=None,
     Zref=None,
+    ZLoad=None,
     real_dtype=None,
 ):
     """Hash canonical persisted numerical content and semantic metadata."""
@@ -694,6 +725,8 @@ def response_payload_hash(
             Inorm = persisted_complex(Inorm)
         if Zref is not None:
             Zref = np.asarray(Zref).astype(real_dtype)
+        if ZLoad is not None:
+            ZLoad = persisted_complex(ZLoad)
 
     digest = hashlib.sha256()
     for name, value in (
@@ -709,6 +742,7 @@ def response_payload_hash(
         ("Vsource", Vsource),
         ("Inorm", Inorm),
         ("Zref", Zref),
+        ("ZLoad", ZLoad),
     ):
         _update_array_hash(digest, name, value)
     normalized_metadata = {}

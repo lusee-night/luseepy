@@ -16,6 +16,31 @@ Reviewed revisions:
 - TeX source of truth:
   [`04_AsymmetricTwoAntenna.tex`](../../new_four_port_paper/04_AsymmetricTwoAntenna.tex)
 
+> **[AS/Claude, 2026-08-04] Reviewer comments in light of the now-known
+> receive-matrix provenance.** The provenance questions this review had to
+> leave open are resolved by `resources/HFSS/kaja.md`,
+> `resources/HFSS/ReceiveMatrix.ipynb`, and the accompanying
+> `Complex_Z_Matrix.csv`. Detailed comments are collected in the section
+> "2026-08-04 provenance update" below; the headline changes are:
+>
+> 1. The production `Receive_Matrix_Fields_{N,E,S,W}.csv` exports are none
+>    of the four supported converter contracts. They are **loaded** receive
+>    fields `R = ZL (ZA + ZL)^-1 H` in meters, with an averaged
+>    spare-preamp `ZL` baked in. A fifth explicit contract
+>    (`INPUT_KIND='loaded'`, `NORM_KIND='unloaded-zl'`, persisted `ZLoad`
+>    payload) has been added and the real artifact now converts and passes
+>    the full `VALIDATED=True` gate.
+> 2. The review's blocking caveat "no production four-port antenna response
+>    is currently available" is lifted: a real validated response file now
+>    exists, so absolute normalization, conditioning, and convergence work
+>    can move from synthetic fixtures to flight-like data.
+> 3. The solver coordinate frame is pinned by the hardware team: west
+>    antenna along HFSS +x, south along +y, so the export's phi=0 is ENU
+>    azimuth 180 degrees. Ingesting the CSV azimuth directly as
+>    response phi would have rotated the instrument by 180 degrees — this
+>    was not detectable from inside the repository and is exactly the class
+>    of error the review's C13-style warnings anticipated.
+
 This review covers only the new four-port `InstrumentResponse` path. In
 particular, constructing
 [`TopoJaxSimulator`](../lusee/TopoJaxSimulator.py#L20) with an
@@ -572,3 +597,106 @@ Items that still require expert input or new data are the actual
 lossy-versus-PEC `Rloss` artifact, the antenna temperature model, acceptance
 thresholds for solver-current conditioning and operational `lmax`, and an
 independent solver accepted-power or plane-wave normalization reference.
+
+## 2026-08-04 provenance update (A. Slosar / Claude)
+
+The receive-matrix production pipeline is now documented first-hand
+(`resources/HFSS/kaja.md`, `resources/HFSS/ReceiveMatrix.ipynb`,
+`receive_matrix/Complex_Z_Matrix.csv`). Comments on the review's findings,
+in their numbering:
+
+### On finding 2 (converter units and normalization)
+
+The four supported contracts were the right *framework* but none matches
+the actual exports. The notebook pipeline is: HFSS `rE` in **mV peak** at
+1 V peak incident per port -> RMS volts -> embedded-current unmixing with
+`Vsource = sqrt(2) V RMS` (diagonal) and `Zref = 50 Ohm` ->
+`h = -4 pi/(j k eta0) rE_bare` -> **multiplication by the mismatch matrix**
+`ZL (ZA + ZL)^-1` with `ZL` the scalar-diagonal average of the measured
+spare preamps fmpre0/2/5/7. The distributed CSVs are therefore *loaded*
+effective lengths in meters. Two consequences:
+
+- A markdown cell in the notebook argues for `Vsource = sqrt(200) V`
+  (1 W normalization). The executed code uses `sqrt(2)` and kaja.md
+  confirms the 1 V-peak-incident excitation; the `sqrt(200)` cell is stale.
+  The notebook's own energy-conservation check (radiation efficiency ~100%
+  for the vacuum dipole reference sim, 37-56% for LuSEE_BGL_V16 over
+  regolith) rules out the factor-10 alternative, because a 1 W
+  normalization error would inflate `Rsky/Re(ZA)` by x100. This is the
+  independent accepted-power check the review asked for, at solver
+  fidelity: it pins the absolute normalization of `H`.
+- The peak-vs-RMS scalings cancel *identically* in the embedded unmixing
+  (`E_rms I_rms^-1 = E_peak I_peak^-1`), so `H` is
+  amplitude-convention-free, exactly as the review's representation
+  -invariance tests assert. The load-bearing conventions are the incident
+  1 V peak excitation and the mV field unit.
+
+The converter now carries a fifth explicit contract:
+`INPUT_KIND='loaded'` + `FIELD_KIND='effective-length'` +
+`NORM_KIND='unloaded-zl'`, with the solver-side `ZLoad` persisted as a
+complex `(frequency, 4, 4)` HDU, hash-bound, and validated (shape,
+finiteness, invertibility). `lusee.ReceiverImpedance.
+spare_preamp_average_zload` reproduces the notebook's exact four-term
+averaged `ZL`; unloading is `H = (ZA + ZL) ZL^-1 R` by batched solve.
+Verification: unloading the real 35 MHz export and integrating
+`eta0/(4 lambda^2) int H H^dagger dOmega` reproduces the notebook's
+printed `R_rad` diagonal `[250.476, 242.909, 255.138, 204.606] Ohm` to
+all printed digits.
+
+### On the ZA placeholder (plan caveat C3)
+
+Closed. `Complex_Z_Matrix.csv` is the full dense 4x4 `ZA` from the
+stitched `.s4p` sweep (skrf, `Zref = 50 Ohm`), 0.5-75 MHz at 0.5 MHz, and
+matches the notebook's `(I+S)(I-S)^-1` reconstruction bit-for-bit at the
+printed 25 MHz spot check. On the real matrices the loader's reciprocity,
+passivity, Hermiticity, three-term closure, and PSD gates all pass with
+`LOSSMODEL='PEC'`. The converter accepts this CSV directly
+(`--zmatrix-csv`) in addition to Touchstone input.
+
+### On finding 4 (horizon-ring weighting)
+
+The half-weight fix is kept and is now also *empirically* moot for the
+real artifact: the HFSS export is identically zero below the horizon and
+already ~1e-15 on the theta=90 ring itself (the tangential far field
+vanishes at the lossy interface), so ring weighting cannot bias the real
+`Rsky` either way. The synthetic-oracle result stands as the correctness
+argument.
+
+### On finding 1 (metal loss) and the `Rloss` artifact
+
+LuSEE_BGL_V16 is a single lossy-environment run; no PEC companion exists,
+so metal and regolith dissipation cannot be separated from this export.
+The real response is therefore declared `LOSSMODEL='PEC'`: all non-sky
+dissipation is attributed to `Rmoon` at `T_moon`. Kaja's vacuum-dipole
+efficiency study (HFSS `RadiationEfficiency` vs the integral check)
+suggests the metal contribution is small, and the antenna sits near lunar
+ambient temperature at night, so the thermodynamic error of this
+attribution is second order. The review's request for a lossy/PEC pair
+remains the right long-term ask; the schema already supports it.
+
+### On coordinates and the whole-instrument rotation convention
+
+kaja.md pins the solver frame: west antenna along +x, south along +y,
+theta 0-180 from +z, phi 0-360 from +x toward +y. That frame is
+right-handed (W x S = Up) and is the ENU frame rotated by exactly
+180 degrees about zenith, so the converter now rolls the periodic phi
+axis by 180 degrees (`phi_source_zero_deg=180`) and records `SRCAZ0`,
+`SRCXAXIS`, `SRCYAXIS`, and `PORTNAMES='N,E,S,W'` in the header. Port
+order in both the CSVs and `ZA` is N, E, S, W (notebook `monopoles`
+list); the generic `PORTS='0123'` header alone would not have caught a
+permuted invocation, so the port names are now explicit provenance.
+
+### Remaining open items, re-ranked with real data available
+
+1. Operational `lmax` for the real response (the review's
+   convergence-threshold ask) can now be measured directly; the
+   mwss-native grid supports lmax <= 179.
+2. Load-time revalidation of a validated 150-frequency file re-runs the
+   full L=180 transform stack; the CONTENT hash already guarantees
+   payload integrity, so hash-gating the load-time matrix recomputation
+   is a worthwhile optimization before routine use.
+3. The lossy/PEC `Rloss` pair and a flight-unit (not spare-average) `ZL`
+   measurement remain the two data requests for the simulation team; the
+   solver accepted-power reference is addressed by the energy-conservation
+   argument above, but an independent plane-wave terminal-voltage check
+   would still be a valuable cross-validation.

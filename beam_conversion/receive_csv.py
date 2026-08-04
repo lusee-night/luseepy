@@ -128,6 +128,65 @@ def read_receive_csv(path, *, theta_max=90.0, zero_tolerance=1e-12):
     return freq, theta, phi, theta_field, phi_field
 
 
+def _roll_phi_to_enu(Etheta, Ephi, phi_deg, phi_source_zero_deg):
+    """Roll the periodic phi axis so phi=0 is local East in ENU.
+
+    ``phi_source_zero_deg`` is the ENU azimuth of the solver grid's phi=0
+    axis (for the LuSEE HFSS exports the +x axis points West, so 180). The
+    wraparound phi bin is preserved.
+    """
+    offset = float(phi_source_zero_deg) % 360.0
+    if offset == 0.0:
+        return Etheta, Ephi
+    phi = np.asarray(phi_deg, dtype=np.float64)
+    if phi.size < 2 or not np.isclose(phi[-1] - phi[0], 360.0):
+        raise ValueError(
+            "phi_source_zero_deg requires a periodic phi grid with the "
+            "0/360 wraparound bin."
+        )
+    step = float(phi[1] - phi[0])
+    if not np.allclose(np.diff(phi), step):
+        raise ValueError("phi grid must be uniform to roll the azimuth zero.")
+    bins = offset / step
+    if not np.isclose(bins, round(bins)):
+        raise ValueError(
+            f"phi_source_zero_deg must be a multiple of the phi step {step}."
+        )
+    bins = int(round(bins))
+
+    def roll(field):
+        unique = field[..., :-1]
+        rolled = np.roll(unique, shift=bins, axis=-1)
+        return np.concatenate((rolled, rolled[..., :1]), axis=-1)
+
+    return roll(Etheta), roll(Ephi)
+
+
+def _unload_receive_fields(R_theta, R_phi, ZA, ZLoad):
+    """Recover bare fields from loaded receive fields.
+
+    The solver-side loading is ``R = ZL (ZA + ZL)^-1 H``, so
+    ``H = (ZA + ZL) ZL^-1 R`` evaluated with batched solves.
+    """
+    ZA = np.asarray(ZA)
+    ZLoad = np.asarray(ZLoad)
+    if ZA.shape != ZLoad.shape or ZA.shape[-2:] != (4, 4):
+        raise ValueError("ZA and ZLoad must share shape (frequency, 4, 4).")
+    unload = (ZA + ZLoad) @ np.linalg.solve(
+        ZLoad,
+        np.broadcast_to(np.eye(4), ZLoad.shape),
+    )
+
+    def apply(field):
+        if field.shape[:2] != (4, ZA.shape[0]):
+            raise ValueError(
+                "Loaded field arrays must have shape (4, frequency, ...)."
+            )
+        return np.einsum("fab,bf...->af...", unload, field)
+
+    return apply(R_theta), apply(R_phi)
+
+
 def _canonical_conversion_contract(
     *,
     input_kind,
@@ -187,10 +246,18 @@ def _canonical_conversion_contract(
             "NORM_UNIT": "not-applicable",
             "NORM_AMP": "ratio",
         }
+    elif input_kind == "loaded" and field_kind == "effective-length":
+        # Solver-side loaded receive fields ZL (ZA + ZL)^-1 H in meters.
+        # The converter recovers bare H with the supplied ZLoad matrix.
+        metadata = {
+            "NORM_KIND": "unloaded-zl",
+            "NORM_UNIT": "Ohm",
+            "NORM_AMP": "ratio",
+        }
     else:
         raise ValueError(
-            "input_kind must be 'embedded' or 'bare', with a supported "
-            "field_kind."
+            "input_kind must be 'embedded', 'bare', or 'loaded', with a "
+            "supported field_kind."
         )
     metadata.update(
         {
@@ -224,6 +291,8 @@ def convert_receive_csvs(
     normalization_current=None,
     normalization_current_units=None,
     normalization_current_amplitude_convention=None,
+    zload=None,
+    phi_source_zero_deg=0.0,
     dtype="float32",
     freq_select=None,
     metadata=None,
@@ -257,6 +326,12 @@ def convert_receive_csvs(
             raise ValueError("All receive CSVs must share one grid.")
     Etheta = np.stack([entry[3] for entry in loaded])
     Ephi = np.stack([entry[4] for entry in loaded])
+    Etheta, Ephi = _roll_phi_to_enu(
+        Etheta,
+        Ephi,
+        phi,
+        phi_source_zero_deg,
+    )
     ZA = np.asarray(za)
     native_nfrequency = freq.size
     selection = _frequency_selection(freq, freq_select)
@@ -285,6 +360,11 @@ def convert_receive_csvs(
                 "normalization_current must have shape (frequency, 4)."
             )
         normalization_current = normalization_current[selection]
+    if zload is not None:
+        zload = np.asarray(zload)
+        if zload.shape != (native_nfrequency, 4, 4):
+            raise ValueError("ZLoad must have shape (frequency, 4, 4).")
+        zload = zload[selection]
     if zref is not None:
         zref_array = np.asarray(zref)
         if zref_array.ndim == 0:
@@ -299,7 +379,33 @@ def convert_receive_csvs(
             )
     canonical_vsource = None
     canonical_inorm = None
-    if input_kind == "embedded":
+    canonical_zload = None
+    if input_kind == "loaded":
+        if zload is None:
+            raise ValueError(
+                "Loaded inputs require the solver-side ZLoad matrix."
+            )
+        if any(
+            value is not None
+            for value in (
+                vsource,
+                vsource_units,
+                vsource_amplitude_convention,
+                normalization_current,
+                normalization_current_units,
+                normalization_current_amplitude_convention,
+                zref,
+            )
+        ):
+            raise ValueError(
+                "Loaded inputs cannot supply Vsource, Zref, or "
+                "normalization_current."
+            )
+        Etheta, Ephi = _unload_receive_fields(Etheta, Ephi, ZA, zload)
+        canonical_zload = zload
+        canonical_field_kind = "effective-length"
+        canonical_field_units = field_units
+    elif input_kind == "embedded":
         if zref is None or vsource is None:
             raise ValueError("Embedded inputs require zref and vsource.")
         if any(
@@ -394,6 +500,7 @@ def convert_receive_csvs(
     )
     meta = dict(metadata or {})
     meta.update(contract)
+    meta["SRCAZ0"] = float(phi_source_zero_deg) % 360.0
     response = ResponseArrays(
         freq,
         theta,
@@ -405,6 +512,7 @@ def convert_receive_csvs(
         Vsource=canonical_vsource,
         Inorm=canonical_inorm,
         Zref=zref,
+        ZLoad=canonical_zload,
         metadata=meta,
     )
     return write_response_fits(
@@ -415,12 +523,35 @@ def convert_receive_csvs(
     )
 
 
+def read_zmatrix_csv(path):
+    """Read a dense complex Z matrix CSV (freq_Hz, freq_MHz, re/im(Zij))."""
+    rows = np.genfromtxt(path, delimiter=",", names=True)
+    freq_mhz = np.asarray(rows["freq_MHz"], dtype=np.float64)
+    Z = np.empty((freq_mhz.size, 4, 4), dtype=np.complex128)
+    for a in range(4):
+        for b in range(4):
+            Z[:, a, b] = (
+                rows[f"reZ{a + 1}{b + 1}"] + 1j * rows[f"imZ{a + 1}{b + 1}"]
+            )
+    if not np.all(np.isfinite(Z)):
+        raise ValueError("Z matrix CSV contains non-finite values.")
+    return freq_mhz, Z
+
+
 def main(argv=None):
     """Command-line entry point for the four-CSV response converter."""
     parser = argparse.ArgumentParser()
     parser.add_argument("csv", nargs=4)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--touchstone", required=True)
+    za_group = parser.add_mutually_exclusive_group(required=True)
+    za_group.add_argument("--touchstone")
+    za_group.add_argument(
+        "--zmatrix-csv",
+        help=(
+            "Dense complex Z-matrix CSV with freq_Hz,freq_MHz,re/im(Zij) "
+            "columns (skrf-converted s4p export)"
+        ),
+    )
     loss_group = parser.add_mutually_exclusive_group(required=True)
     loss_group.add_argument(
         "--pec",
@@ -469,7 +600,27 @@ def main(argv=None):
         "--normalization-current-amplitude",
         choices=("rms", "peak"),
     )
-    parser.add_argument("--input-kind", choices=("embedded", "bare"), required=True)
+    parser.add_argument(
+        "--input-kind",
+        choices=("embedded", "bare", "loaded"),
+        required=True,
+    )
+    parser.add_argument(
+        "--zload-npy",
+        help=(
+            "Dense complex (frequency,4,4) solver-side load matrix used to "
+            "produce loaded receive fields; required for --input-kind loaded"
+        ),
+    )
+    parser.add_argument(
+        "--phi-source-zero-deg",
+        type=float,
+        default=0.0,
+        help=(
+            "ENU azimuth of the solver grid's phi=0 axis; the converter "
+            "rolls maps so stored phi=0 is local East (LuSEE HFSS: 180)"
+        ),
+    )
     parser.add_argument(
         "--field-kind",
         choices=("rE", "rE-per-current", "effective-length"),
@@ -501,10 +652,22 @@ def main(argv=None):
     )
     parser.add_argument("--allow-unvalidated", action="store_true")
     args = parser.parse_args(argv)
-    freq_za, ZA, zref = read_touchstone_z(args.touchstone)
+    if args.touchstone is not None:
+        freq_za, ZA, zref = read_touchstone_z(args.touchstone)
+        za_source = str(args.touchstone)
+    else:
+        freq_za, ZA = read_zmatrix_csv(args.zmatrix_csv)
+        zref = None
+        za_source = str(args.zmatrix_csv)
     freq_csv = read_receive_csv(args.csv[0])[0]
     if not np.allclose(freq_za, freq_csv):
-        raise ValueError("Touchstone and receive CSV frequency grids differ.")
+        raise ValueError("Z-matrix and receive CSV frequency grids differ.")
+    if args.input_kind == "loaded" and args.zload_npy is None:
+        raise ValueError("Loaded conversion requires --zload-npy.")
+    if args.input_kind == "embedded" and args.zmatrix_csv is not None:
+        raise ValueError(
+            "Embedded conversion requires --touchstone for its Zref."
+        )
     if args.input_kind == "embedded" and any(
         value is None
         for value in (
@@ -548,7 +711,7 @@ def main(argv=None):
         if not isinstance(metadata, dict):
             raise ValueError("--provenance-json must contain a JSON object.")
     metadata.setdefault("SOURCE", ",".join(args.csv))
-    metadata.setdefault("ZA_SOURCE", str(args.touchstone))
+    metadata.setdefault("ZA_SOURCE", za_source)
     if args.pec:
         rloss = np.zeros_like(ZA)
         loss_model = "PEC"
@@ -594,6 +757,12 @@ def main(argv=None):
         normalization_current_amplitude_convention=(
             args.normalization_current_amplitude
         ),
+        zload=(
+            np.load(args.zload_npy)
+            if args.zload_npy is not None
+            else None
+        ),
+        phi_source_zero_deg=args.phi_source_zero_deg,
         dtype=args.dtype,
         freq_select=args.freq_select,
         allow_unvalidated=args.allow_unvalidated,

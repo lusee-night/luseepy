@@ -16,18 +16,69 @@ def _four_vector(value, name):
     return array
 
 
+# Measured fit parameters for the four spare flight-model preamps
+# (fmpre0/2/5/7), from the JFET impedance Bode-sweep analysis reproduced in
+# resources/HFSS/ReceiveMatrix.ipynb. Model:
+#   Re Z = 1/(w^2 Rp C^2) + Rs + a w^n,   Im Z = w L - 1/(w C)
+SPARE_PREAMP_FITS = {
+    "fmpre0": {"C_pf": 33.79, "L_nh": 35.0, "Rs_ohm": 0.21, "n": 1.39,
+               "a": 5.2e-12, "Rp_ohm": 1101e3},
+    "fmpre2": {"C_pf": 35.32, "L_nh": 36.4, "Rs_ohm": 2.16, "n": 2.26,
+               "a": 6.9e-20, "Rp_ohm": 331e3},
+    "fmpre5": {"C_pf": 34.89, "L_nh": 34.7, "Rs_ohm": 3.71, "n": 4.35,
+               "a": 2.2e-38, "Rp_ohm": 288e3},
+    "fmpre7": {"C_pf": 36.85, "L_nh": 8.5, "Rs_ohm": 1.65, "n": 1.88,
+               "a": 1.9e-16, "Rp_ohm": 375e3},
+}
+
+
+def spare_preamp_average_zload(freq_mhz):
+    """Averaged spare-preamp load matrix used by the HFSS receive exports.
+
+    Evaluates the exact four-term model of ``ReceiveMatrix.ipynb`` for each
+    measured spare preamp, averages the real and imaginary parts across the
+    four devices, and returns the scalar-diagonal ``(frequency, 4, 4)``
+    matrix that the notebook applied as ``ZL (ZA + ZL)^-1``. This is the
+    ZLoad payload required to unload the ``Receive_Matrix_Fields_*`` CSVs.
+    """
+    freq = np.atleast_1d(np.asarray(freq_mhz, dtype=np.float64))
+    omega = 2 * np.pi * freq * 1e6
+    real = np.zeros_like(omega)
+    imag = np.zeros_like(omega)
+    for fit in SPARE_PREAMP_FITS.values():
+        C = fit["C_pf"] * 1e-12
+        L = fit["L_nh"] * 1e-9
+        real += (
+            1.0 / (omega**2 * fit["Rp_ohm"] * C**2)
+            + fit["Rs_ohm"]
+            + fit["a"] * omega ** fit["n"]
+        )
+        imag += omega * L - 1.0 / (omega * C)
+    scalar = (real + 1j * imag) / len(SPARE_PREAMP_FITS)
+    result = np.zeros((freq.size, 4, 4), dtype=np.complex128)
+    indices = np.arange(4)
+    result[:, indices, indices] = scalar[:, None]
+    return result
+
+
 @jax.tree_util.register_pytree_node_class
 class JFETReceiver:
-    """Diagonal JFET load model with differentiable per-channel parameters."""
+    """Diagonal JFET load model with differentiable per-channel parameters.
+
+    Defaults are the measured Bode-sweep fits for the spare preamps
+    fmpre0/2/5/7 (see ``SPARE_PREAMP_FITS``), evaluated with the
+    parallel-RC form ``Rs + a w^n + jwL + Rp/(1 + jw Rp C)``, whose in-band
+    difference from the notebook's four-term expansion is below 1e-4.
+    """
 
     def __init__(
         self,
-        C_pf=(35.4, 34.2, 36.1, 36.8),
-        L_nh=(37.0, 35.5, 38.2, 39.0),
-        Rs_ohm=(1.0, 0.7, 1.5, 2.0),
-        n=(2.0, 2.0, 2.0, 2.0),
-        a=(0.0, 0.0, 0.0, 0.0),
-        Rp_ohm=(6.0e5, 7.0e5, 5.0e5, 8.0e5),
+        C_pf=(33.79, 35.32, 34.89, 36.85),
+        L_nh=(35.0, 36.4, 34.7, 8.5),
+        Rs_ohm=(0.21, 2.16, 3.71, 1.65),
+        n=(1.39, 2.26, 4.35, 1.88),
+        a=(5.2e-12, 6.9e-20, 2.2e-38, 1.9e-16),
+        Rp_ohm=(1101e3, 331e3, 288e3, 375e3),
         channel_map=("fmpre0", "fmpre2", "fmpre5", "fmpre7"),
     ):
         self.C_pf = _four_vector(C_pf, "C_pf")
