@@ -130,14 +130,24 @@ normalization kind, normalization unit and phasor convention, and canonical
 SI representation from their command-line options. Missing or `UNKNOWN`
 values are rejected. Use `--allow-unvalidated` only for diagnostic artifacts.
 
-The converter accepts four explicit physical input contracts:
+The converter accepts five explicit physical input contracts:
 
 - embedded raw `rE` in V or mV, with an independently described Thevenin
   `Vsource`;
 - direct bare raw `rE` in V or mV, with a complex `(frequency, 4)`
   normalization-current array;
-- explicitly pre-normalized bare `rE/I` in V/A or mV/A; or
-- effective length in m.
+- explicitly pre-normalized bare `rE/I` in V/A or mV/A;
+- effective length in m; or
+- **loaded** effective length in m (`INPUT_KIND='loaded'`,
+  `NORM_KIND='unloaded-zl'`): solver-side receive fields
+  `R = ZL (ZA + ZL)^-1 H` with a documented load matrix baked in. The
+  converter recovers bare `H = (ZA + ZL) ZL^-1 R` by batched solve and
+  persists the applied `ZLoad` as a hash-bound complex
+  `(frequency, 4, 4)` HDU, validated for shape, finiteness, and
+  invertibility on write and load. This is the contract of the actual
+  `Receive_Matrix_Fields_{N,E,S,W}.csv` production exports, which carry
+  the spare-preamp-averaged JFET `ZL` reproduced exactly by
+  `lusee.ReceiverImpedance.spare_preamp_average_zload`.
 
 Embedded effective length is rejected because the circuit unmixing operation
 is defined on the raw embedded fields. Peak/RMS scaling is applied separately
@@ -146,6 +156,36 @@ ratio. No peak/RMS scaling is applied to an already-formed `rE/I` or effective
 length. For the HFSS convention in the TeX, use
 `--field-units mV --field-amplitude peak` together with a `sqrt(2) V` RMS
 Thevenin array and `--vsource-units V --vsource-amplitude rms`.
+
+`ZA` may come from a Touchstone file (`--touchstone`) or from a dense
+complex Z-matrix CSV with `freq_Hz,freq_MHz,re/im(Zij)` columns
+(`--zmatrix-csv`, the skrf-converted `.s4p` export format). The stored
+response azimuth convention is ENU with `phi=0` at local East; solver
+grids with a different azimuth zero are rolled with
+`--phi-source-zero-deg` (the ENU azimuth of the solver's `phi=0` axis)
+and the applied roll is recorded as `SRCAZ0` provenance. The LuSEE HFSS
+frame has the west antenna along `+x` and south along `+y`, so its
+exports use `--phi-source-zero-deg 180`.
+
+## Production artifacts
+
+`beam_conversion/lusee_bgl_v16.py` is the one-command driver for the
+LuSEE_BGL_V16 export set (loaded contract, `--zmatrix-csv`, 180-degree
+azimuth roll, full solver provenance, `LOSSMODEL=PEC`). It produced
+
+- `receive_matrix/lusee_bgl_v16_response_v3.fits` — the real unloaded
+  response, `VALIDATED=True` at all 150 frequencies (0.5-75 MHz);
+- `receive_matrix/lusee_bgl_v16_response_v3_c4sym.fits` — its C4
+  group average (`beam_conversion/symmetrize_response.py`: circulant
+  `ZA`, rotation-averaged patterns), the exactly four-fold-symmetric
+  reference instrument.
+
+Future *bare* exports (`Bare_Effective_Length_Fields_{pole}.csv` with
+`re/im(h_Theta)`, `re/im(h_Phi)` columns from the ReceiveMatrix notebook's
+`export_fields_to_csv`) convert with the plain bare/effective-length
+contract and must reproduce the unloaded `H` above to numerical precision.
+See `docs/four_port_physics_review.md` (provenance review) and
+`docs/old_vs_new.md` (legacy-pipeline comparison) for the physics record.
 
 Validation derives `Rsky` from `H_theta/H_phi` with the same Croissant MWSS
 monopole operator used by simulation. A supplied `Rsky` must match that

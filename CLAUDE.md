@@ -136,6 +136,38 @@ Reads simulator FITS output. Extends `Observation`. Indexed as `D[:, '01I', :]` 
 
 Converts raw CCSDS binary downlinks (or extracted uncrater session dirs) into HDF5 (layout v3) / FITS science products plus sanity plots. Stages: CCSDS frame recovery → logical-packet reassembly → identity assignment → session split → decode to `Products` → `write_hdf5` / `write_fits`. Entry points: `process_flash`, `process_session`, `parse_flash`. Spectra are stored in SDU (bit-slice restored exactly once); physical-unit conversion is deferred to `SpectrometerGain`. `IngestData(Observation)` / `lusee.ingest.load()` read the products back with `lusee.Data`-style indexing; the time axis requires a recorded `time_scale` constant or an explicit `assume_scale=` (the writers record `time_scale` / `clock_source` / `clock_epoch_isot` provenance).
 
+## Four-port instrument response (migration path)
+
+The four-port refactor is implemented on this branch behind internal
+modules; the legacy per-antenna API above remains the exported default
+until the public cutover. Key pieces:
+
+- **`lusee.InstrumentResponse`** — one coupled 4-port response loaded from
+  instrument FITS v3 (`H_theta/H_phi` bare effective lengths in meters,
+  dense complex `ZA`, `Rsky`/`Rmoon`/`Rloss`). Pair-Stokes maps/alms via
+  the co-developed croissant polarization layer (mwss L=180 grid).
+- **`lusee.ReceiverImpedance`** — differentiable receiver models;
+  `JFETReceiver` defaults are the measured fmpre0/2/5/7 Bode fits;
+  `spare_preamp_average_zload()` reproduces the HFSS export's load matrix.
+- **`lusee.FullStokesSimulator`** — `FullStokesCroSimulator` (MEPA
+  z-phases) and `FullStokesTopoJaxSimulator` (per-time Wigner), both full
+  IQUV; covariance assembly in `lusee.Covariance`
+  (`C_v = M K M†`, `M = ZL(ZA+ZL)^-1`).
+- **`beam_conversion/receive_csv.py`** — five explicit input contracts
+  including `loaded` (solver-side `ZL(ZA+ZL)^-1 H` fields, unloaded with
+  a persisted `ZLoad` payload); `--zmatrix-csv`, `--phi-source-zero-deg`.
+  Drivers: `lusee_bgl_v16.py` (real LuSEE_BGL_V16 conversion),
+  `symmetrize_response.py` (C4 group average).
+- Validated real artifacts live outside the repo in
+  `../receive_matrix/lusee_bgl_v16_response_v3{,_c4sym}.fits`.
+- Complex128 response validation requires `JAX_ENABLE_X64=True`; the
+  croissant development checkout installs with
+  `uv pip install -e ../croissant -e .` (pins the slosar/s2fft fork).
+
+Docs: `docs/instrument_response.md` (usage + converter contracts),
+`docs/four_port_physics_review.md` (physics review + provenance record),
+`docs/old_vs_new.md` (legacy-pipeline comparison and C4 symmetry study).
+
 ## Coordinate Conventions
 
 - Beam files use theta (0=zenith) × phi (0–360°) grids with wraparound at last phi bin (phi[0] == phi[-1] for most operations; the `-1` index is dropped in alm computation)
