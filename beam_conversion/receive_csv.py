@@ -22,10 +22,12 @@ _COLUMN_ALIASES = {
     "freq": ("freq_MHz", "frequency_MHz", "freq"),
     "phi": ("phi_deg", "phi"),
     "theta": ("theta_deg", "theta"),
-    "phi_real": ("re(rx_Phi)", "rx_Phi_real", "phi_real"),
-    "phi_imag": ("im(rx_Phi)", "rx_Phi_imag", "phi_imag"),
-    "theta_real": ("re(rx_Theta)", "rx_Theta_real", "theta_real"),
-    "theta_imag": ("im(rx_Theta)", "rx_Theta_imag", "theta_imag"),
+    # rx_* columns are the legacy loaded exports; h_* columns are the bare
+    # effective-length exports of ReceiveMatrix.ipynb's export_fields_to_csv.
+    "phi_real": ("re(rx_Phi)", "rx_Phi_real", "phi_real", "re(h_Phi)"),
+    "phi_imag": ("im(rx_Phi)", "rx_Phi_imag", "phi_imag", "im(h_Phi)"),
+    "theta_real": ("re(rx_Theta)", "rx_Theta_real", "theta_real", "re(h_Theta)"),
+    "theta_imag": ("im(rx_Theta)", "rx_Theta_imag", "theta_imag", "im(h_Theta)"),
 }
 
 

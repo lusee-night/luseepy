@@ -19,6 +19,17 @@ west antenna along +x, south antenna along +y, rE in mV peak with
 ``e^{+j omega t}`` phasors, ports ordered N, E, S, W. The metal/regolith
 loss split is not available from this export, so it is declared PEC:
 all sub-horizon and ohmic dissipation is attributed to Rmoon at T_moon.
+
+Future *bare* exports (``Bare_Effective_Length_Fields_{pole}.csv`` from
+the notebook's ``export_fields_to_csv``, columns ``re/im(h_Theta)`` and
+``re/im(h_Phi)``) need no unloading; convert them with the generic CLI::
+
+    python -m beam_conversion.receive_csv Bare_..._{N,E,S,W}.csv \
+        --zmatrix-csv Complex_Z_Matrix.csv --input-kind bare \
+        --field-kind effective-length --field-units m \
+        --field-amplitude ratio --pec --phi-source-zero-deg 180 ...
+
+and the result should match this driver's output H to numerical precision.
 """
 
 import argparse

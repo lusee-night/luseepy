@@ -554,3 +554,37 @@ def test_phi_source_zero_rolls_maps_to_east_zero():
         rolled_theta[..., 0],
     )
     np.testing.assert_array_equal(rolled_phi, rolled_theta)
+
+
+def test_bare_effective_length_export_columns_are_accepted(tmp_path):
+    """The notebook's export_fields_to_csv writes re/im(h_*) columns."""
+    path = tmp_path / "bare.csv"
+    fieldnames = [
+        "freq_MHz",
+        "phi_deg",
+        "theta_deg",
+        "re(h_Phi)",
+        "im(h_Phi)",
+        "re(h_Theta)",
+        "im(h_Theta)",
+    ]
+    with path.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+        writer.writeheader()
+        for theta in (0.0, 90.0):
+            for phi in (0.0, 90.0, 180.0, 270.0, 360.0):
+                writer.writerow(
+                    {
+                        "freq_MHz": 10.0,
+                        "phi_deg": phi,
+                        "theta_deg": theta,
+                        "re(h_Phi)": 1.5,
+                        "im(h_Phi)": -0.5,
+                        "re(h_Theta)": theta / 100,
+                        "im(h_Theta)": 0.25,
+                    }
+                )
+    freq, theta, phi, theta_field, phi_field = read_receive_csv(path)
+    assert np.array_equal(freq, [10.0])
+    assert theta_field[0, 1, 0] == pytest.approx(0.9 + 0.25j)
+    assert phi_field[0, 0, 0] == pytest.approx(1.5 - 0.5j)
