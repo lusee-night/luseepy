@@ -180,10 +180,27 @@ azimuth roll, full solver provenance, `LOSSMODEL=PEC`). It produced
   `ZA`, rotation-averaged patterns), the exactly four-fold-symmetric
   reference instrument.
 
-Future *bare* exports (`Bare_Effective_Length_Fields_{pole}.csv` with
-`re/im(h_Theta)`, `re/im(h_Phi)` columns from the ReceiveMatrix notebook's
-`export_fields_to_csv`) convert with the plain bare/effective-length
-contract and must reproduce the unloaded `H` above to numerical precision.
+**Default input contract (since 2026-08-06):** *bare* effective-length
+exports (`Bare_Effective_Length_Fields_{N,E,S,W}.csv` with
+`re/im(h_Theta)`, `re/im(h_Phi)` columns in meters, ratio convention,
+from the ReceiveMatrix notebook's `export_fields_to_csv`) are the
+standard solver deliverable going forward. Convert them with the plain
+bare/effective-length contract:
+
+```bash
+JAX_ENABLE_X64=1 python -m beam_conversion.receive_csv \
+    Bare_Effective_Length_Fields_{N,E,S,W}.csv \
+    --output <response>.fits --zmatrix-csv Complex_Z_Matrix.csv \
+    --input-kind bare --field-kind effective-length --field-units m \
+    --field-amplitude ratio --pec --phi-source-zero-deg 180 \
+    --dtype float64 --provenance-json <provenance>.json
+```
+
+This was cross-validated on 2026-08-06 against the unloaded `H` of
+`lusee_bgl_v16_response_v3.fits`: identical grids and `ZA`, and
+`H_theta`/`H_phi` agreeing to ~1e-15 relative (float64 rounding). The
+loaded contract and the `lusee_bgl_v16.py` unloading driver remain
+supported for the legacy `Receive_Matrix_Fields_*` exports only.
 See `docs/four_port_physics_review.md` (provenance review) and
 `docs/old_vs_new.md` (legacy-pipeline comparison) for the physics record.
 

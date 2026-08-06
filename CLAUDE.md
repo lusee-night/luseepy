@@ -153,10 +153,14 @@ until the public cutover. Key pieces:
   z-phases) and `FullStokesTopoJaxSimulator` (per-time Wigner), both full
   IQUV; covariance assembly in `lusee.Covariance`
   (`C_v = M K M†`, `M = ZL(ZA+ZL)^-1`).
-- **`beam_conversion/receive_csv.py`** — five explicit input contracts
-  including `loaded` (solver-side `ZL(ZA+ZL)^-1 H` fields, unloaded with
-  a persisted `ZLoad` payload); `--zmatrix-csv`, `--phi-source-zero-deg`.
-  Drivers: `lusee_bgl_v16.py` (real LuSEE_BGL_V16 conversion),
+- **`beam_conversion/receive_csv.py`** — five explicit input contracts;
+  the default (since 2026-08-06) is bare effective length in meters
+  (`Bare_Effective_Length_Fields_*` exports: `--input-kind bare
+  --field-kind effective-length --field-units m --field-amplitude ratio
+  --phi-source-zero-deg 180`); `loaded` (solver-side `ZL(ZA+ZL)^-1 H`
+  fields, unloaded with a persisted `ZLoad` payload) remains for the
+  legacy `Receive_Matrix_Fields_*` exports — both routes agree to 1e-15.
+  Drivers: `lusee_bgl_v16.py` (legacy loaded conversion),
   `symmetrize_response.py` (C4 group average).
 - Validated real artifacts live outside the repo in
   `../receive_matrix/lusee_bgl_v16_response_v3{,_c4sym}.fits`.

@@ -20,16 +20,20 @@ west antenna along +x, south antenna along +y, rE in mV peak with
 loss split is not available from this export, so it is declared PEC:
 all sub-horizon and ohmic dissipation is attributed to Rmoon at T_moon.
 
-Future *bare* exports (``Bare_Effective_Length_Fields_{pole}.csv`` from
-the notebook's ``export_fields_to_csv``, columns ``re/im(h_Theta)`` and
-``re/im(h_Phi)``) need no unloading; convert them with the generic CLI::
+*Bare* exports (``Bare_Effective_Length_Fields_{pole}.csv`` from the
+notebook's ``export_fields_to_csv``, columns ``re/im(h_Theta)`` and
+``re/im(h_Phi)`` in meters) are the default solver deliverable since
+2026-08-06; they need no unloading and convert with the generic CLI::
 
-    python -m beam_conversion.receive_csv Bare_..._{N,E,S,W}.csv \
+    JAX_ENABLE_X64=1 python -m beam_conversion.receive_csv \
+        Bare_..._{N,E,S,W}.csv \
         --zmatrix-csv Complex_Z_Matrix.csv --input-kind bare \
         --field-kind effective-length --field-units m \
         --field-amplitude ratio --pec --phi-source-zero-deg 180 ...
 
-and the result should match this driver's output H to numerical precision.
+Cross-validated 2026-08-06: that command reproduces this driver's output
+H to ~1e-15 relative (identical grids and ZA). This driver remains only
+for the legacy loaded ``Receive_Matrix_Fields_*`` exports.
 """
 
 import argparse
