@@ -179,6 +179,78 @@ Docs: `docs/instrument_response.md` (usage + converter contracts),
 - The Euler rotation used in `TopoNumpySimulator` follows `XYZ` convention via `rot2eul`/`eul2rot`
 - SPICE/ephemeris code expects TDB: convert explicitly (e.g. `times[0].tdb.jd`) — passing a raw `.jd` (UTC-scale) introduces a ~69 s offset
 
+## Four-port response: conventions and pitfalls
+
+Learned while building the monopole / point-source / polarimeter
+diagnostics in `big_refactor/old_vs_new/` (2026-08-06..10). Each item
+below cost real debugging time; do not re-derive them from the headers.
+
+### Topocentric azimuth
+
+Stored response `phi` is the ENU azimuth measured **from East towards
+North**, i.e. for a source at altitude `alt` and astronomical azimuth
+`az` (from North towards East),
+
+    theta = pi/2 - alt        phi = pi/2 - az
+
+This is consistent with `SRCXAXIS=west` / `SRCYAXIS=south` / `SRCAZ0=180`
+and with `BeamGauss`'s documented `az=0 -> E`, but it was **pinned
+empirically**, not read off the header: pushing an I-only point source
+through the full harmonic path (`FullStokesCroSimulator`) and comparing
+the four auto time series against the direct kernel gives per-port
+correlation 1.0000 for `phi = pi/2 - az` and only 0.85-0.92 for
+`phi = az`. The check lives in
+`big_refactor/old_vs_new/check_az_convention.py`.
+
+WARNING: the legacy `CalibratorSimulator` feeds `LunarTopo.az`
+(astronomical, from North) straight into `Beam.interp_Etheta`, whose
+docstring says `az=0 -> E`. That path is internally inconsistent and must
+not be used as the convention reference.
+
+### Angular interpolation interpolates the KERNEL, not the fields
+
+`InstrumentResponse._sample_periodic_maps` (used by `pair_stokes_at`, and
+hence by `FullStokesCalibratorSimulator`) bilinearly interpolates the
+already-formed pair-Stokes kernel. That is **not** the same as
+interpolating `H` and then forming the quadratic products: on the 1 deg
+grid the two differ by ~6e-4 relative. Consequences:
+
+- Reproducing the library requires forming the kernel on the four
+  surrounding grid nodes and interpolating that (see
+  `old_vs_new/point_source_sim.py:sample_pair_kernel`), not sampling `H`
+  first.
+- Off-grid directions break exact algebraic identities at the ~1e-4
+  level. The rank-1 structure below, and the "total polarized fraction
+  = 1" identity, are exact only at grid nodes. Evaluate on nodes when you
+  need machine precision.
+
+### Performance traps
+
+- `InstrumentResponse.target_matrices()` re-derives `Rsky` with a full
+  spherical-harmonic transform over **all** native channels (~840 s for
+  150 channels). If you already have a validated artifact, read
+  `resp.ZA`, `resp.Rsky_native`, `resp.Rmoon_native`, `resp.Rloss_native`
+  directly.
+- `pair_stokes_at()` calls `all_pair_stokes_maps()` with no `freq_ndx`,
+  materializing 10 pairs x 4 Stokes x 150 freqs x 91 x 361 complex
+  (~3 GB) on **every** call. `FullStokesCalibratorSimulator.simulate()`
+  therefore costs ~2 min per call. Slice the response to a few native
+  channels before using it as a cross-check reference.
+- With `T_moon = T_ant = 0` the `Rmoon`/`Rloss` terms in
+  `assemble_open_covariance` are identically zero, so a source-only
+  calculation needs neither.
+
+### Rank structure of the port covariance
+
+For a source in one direction, `v = R e` with `R = M H` the loaded 4x2
+response, so `C = R B R+` with `B` the 2x2 source coherency. Hence
+`rank(C) <= 2` for **any** single point source and `rank(C) = 1` exactly
+when it is fully polarized; `Z_L` is invertible so neither the receiver
+nor the mutual coupling changes this. Verified to <6e-16 on an exact grid
+node (`old_vs_new/make_rank_figure.py`). A diffuse sky superposes many
+such terms and is full rank. Useful as a calibration-free null test
+whenever one source dominates.
+
 ## Version Conventions
 
 - Version in `lusee/__init__.py` as `__version__` and `__comment__` (dev suffix for unreleased)
