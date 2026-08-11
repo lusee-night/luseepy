@@ -27,11 +27,6 @@ dependencies = [
     "pytest>=9.0.2",
 ]
 [project.optional-dependencies]
-croissant = [
-    "croissant-sim == 6.0.0",
-    "s2fft @ git+https://github.com/slosar/s2fft.git@cefdf468ec2540818bafb37ed60d7b1fbba2f21f",
-    "spiceypy",
-]
 cuda12 = [
     "jax[cuda12]; sys_platform == 'linux'",
 ]

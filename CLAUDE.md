@@ -15,8 +15,7 @@ Required environment variables:
 
 Docker-based development (see `docker/README.md`) or local install:
 ```bash
-pip install .                          # core install
-pip install ".[croissant]"             # with optional CroSimulator support
+pip install .                          # core install (includes croissant)
 pip install ".[ingest]"                # downlink ingest extras (h5py, ...)
 ```
 
@@ -112,7 +111,7 @@ The original NumPy engine: per-timestep rotation of galactic sky alms into the o
 JAX version of the topo engine with jitted/vmapped alm rotation and contraction kernels.
 
 **`lusee.CroSimulator`** (`lusee/CroSimulator.py`)
-Alternative engine using the `croissant` library and JAX. Works in MEPA (Moon-centred Ephemeris Pole Axis) with `rot_alm_z` phase rotations rather than per-time full sky rotation. Optional install: `pip install ".[croissant]"`. `CroSimulator` is `None` if croissant is not installed.
+Alternative engine using the `croissant` library and JAX. Works in MEPA (Moon-centred Ephemeris Pole Axis) with `rot_alm_z` phase rotations rather than per-time full sky rotation. croissant is a core dependency; `CroSimulator` is `None` only if croissant is unavailable in the environment.
 
 **`lusee.CalibratorSimulator`** (`lusee/CalibratorSimulator.py`)
 Simulates the orbiting calibrator observations.
