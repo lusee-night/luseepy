@@ -42,7 +42,8 @@ class CalibratorSimDriver(dict):
                 angle = bdc.get("common_beam_angle", 0) + cbeam.get("angle", 0)
                 print(f"  Creating Gaussian beam {b}, angle={angle}")
                 B = lusee.BeamGauss(
-                    dec_deg=cbeam["declination"],
+                    alt_deg=cbeam["altitude"],
+                    az_deg=cbeam["azimuth"],
                     sigma_deg=cbeam["sigma"],
                     one_over_freq_scaling=cbeam.get("one_over_freq_scaling", False),
                     id=b,
@@ -76,12 +77,10 @@ class CalibratorSimDriver(dict):
         lusee    = self._lusee
         sat_conf = self["satellite"]
 
-        tone_freqs = np.array(sat_conf["tone_freqs"], dtype=float)
-        amp_cfg    = sat_conf["tone_amplitude"]
-        if np.isscalar(amp_cfg):
-            tone_amplitude = np.full(len(tone_freqs), float(amp_cfg))
-        else:
-            tone_amplitude = np.array(amp_cfg, dtype=float)
+        waveform = sat_conf.get("waveform", "default")
+        tone_freqs, tone_amplitude = lusee.return_calibrator_waveform_coefficients(waveform)
+        tone_freqs = np.asarray(tone_freqs, dtype=float)
+        tone_amplitude = np.asarray(tone_amplitude, dtype=complex)
 
         sat_kwargs = {}
         for key in ("semi_major_km", "eccentricity", "inclination_deg",
@@ -92,7 +91,7 @@ class CalibratorSimDriver(dict):
         sat    = lusee.Satellite(**sat_kwargs)
         os_    = lusee.ObservedSatellite(obs, sat)
         passes = os_.get_transit_indices()
-
+        
         tracks = []
         for si, ei in passes:
             n = ei - si
@@ -100,11 +99,13 @@ class CalibratorSimDriver(dict):
                 continue
             tracks.append(lusee.CalibratorTrack(
                 times         = obs.times[si:ei],
+                dist          = os_.dist_km()[si:ei],
                 alt           = os_.alt[si:ei],
                 az            = os_.az[si:ei],
                 polarization  = np.zeros(n),
                 tone_freqs    = tone_freqs,
                 tone_amplitude= tone_amplitude,
+                tec           = os_.compute_tec(self["lunar_ionsophere_model"])[si:ei] if "lunar_ionsophere_model" in self else np.full(obs.times[si:ei].shape, np.nan)
             ))
 
         return tracks

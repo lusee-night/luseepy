@@ -11,7 +11,7 @@ ALT   = np.linspace(0.1, 0.5, N)
 AZ    = np.linspace(1.0, 2.0, N)
 POL   = np.zeros(N)
 FREQS = np.array([10.0, 12.0, 14.0])   # length NFREQ
-AMP   = np.ones(NFREQ) * 100.0         # length NFREQ
+AMP   = (np.ones(NFREQ) + 1j * np.arange(NFREQ)) * 100.0  # length NFREQ
 
 
 @pytest.fixture
@@ -36,6 +36,7 @@ def test_values_stored(ct):
     assert np.allclose(ct.polarization, POL)
     assert np.allclose(ct.tone_freqs, FREQS)
     assert np.allclose(ct.tone_amplitude, AMP)
+    assert np.iscomplexobj(ct.tone_amplitude)
 
 
 @pytest.mark.parametrize("bad_field", ["alt", "az", "polarization"])
