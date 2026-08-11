@@ -15,8 +15,7 @@ Required environment variables:
 
 Docker-based development (see `docker/README.md`) or local install:
 ```bash
-pip install .                          # core install
-pip install ".[croissant]"             # with optional CroSimulator support
+pip install .                          # core install (includes croissant)
 ```
 
 ## Running Tests
@@ -92,7 +91,7 @@ Abstract base. `prepare_beams()` pre-computes beam alm products for all antenna 
 Per-timestep rotation of galactic sky alms into the observer frame using healpy rotators. Uses `mean_alm()` for the beam–sky integral.
 
 **`lusee.CroSimulator`** (`lusee/CroSimulator.py`)
-Alternative engine using the `croissant` library and JAX. Works in MEPA (Moon-centred Ephemeris Pole Axis) with `rot_alm_z` phase rotations rather than per-time full sky rotation. Optional install: `pip install ".[croissant]"`. `CroSimulator` is `None` if croissant is not installed.
+Alternative engine using the `croissant` library and JAX. Works in MEPA (Moon-centred Ephemeris Pole Axis) with `rot_alm_z` phase rotations rather than per-time full sky rotation. croissant is a core dependency; `CroSimulator` is `None` only if croissant is unavailable in the environment.
 
 ### Map-Making (`lusee/MapMaker.py`)
 
