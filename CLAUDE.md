@@ -13,7 +13,7 @@ Required environment variables:
 - `LUSEE_OUTPUT_DIR` — output directory for simulation results
 - `LUSEEPY_PATH` — path to the luseepy checkout (optional)
 
-Docker-based development (see `docker/README.md`) or local install:
+Local install:
 ```bash
 pip install .                          # core install (includes croissant)
 ```
@@ -121,5 +121,5 @@ Reads simulator FITS output. Extends `Observation`. Indexed as `D[:, '01I', :]` 
 ## Version Conventions
 
 - Version in `lusee/__init__.py` as `__version__` and `__comment__` (dev suffix for unreleased)
-- New release: clean version → tag → new docker image → bump to `x.y dev`
+- New release: clean version → tag → bump to `x.y dev`
 - API-breaking changes → increment major integer; small fixes → increment by 0.01

@@ -12,10 +12,6 @@ This software is documented on the ["Read the Docs" pages](https://luseepy.readt
 
 There are datasets stored in the LuSEE-Night [Google Drive](https://drive.google.com/drive/folders/0AM52i9DVjqkAUk9PVA).
 
-## Docker (deprecated)
-
-The Docker-based workflow is **deprecated**. Prefer a local Python environment (see [Developing](#developing)). Legacy build notes remain under [`docker/README.md`](docker/README.md) for reference only.
-
 ## Developing
 
 Use a virtual environment and an editable install from the `luseepy` repository root:
@@ -34,8 +30,6 @@ Set the environment variables in [Environment variables](#environment-variables)
 python tests/LunarCalendarTest.py
 ```
 
-If you still use the legacy `setup_env.sh` helpers (`lpython`, `ljupyter`, etc.), they assume Docker and `LUSEE_IMAGE`; that path is unmaintained.
-
 ## Environment variables
 
 User is expected to set up the following environment variables:
@@ -43,28 +37,10 @@ User is expected to set up the following environment variables:
  * `LUSEEPY_PATH` -- path to the luseepy checkout
  * `LUSEEOPSIM_PATH` -- path to the lusee opsim package (if used).
  * `LUSEE_DRIVE_DIR` -- path to the checkout of the LuSEE-Night Google Drive
-
-The legacy `setup_env.sh` script may also define `LUSEE_IMAGE` (Docker image name); it is only relevant if you use the deprecated container workflow.
-
-
-
-## Singularity
-
-__NB. The example below corresponds to an early version of software, and reference to the image below is deprecated.__
-
-The `tests` folder contains CI-related and other testing scripts. Here's an example
-of a simple test run with Singularity, on a SDCC/BNL node, from the `luseepy` folder:
-
-```bash
-singularity exec -B /direct/phenix+u/mxmp/projects/luseepy --env PYTHONPATH=/direct/phenix+u/mxmp/projects/luseepy docker://lusee/lusee-night-foundation:0.1 ./tests/LunarCalendarTest.py
-```
-
-
 ## Cutting a new version
 
 Cutting a new version entails:
  * having a clean (non dev) version in `__init__.py`
- * updating `setup_env.sh` (if still in use)
  * tagging the github
  * bumping version again in `__init__.py` to a +0.1 and a dev
  
