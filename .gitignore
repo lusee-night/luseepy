@@ -19,7 +19,6 @@
 !**.sh 
 !**.batch
 !.github/* 
-!docker/*
 !simulation/driver/*.py
 !examples/*.py
 !examples/ingest/
