@@ -42,7 +42,8 @@ import fitsio
 
 import lusee
 from lusee.SeparableSky import SeparableSkyModule
-from lusee.Fitting import BeamModule, InstrumentModule, Experiment
+from lusee.Fitting import (BeamModule, InstrumentModule, Experiment,
+                           DENSE_THRESHOLD)
 
 DRIVE = os.environ.get("LUSEE_DRIVE_DIR")  # resolved lazily so --help works unset
 # Default instrument: the coupled four-port response (FITS v3).  ``build_instrument``
@@ -107,7 +108,7 @@ def run(lmax=31, Nside=16, n_templates=2,
         freq=(15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0), ref_freq=25.0,
         obs_range="2025-02-01 13:00:00 to 2025-02-28 13:00:00",
         dt_sec=4 * 3600.0, taper=0.03, maxiter=200, inner_maxiter=1500,
-        inner_method="auto", dense_threshold=512,
+        inner_method="auto", dense_threshold=DENSE_THRESHOLD,
         init_from="data", shape_perturb=0.25, target_snr=1e4,
         sample=False, num_samples=300, num_warmup=300, hmc_engine="nuts",
         hmc_num_integration_steps=10, noise_seed=42, outfile=None,
@@ -325,7 +326,8 @@ def main(argv=None):
     p.add_argument("--inner-method", choices=["auto", "cg", "dense"],
                    default="auto", dest="inner_method",
                    help="linear solve method for the VarPro inner step")
-    p.add_argument("--dense-threshold", type=int, default=512, dest="dense_threshold",
+    p.add_argument("--dense-threshold", type=int, default=DENSE_THRESHOLD,
+                   dest="dense_threshold",
                    help="n_linear threshold where --inner-method auto selects dense")
     p.add_argument("--hmc", action="store_true", dest="sample",
                    help="run HMC (NUTS) for the posterior mean/std")

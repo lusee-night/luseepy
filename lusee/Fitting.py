@@ -299,10 +299,26 @@ def linear_solve_dense(A, n_theta, N_inv, S_inv, data):
 # Generic VarPro driver
 # ============================================================================
 
+DENSE_THRESHOLD = 1024
+"""Default ``n_linear`` at or below which the inner Wiener step goes dense.
+
+The dense solve costs ``n_linear`` batched forward evaluations plus a Cholesky;
+CG costs roughly two forwards per iteration.  With a batched forward (both the
+four-port ``FullStokesCroSimulator`` and the batched-MEPA ``CroSimulator``) the
+crossover sits well above the old value of 512: measured on CPU against the
+BGL_v16 response, dense beat CG by 4x at ``n_linear=576`` and by 3x at
+``n_linear=1024`` (``lmax=31``, the demos' default), reaching an equal or
+slightly lower chi2.  The cost is memory -- the dense path materialises the
+``(n_linear, ndata)`` column matrix, which roughly doubled peak RSS (3.1 -> 6.4
+GB) in that lmax=31 run.  Force the other branch with ``inner_method='cg'``
+(or ``'dense'``) when that trade is wrong for your machine.
+"""
+
+
 def profile_optimize(predict, paramset, data, N_inv, *, maxiter=100,
                      inner_maxiter=1500, inner_tol=1e-10, max_restarts=3,
                      ftol=2.22e-9, gtol=1e-5, tol=None, verbose=True,
-                     inner_method="auto", dense_threshold=512):
+                     inner_method="auto", dense_threshold=DENSE_THRESHOLD):
     """Variable-projection optimisation of a conditionally-linear model.
 
     :param predict: Assembly ``predict(linear: dict, nonlinear: dict) ->
@@ -311,6 +327,9 @@ def profile_optimize(predict, paramset, data, N_inv, *, maxiter=100,
     :param paramset: :class:`ParamSet` describing the parameters.
     :param data: Data array (any shape; raveled internally).
     :param N_inv: Inverse noise variance, same shape as ``data``.
+    :param inner_method: ``'auto'`` (dense below ``dense_threshold``, else CG),
+        ``'cg'``, or ``'dense'``.
+    :param dense_threshold: See :data:`DENSE_THRESHOLD`.
     :returns: dict with ``linear`` (``{name: alm}``), ``nonlinear``
         (``{name: value}``), ``chi2``, ``nfev``, ``result``, ``paramset``.
     """

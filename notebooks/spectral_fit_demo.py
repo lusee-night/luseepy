@@ -39,6 +39,7 @@ import healpy as hp
 import fitsio
 
 import lusee
+from lusee.Fitting import DENSE_THRESHOLD
 
 
 # ----------------------------------------------------------------------------
@@ -104,7 +105,7 @@ def run(lmax=31, Nside=16, beta_nside=8,
         freq=(15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0), f_fid=25.0,
         obs_range="2025-02-01 13:00:00 to 2025-02-28 13:00:00",
         dt_sec=2 * 3600.0, taper=0.03, maxiter=200, inner_maxiter=1500,
-        inner_method="auto", dense_threshold=512, fisher_method="auto",
+        inner_method="auto", dense_threshold=DENSE_THRESHOLD, fisher_method="auto",
         fit_gain=False, truth="powerlaw", target_snr=1e4, compute_fisher=False,
         sample=False, num_samples=300, num_warmup=300, hmc_engine="nuts",
         hmc_num_integration_steps=10, noise_seed=42, outfile=None,
@@ -357,7 +358,8 @@ def main(argv=None):
     p.add_argument("--inner-method", choices=["auto", "cg", "dense"],
                    default="auto", dest="inner_method",
                    help="linear solve method for the VarPro inner step")
-    p.add_argument("--dense-threshold", type=int, default=512, dest="dense_threshold",
+    p.add_argument("--dense-threshold", type=int, default=DENSE_THRESHOLD,
+                   dest="dense_threshold",
                    help="n_linear threshold where --inner-method auto selects dense")
     p.add_argument("--fit-gain", action="store_true", dest="fit_gain",
                    help="fit a broadband instrument gain (bilinear with flux)")

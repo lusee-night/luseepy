@@ -332,9 +332,24 @@ The current path adds two GPU-oriented changes while preserving the old fallback
   used for plotting and dynamic `beam=` pytrees.
 * `profile_optimize()` has `inner_method={auto,cg,dense}`. `auto` chooses a
   dense Cholesky solve when the linear block is small (`n_linear <=
-  dense_threshold`, default 512) and CG otherwise. For the common
-  `lmax=16` spectral run, `n_linear=289`, so the inner solve is dense by default.
-  This avoids thousands of matrix-free VJP/CG forwards on the GPU.
+  dense_threshold`, default `lusee.Fitting.DENSE_THRESHOLD = 1024`) and CG
+  otherwise. This avoids thousands of matrix-free VJP/CG forwards.
+
+  The threshold was raised from 512 to 1024 once both engines had a batched
+  forward: dense costs `n_linear` batched forwards plus a Cholesky, CG costs
+  roughly two forwards per iteration, so a cheap forward pushes the crossover
+  up. Measured on CPU against the BGL_v16 four-port response
+  (`--truth ulsa --dt-hours 8`, 14-day window):
+
+  | config | CG | dense |
+  | --- | --- | --- |
+  | `lmax=23`, `n_linear=576`, 10 evals | 127 s | **32 s** |
+  | `lmax=31`, `n_linear=1024`, 6 evals | 218 s | **76 s** |
+
+  Both reached the same χ² to ~0.1 % (dense marginally lower). The cost is
+  memory: the dense path materialises the `(n_linear, ndata)` column matrix,
+  which roughly doubled peak RSS in the `lmax=31` run (3.1 → 6.4 GB). Beyond
+  `lmax=31` — or on a memory-tight machine — force `--inner-method cg`.
 
 `linear_fisher()` has the same idea: for small blocks it builds the dense Fisher
 matrix by batching all design-matrix columns with `jax.vmap`, then computes the
