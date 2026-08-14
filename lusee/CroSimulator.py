@@ -83,6 +83,7 @@ class CroSimulator(SimulatorBase):
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
         self._prepare_beams_for_simulation(beams, combinations)
+        self._mepa_plan_cache = {}
 
     def _prepare_beams_for_simulation(self, beams, combinations):
         if all(getattr(beam, "is_jax_pytree_beam", False) for beam in beams):
@@ -158,13 +159,141 @@ class CroSimulator(SimulatorBase):
                 f"CroSimulator requires galactic sky frame, got {sky_model.frame}"
             )
         efbeams = beam.efbeams if beam is not None else self.efbeams
-        self.result = self._simulate_croissant_mepa(times, ntimes, delta_t,
-                                                     sky_model=sky_model,
-                                                     efbeams=efbeams)
+        use_batched = (
+            beam is None
+            and self.extra_opts.get("batched_mepa", True)
+            and not self.extra_opts.get("plot_sky_and_beam", False)
+        )
+        if use_batched:
+            self.result = self._simulate_croissant_mepa_batched(
+                times, sky_model=sky_model
+            )
+        else:
+            self.result = self._simulate_croissant_mepa_loop(
+                times, ntimes, delta_t, sky_model=sky_model, efbeams=efbeams
+            )
         return self.result
 
+    def _mepa_plan_key(self, times):
+        # times.jd is vectorised on an astropy Time array; iterating element by
+        # element costs ~0.1 ms per timestamp, which is not free when the plan
+        # is looked up on every forward call of a fit.
+        jd = np.asarray(getattr(times, "jd", None) if hasattr(times, "jd")
+                        else [t.jd for t in times], dtype=np.float64)
+        return (
+            jd.tobytes(),
+            int(self.lmax),
+            np.asarray(self.freq, dtype=np.float64).tobytes(),
+            int(len(self.efbeams)),
+        )
+
+    def _beam_efbeams_to_channel_arrays(self, efbeams):
+        beam_channels = []
+        ground_channels = []
+        for ci, cj, beamreal, beamimag, groundPowerReal, groundPowerImag in efbeams:
+            beam_channels.append(jnp.asarray(beamreal))
+            gp = jnp.asarray(groundPowerReal)
+            if gp.ndim == 0:
+                gp = jnp.full((self.Nfreq,), gp)
+            ground_channels.append(gp)
+            if ci != cj:
+                beam_channels.append(jnp.asarray(beamimag))
+                gp = jnp.asarray(groundPowerImag)
+                if gp.ndim == 0:
+                    gp = jnp.full((self.Nfreq,), gp)
+                ground_channels.append(gp)
+        return jnp.stack(beam_channels), jnp.stack(ground_channels)
+
+    def _get_mepa_plan(self, times):
+        key = self._mepa_plan_key(times)
+        if key in self._mepa_plan_cache:
+            return self._mepa_plan_cache[key]
+
+        ensure_lunarsky_moon_frame()
+        sim_L = self.lmax + 1
+        topo = LunarTopo(obstime=times[0], location=self.obs.loc)
+        eul_topo, dl_topo = cro.rotations.generate_euler_dl(
+            self.lmax, topo, "mepa"
+        )
+        topo2mepa = partial(
+            s2fft.utils.rotation.rotate_flms,
+            L=sim_L,
+            rotation=eul_topo,
+            dl_array=dl_topo,
+        )
+
+        # TDB, matching the loop path: a raw .jd is UTC-scale and shifts the
+        # MEPA reference epoch by ~69 s.
+        et = cro.rotations.jd_to_et(times[0].tdb.jd)
+        eul_gal, dl_gal = cro.rotations.generate_euler_dl(
+            self.lmax, "galactic", "mepa", et=et
+        )
+        delta_t_sec = np.arange(len(times), dtype=float) * self.obs.deltaT_sec
+        phases = cro.simulator.rot_alm_z(self.lmax, times=delta_t_sec)
+
+        beam_hp, ground_power = self._beam_efbeams_to_channel_arrays(self.efbeams)
+
+        def hp_to_2d(flm_hp):
+            return s2fft.sampling.reindex.flm_hp_to_2d_fast(flm_hp, sim_L)
+
+        beam_2d = jax.vmap(jax.vmap(hp_to_2d))(beam_hp)
+        beam_mepa = jax.vmap(jax.vmap(topo2mepa))(beam_2d)
+
+        plan = {
+            "sim_L": sim_L,
+            "phases": jnp.asarray(phases),
+            "beam_mepa": jnp.asarray(beam_mepa),
+            "ground_power": jnp.asarray(ground_power),
+            "gal_eul": eul_gal,
+            "gal_dl": dl_gal,
+        }
+        self._mepa_plan_cache[key] = plan
+        return plan
+
+    def _simulate_croissant_mepa_batched(self, times, sky_model=None):
+        """Batched MEPA pipeline for fixed beams.
+
+        The observation-dependent phases, frame rotations, and beam MEPA alms
+        are cached once. Each forward call only builds the sky alms and performs
+        a single channel-batched convolution.
+        """
+        if sky_model is None:
+            sky_model = self.sky_model
+        plan = self._get_mepa_plan(times)
+        sim_L = plan["sim_L"]
+
+        def hp_to_2d(flm_hp):
+            return s2fft.sampling.reindex.flm_hp_to_2d_fast(
+                jnp.asarray(flm_hp), sim_L
+            )
+
+        # dispatch + map for the EFFECTIVE sky: sky_model may be a
+        # simulate(sky=...) override on a different native grid than the
+        # constructor sky model
+        sky_gal = self.sky_alm_at_freq(sky_model, xp=jnp)
+        sky_2d = jax.vmap(hp_to_2d)(jnp.asarray(sky_gal))
+        gal2mepa = partial(
+            s2fft.utils.rotation.rotate_flms,
+            L=sim_L,
+            rotation=plan["gal_eul"],
+            dl_array=plan["gal_dl"],
+        )
+        sky_mepa = jax.vmap(gal2mepa)(sky_2d)
+
+        vis = jnp.einsum(
+            "flm,tm,cflm->tcf",
+            jnp.conj(sky_mepa),
+            plan["phases"],
+            plan["beam_mepa"],
+            optimize=True,
+        )
+        return (
+            vis.real / (4.0 * jnp.pi)
+            + self.Tground * plan["ground_power"][None, :, :]
+        )
+
     def _simulate_croissant_mepa(self, times, ntimes, delta_t,
-                                    sky_model=None, efbeams=None):
+                                      sky_model=None, efbeams=None):
         """MEPA pipeline: sky gal→MEPA once (epoch-aware), beam topo(t0)→MEPA once,
         rot_alm_z(dt) for time evolution, then convolve."""
         ensure_lunarsky_moon_frame()
@@ -298,3 +427,7 @@ class CroSimulator(SimulatorBase):
                     res.append(Timag[ti])
             wfall.append(res)
         return jnp.asarray(wfall)
+
+    # The per-combination loop is the reference implementation; the batched
+    # path above must reproduce it exactly (tests/test_crosimulator.py).
+    _simulate_croissant_mepa_loop = _simulate_croissant_mepa
