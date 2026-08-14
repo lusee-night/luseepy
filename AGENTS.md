@@ -166,6 +166,9 @@ until the public cutover. Key pieces:
 - Complex128 response validation requires `JAX_ENABLE_X64=True`; the
   croissant development checkout installs with
   `uv pip install -e ../croissant -e .` (pins the slosar/s2fft fork).
+  Canonical croissant is `christianhbye/croissant` main, pinned by SHA in
+  `pyproject.toml`; a dev checkout must include the #131 polarized
+  spin-transport fix or gal→MEPA Q/U comes out conjugate-rotated.
 
 Docs: `docs/instrument_response.md` (usage + converter contracts),
 `docs/four_port_physics_review.md` (physics review + provenance record),
