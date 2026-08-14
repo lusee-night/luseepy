@@ -37,7 +37,7 @@ python tests/SimTest.py
 python tests/SimReadTest.py <path-to-fits>
 ```
 
-CI runs tests via `.github/workflows/luseepy-test.yml`. It uses `LUSEE_DRIVE_DIR=Drive` (a local tarball extracted during CI).
+CI runs tests via `.github/workflows/luseepy-test.yml`. It uses `LUSEE_DRIVE_DIR=Drive`, a four-port-only snapshot tarball extracted during CI (BGL_v16 response + Model54 electronics + ULSA sky; no legacy scalar beams — tests needing them skip via the `legacy_beam_path` fixture). CI's sim-driver step runs `config/four_port_example.yaml` and checks the output with `tests/SimReadTest.py`.
 
 ## Running a Simulation
 

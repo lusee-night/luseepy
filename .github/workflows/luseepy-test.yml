@@ -27,18 +27,14 @@ jobs:
       - run: curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh
       - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: uv sync
-      - run: wget "https://drive.google.com/uc?export=download&id=1PbU432IYAFSzOjWRrKMoGFR6F1M3dmaV" -O drive.tgz
-      - run: tar zxvf drive.tgz
-      # The CI Drive snapshot predates the 2026-08 Drive reorganisation that
-      # renamed Simulations/BeamModels to Simulations/OldBeamModels (BeamModels
-      # now carries the four-port BGL_v16 responses, which are too large to
-      # snapshot). Adapt an old-layout snapshot in place; this is a no-op once
-      # the snapshot is regenerated from the reorganised Drive.
-      - run: |
-          if [ -d Drive/Simulations/BeamModels/LanderRegolithComparison ]; then
-            mv Drive/Simulations/BeamModels Drive/Simulations/OldBeamModels
-          fi
+      # Four-port-only Drive snapshot (2026-08 reorganisation): the BGL_v16
+      # response, the Model54 electronics, and the ULSA sky. The deprecated
+      # legacy scalar beams are absent; tests that need them skip. The
+      # drive.usercontent endpoint with confirm=t serves large files directly
+      # (the plain uc?export=download link returns an interstitial page).
+      - run: wget -q "https://drive.usercontent.google.com/download?id=1--Vn75Ip4uVFBD39oSD2WnDHeJny33kW&export=download&confirm=t" -O drive.tbz2
+      - run: tar xjf drive.tbz2
       - run: uv run pytest tests/ -v -m "not manual and not slow"
       - run: uv run pytest tests/test_lunar_28day_Cro_vs_default.py -v
-      - run: cd simulation; ln -s ../Drive .; mkdir -p output; uv run python driver/run_sim.py config/example.yaml; ls -l output
-      - run: uv run python tests/SimReadTest.py simulation/output/sim_example.fits
+      - run: cd simulation; ln -s ../Drive .; mkdir -p output; uv run python driver/run_sim.py config/four_port_example.yaml; ls -l output
+      - run: uv run python tests/SimReadTest.py simulation/output/four_port_covariance.fits
