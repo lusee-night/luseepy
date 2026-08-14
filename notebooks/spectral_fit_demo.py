@@ -45,7 +45,10 @@ import lusee
 # Configuration
 # ----------------------------------------------------------------------------
 DRIVE = os.environ.get("LUSEE_DRIVE_DIR")  # resolved lazily so --help works unset
-BEAM_FILE = (DRIVE or "") + "/Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
+# Default instrument: the coupled four-port response (FITS v3).  ``build_instrument``
+# dispatches on the file itself, so a legacy per-antenna beam FITS (now under
+# Simulations/OldBeamModels/) still works if passed via --beam-file.
+BEAM_FILE = (DRIVE or "") + "/Simulations/BeamModels/BGL_v16/lusee_bgl_v16_response_v3.fits"
 SKY_FILE = (DRIVE or "") + "/Simulations/SkyModels/ULSA_32_ddi_smooth.fits"
 
 
@@ -107,7 +110,7 @@ def run(lmax=31, Nside=16, beta_nside=8,
         hmc_num_integration_steps=10, noise_seed=42, outfile=None,
         beta_smooth=False, beta_n_center=16, beta_n_far=2, beta_d0=20.0,
         beta_smooth_w=1.0, beta_anchor=1e-4,
-        fix_beta=None, beta_const=-2.5):
+        fix_beta=None, beta_const=-2.5, beam_file=None):
 
     if not DRIVE:
         raise SystemExit("LUSEE_DRIVE_DIR must be set (beam + ULSA data files).")
@@ -115,11 +118,16 @@ def run(lmax=31, Nside=16, beta_nside=8,
     print(f"=== Spectral fit ({truth} truth): lmax={lmax} Nside={Nside} "
           f"beta_nside={beta_nside} freq={freq.tolist()} f_fid={f_fid} ===")
 
-    # Instrument (Tground=0, purely linear-in-flux forward).
+    # Instrument.  A four-port response FITS v3 gives a FullStokesCroSimulator
+    # (16 packed covariance channels in V^2/Hz, T_moon=T_ant=0); a legacy beam
+    # FITS gives the per-antenna CroSimulator (Tground=0, channels in K).  The
+    # forward stays linear in flux either way, which is all the fit needs.
     sim, beams, obs = lusee.mapmaker.build_instrument(
-        beam_file=BEAM_FILE, obs_range=obs_range, freq=freq, lmax=lmax,
-        taper=taper, dt_sec=dt_sec)
-    print(f"{len(obs.times)} timesteps, {len(sim.combinations)} combinations")
+        beam_file=beam_file or BEAM_FILE, obs_range=obs_range, freq=freq,
+        lmax=lmax, taper=taper, dt_sec=dt_sec)
+    channels = lusee.mapmaker.channel_names(sim)
+    print(f"{type(sim).__name__}: {len(obs.times)} timesteps, "
+          f"{len(channels)} channels {channels}")
 
     # Truth + mock data.  'powerlaw' generates self-consistent data from the
     # spectral model; 'ulsa' generates data from the real ULSA maps (model is
@@ -138,18 +146,20 @@ def run(lmax=31, Nside=16, beta_nside=8,
     print(f"forward (truth) in {time.time()-t0:.1f}s, data shape {data_clean.shape}")
 
     sigma = lusee.mapmaker.compute_radiometric_noise(
-        data_clean, combinations=sim.combinations,
-        delta_f_hz=1e6, delta_t_sec=dt_sec)
+        data_clean, delta_f_hz=1e6, delta_t_sec=dt_sec,
+        **lusee.mapmaker.channel_metadata(sim))
     if target_snr is not None:
         # Scale the (otherwise insane ~2e5) radiometric SNR down to a realistic
         # floor; high SNR makes chi2 model-mismatch-dominated and the landscape
-        # needle-steep, which hurts the outer optimiser.
+        # needle-steep, which hurts the outer optimiser.  Both data and sigma
+        # are in the simulator's own units, so this ratio is unit-free.
         snr0 = float(jnp.std(data_clean)) / float(jnp.median(sigma))
         sigma = sigma * (snr0 / target_snr)
     key = jax.random.PRNGKey(noise_seed)
     data = data_clean + sigma * jax.random.normal(key, data_clean.shape)
     N_inv = 1.0 / jnp.asarray(sigma) ** 2
-    print(f"median sigma = {float(jnp.median(sigma)):.3f} K, "
+    print(f"median sigma = {float(jnp.median(sigma)):.4g} "
+          f"{getattr(sim, 'result_units', 'K')}, "
           f"SNR ~ {float(jnp.std(data_clean))/float(jnp.median(sigma)):.0f}")
 
     # Flux prior C_l from the true flux power spectrum (oracle prior).
@@ -333,7 +343,11 @@ def main(argv=None):
                    dest="obs_range")
     p.add_argument("--dt-hours", type=float, default=4.0,
                    help="time step in hours")
-    p.add_argument("--taper", type=float, default=0.03)
+    p.add_argument("--taper", type=float, default=0.03,
+                   help="ground taper; legacy per-antenna beams only")
+    p.add_argument("--beam-file", default=None, dest="beam_file",
+                   help="instrument FITS; default is the four-port response v3 "
+                        "(a legacy per-antenna beam file also works)")
     p.add_argument("--truth", choices=["powerlaw", "ulsa"], default="ulsa",
                    help="generate data from the spectral model ('powerlaw') "
                         "or from the real ULSA maps ('ulsa')")
@@ -401,7 +415,7 @@ def main(argv=None):
         beta_smooth=a.beta_smooth, beta_n_center=a.beta_n_center,
         beta_n_far=a.beta_n_far, beta_d0=a.beta_d0,
         beta_smooth_w=a.beta_smooth_w, beta_anchor=a.beta_anchor,
-        fix_beta=a.fix_beta, beta_const=a.beta_const)
+        fix_beta=a.fix_beta, beta_const=a.beta_const, beam_file=a.beam_file)
 
 
 if __name__ == "__main__":

@@ -97,7 +97,11 @@ class SpectralHealpixSky:
         self.beta_pix = jnp.asarray(beta_pix)
         self.Nside = int(Nside)
         self.lmax = int(lmax)
-        self.freq = canonicalize_frequencies(freq, as_jax=True)
+        # Host-side numpy on purpose: freq is static metadata (it lives in the
+        # pytree *aux*, not the children).  Coercing it with jnp.asarray turns
+        # it into a tracer whenever the model is built inside a jit, and the
+        # simulators' frequency dispatch reads it with np.asarray.
+        self.freq = canonicalize_frequencies(freq)
         self.f_fid = float(f_fid)
         self.beta_nside = int(beta_nside) if beta_nside is not None else int(Nside)
         self.frame = frame
@@ -130,7 +134,7 @@ class SpectralHealpixSky:
         sky.beta_pix = beta_pix
         sky.Nside = Nside
         sky.lmax = lmax
-        sky.freq = jnp.asarray(freq)
+        sky.freq = np.asarray(freq, dtype=np.float64)
         sky.f_fid = f_fid
         sky.beta_nside = beta_nside
         sky.frame = frame
@@ -152,19 +156,23 @@ class SpectralHealpixSky:
         return s2fft.inverse(flm2d, L, nside=self.Nside, sampling="healpix",
                              method="jax", reality=True)
 
-    def get_alm(self, ndx, freq=None):
-        """Healpy-packed alm of the sky at the requested frequency indices.
+    def get_alm_at_freq(self, target_freq):
+        """Healpy-packed alm evaluated exactly at ``target_freq`` (MHz).
 
-        :param ndx: Frequency index or list of indices into ``self.freq``.
-        :returns: Array ``(len(ndx), nalm)`` of complex alm, one per frequency.
+        The model is closed-form in frequency, so the simulators call this
+        instead of building a ``FrequencyMap`` onto ``self.freq`` -- the sky is
+        evaluated at the simulator's own target grid with no interpolation, and
+        ``self.freq`` is never touched inside a trace.
+
+        :param target_freq: Frequencies in MHz (array-like).
+        :returns: Array ``(len(target_freq), nalm)`` of complex alm.
         """
         L = self.lmax + 1
         Nside = self.Nside
         flux_map = self.flux_map()
         beta_map = self.beta_map()
 
-        ndx = np.atleast_1d(np.asarray(ndx)).astype(int)
-        freqs = jnp.asarray(self.freq)[jnp.asarray(ndx)]
+        freqs = jnp.asarray(np.atleast_1d(np.asarray(target_freq, dtype=float)))
         ln_ratio = jnp.log(freqs / self.f_fid)
 
         def one(lf):
@@ -174,6 +182,15 @@ class SpectralHealpixSky:
             return flm_2d_to_hp_fast(flm, L)
 
         return jax.vmap(one)(ln_ratio)
+
+    def get_alm(self, ndx, freq=None):
+        """Healpy-packed alm of the sky at the requested frequency indices.
+
+        :param ndx: Frequency index or list of indices into ``self.freq``.
+        :returns: Array ``(len(ndx), nalm)`` of complex alm, one per frequency.
+        """
+        ndx = np.atleast_1d(np.asarray(ndx)).astype(int)
+        return self.get_alm_at_freq(np.asarray(self.freq)[ndx])
 
     # -- construction helpers -------------------------------------------------
 

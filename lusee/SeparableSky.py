@@ -51,7 +51,11 @@ class SeparableHealpixSky:
         self.flux_alms = jnp.asarray(flux_alms)
         self.shapes = jnp.asarray(shapes)
         self.lmax = int(lmax)
-        self.freq = canonicalize_frequencies(freq, as_jax=True)
+        # Host-side numpy on purpose: freq is static metadata (it lives in the
+        # pytree *aux*, not the children).  Coercing it with jnp.asarray turns
+        # it into a tracer whenever the model is built inside a jit, and the
+        # simulators' frequency dispatch reads it with np.asarray.
+        self.freq = canonicalize_frequencies(freq)
         self.frame = frame
 
     def tree_flatten(self):
@@ -67,7 +71,7 @@ class SeparableHealpixSky:
         sky.flux_alms = flux_alms
         sky.shapes = shapes
         sky.lmax = lmax
-        sky.freq = jnp.asarray(freq)
+        sky.freq = np.asarray(freq, dtype=np.float64)
         sky.frame = frame
         return sky
 
@@ -80,6 +84,25 @@ class SeparableHealpixSky:
         ndx = np.atleast_1d(np.asarray(ndx)).astype(int)
         sh = self.shapes[:, jnp.asarray(ndx)]              # (n_templ, K)
         return jnp.einsum("ik,ia->ka", sh, self.flux_alms)  # (K, nalm)
+
+    def get_alm_at_freq(self, target_freq):
+        """Healpy-packed alm on the simulator's target frequency grid.
+
+        The shapes are free per fitted frequency, so unlike the power-law model
+        this one is *not* closed-form in ``f``: it can only be evaluated on its
+        own grid.  Implementing the method anyway makes the simulators take the
+        exact-evaluation branch, which never touches ``self.freq`` inside a
+        trace (``jnp.asarray`` would turn it into a tracer there).
+        """
+        target = np.atleast_1d(np.asarray(target_freq, dtype=np.float64))
+        own = np.asarray(self.freq, dtype=np.float64)
+        if target.shape != own.shape or not np.allclose(target, own):
+            raise ValueError(
+                "SeparableHealpixSky has one free shape value per fitted "
+                "frequency and can only be evaluated on its own grid; got "
+                f"{target.tolist()} for {own.tolist()}."
+            )
+        return jnp.einsum("ik,ia->ka", self.shapes, self.flux_alms)
 
     def flux_map_at(self, freq_value, Nside):
         """Total flux map at one frequency (host-side helper for plotting)."""

@@ -45,7 +45,10 @@ from lusee.SeparableSky import SeparableSkyModule
 from lusee.Fitting import BeamModule, InstrumentModule, Experiment
 
 DRIVE = os.environ.get("LUSEE_DRIVE_DIR")  # resolved lazily so --help works unset
-BEAM_FILE = (DRIVE or "") + "/Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
+# Default instrument: the coupled four-port response (FITS v3).  ``build_instrument``
+# dispatches on the file itself, so a legacy per-antenna beam FITS (now under
+# Simulations/OldBeamModels/) still works if passed via --beam-file.
+BEAM_FILE = (DRIVE or "") + "/Simulations/BeamModels/BGL_v16/lusee_bgl_v16_response_v3.fits"
 SKY_FILE = (DRIVE or "") + "/Simulations/SkyModels/ULSA_32_ddi_smooth.fits"
 
 
@@ -87,6 +90,19 @@ def build_truth(Nside, lmax, freq, ref_freq, n_templates):
     return data_sky, jnp.asarray(flux_alms), jnp.asarray(shapes)
 
 
+def flat_reference_sky(freq, lmax):
+    """A 1 K monopole at every frequency — the instrument's own response probe.
+
+    Pushing this through the simulator gives, per channel and time, the pure
+    instrument frequency response (no sky spectral structure), which is what
+    the data-driven shape initialisation divides out.
+    """
+    nside = max(8, 1 << int(np.ceil(np.log2(max(4.0, (lmax + 1) / 3.0)))))
+    return lusee.HealpixSky(nside, lmax,
+                            maps=[np.ones(12 * nside ** 2)] * len(freq),
+                            freq=freq, frame="galactic")
+
+
 def run(lmax=31, Nside=16, n_templates=2,
         freq=(15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0), ref_freq=25.0,
         obs_range="2025-02-01 13:00:00 to 2025-02-28 13:00:00",
@@ -94,7 +110,8 @@ def run(lmax=31, Nside=16, n_templates=2,
         inner_method="auto", dense_threshold=512,
         init_from="data", shape_perturb=0.25, target_snr=1e4,
         sample=False, num_samples=300, num_warmup=300, hmc_engine="nuts",
-        hmc_num_integration_steps=10, noise_seed=42, outfile=None):
+        hmc_num_integration_steps=10, noise_seed=42, outfile=None,
+        beam_file=None):
 
     if not DRIVE:
         raise SystemExit("LUSEE_DRIVE_DIR must be set (beam + ULSA data files).")
@@ -102,10 +119,16 @@ def run(lmax=31, Nside=16, n_templates=2,
     print(f"=== Separable fit: lmax={lmax} Nside={Nside} "
           f"n_templates={n_templates} freq={freq.tolist()} ref={ref_freq} ===")
 
+    # A four-port response FITS v3 gives a FullStokesCroSimulator (16 packed
+    # covariance channels in V^2/Hz); a legacy beam FITS gives the per-antenna
+    # CroSimulator (channels in K).  The forward is linear in the template maps
+    # either way, which is all the fit needs.
     sim, beams, obs = lusee.mapmaker.build_instrument(
-        beam_file=BEAM_FILE, obs_range=obs_range, freq=freq, lmax=lmax,
-        taper=taper, dt_sec=dt_sec)
-    print(f"{len(obs.times)} timesteps, {len(sim.combinations)} combinations")
+        beam_file=beam_file or BEAM_FILE, obs_range=obs_range, freq=freq,
+        lmax=lmax, taper=taper, dt_sec=dt_sec)
+    channels = lusee.mapmaker.channel_names(sim)
+    print(f"{type(sim).__name__}: {len(obs.times)} timesteps, "
+          f"{len(channels)} channels {channels}")
 
     data_sky, flux_true, shapes_true = build_truth(
         Nside, lmax, freq, ref_freq, n_templates)
@@ -115,34 +138,43 @@ def run(lmax=31, Nside=16, n_templates=2,
     print(f"forward (ULSA) in {time.time()-t0:.1f}s, data shape {data_clean.shape}")
 
     sigma = lusee.mapmaker.compute_radiometric_noise(
-        data_clean, combinations=sim.combinations,
-        delta_f_hz=1e6, delta_t_sec=dt_sec)
+        data_clean, delta_f_hz=1e6, delta_t_sec=dt_sec,
+        **lusee.mapmaker.channel_metadata(sim))
     if target_snr is not None:
         snr0 = float(jnp.std(data_clean)) / float(jnp.median(sigma))
         sigma = sigma * (snr0 / target_snr)
     data = data_clean + sigma * jax.random.normal(
         jax.random.PRNGKey(noise_seed), data_clean.shape)
     N_inv = 1.0 / jnp.asarray(sigma) ** 2
-    print(f"median sigma = {float(jnp.median(sigma)):.3f} K, "
+    print(f"median sigma = {float(jnp.median(sigma)):.4g} "
+          f"{getattr(sim, 'result_units', 'K')}, "
           f"SNR ~ {float(jnp.std(data_clean))/float(jnp.median(sigma)):.0f}")
 
     cl_flux = [hp.alm2cl(np.asarray(flux_true[i])) for i in range(n_templates)]
 
     k_ref = int(np.argmin(np.abs(freq - ref_freq)))
     if init_from == "data":
-        # Realistic, truth-free initialisation: PCA of the *data* over frequency.
-        # Each (time, channel) sample is a row; the first n_templates right
-        # singular vectors are the dominant frequency modes of what the
-        # instrument actually measured.  Anchor each to 1 at the reference
-        # frequency (guarding against a near-zero crossing there).
-        D = np.asarray(data).reshape(-1, len(freq))          # (Ntime*Nchan, Nfreq)
+        # Realistic, truth-free initialisation: PCA of the data over frequency.
+        # The raw data carry the *instrument's* frequency response as well as
+        # the sky's, and for the four-port response that dominates (the packed
+        # covariance swings orders of magnitude across the band), so a PCA of
+        # the raw waterfall returns instrument modes, not sky modes.  Divide by
+        # the response to a spectrally flat 1 K sky first: the ratio keeps the
+        # sky's frequency dependence and cancels the instrument's to leading
+        # order.  Autos only -- a flat sky's cross-imaginary response passes
+        # through zero, which the division would blow up.
+        response = np.asarray(sim.simulate(sky=flat_reference_sky(freq, lmax)))
+        autos = [k for k, name in enumerate(channels) if name[0] == name[1]]
+        whitened = np.asarray(data)[:, autos, :] / response[:, autos, :]
+        D = whitened.reshape(-1, len(freq))             # (Ntime*Nauto, Nfreq)
         _, _, Vt = np.linalg.svd(D, full_matrices=False)
         modes = Vt[:n_templates]                             # (n_templ, Nfreq)
         ref_vals = modes[:, k_ref]
         ref_vals = np.where(np.abs(ref_vals) < 1e-2,
                             np.sign(ref_vals + 1e-12) * 1e-2, ref_vals)
         shape_init = modes / ref_vals[:, None]
-        print("shape init from PCA of the DATA over frequency (truth not used)")
+        print("shape init from PCA of the DATA over frequency, deconvolved by "
+              "the flat-sky instrument response (truth not used)")
     else:
         # Truth-perturbation init (diagnostic only -- assumes knowing the truth).
         rng = np.random.default_rng(noise_seed)
@@ -277,7 +309,11 @@ def main(argv=None):
     p.add_argument("--obs-range", default="2025-02-01 13:00:00 to 2025-02-28 13:00:00",
                    dest="obs_range")
     p.add_argument("--dt-hours", type=float, default=4.0, help="time step in hours")
-    p.add_argument("--taper", type=float, default=0.03)
+    p.add_argument("--taper", type=float, default=0.03,
+                   help="ground taper; legacy per-antenna beams only")
+    p.add_argument("--beam-file", default=None, dest="beam_file",
+                   help="instrument FITS; default is the four-port response v3 "
+                        "(a legacy per-antenna beam file also works)")
     p.add_argument("--target-snr", type=float, default=1e4, dest="target_snr")
     p.add_argument("--init-from", choices=["data", "truth"], default="data",
                    dest="init_from",
@@ -316,7 +352,8 @@ def main(argv=None):
         target_snr=a.target_snr, sample=a.sample, hmc_engine=a.hmc_engine,
         hmc_num_integration_steps=a.hmc_num_integration_steps,
         num_samples=a.num_samples,
-        num_warmup=a.num_warmup, noise_seed=a.noise_seed, outfile=a.outfile)
+        num_warmup=a.num_warmup, noise_seed=a.noise_seed, outfile=a.outfile,
+        beam_file=a.beam_file)
 
 
 if __name__ == "__main__":

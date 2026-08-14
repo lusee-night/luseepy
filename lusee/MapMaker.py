@@ -456,6 +456,39 @@ def compute_radiometric_noise(data, combinations=None,
     return jnp.asarray(sigma)
 
 
+def channel_metadata(sim):
+    """Describe a simulator's packed output channels.
+
+    Returns ``{"products": ...}`` for a four-port response-v3 simulator and
+    ``{"combinations": ...}`` for a legacy per-antenna one, so the result can
+    be splatted straight into :func:`compute_radiometric_noise`.  Works before
+    ``simulate()`` has been called (``sim.product_labels`` is only populated
+    afterwards).
+
+    :param sim: A ``CroSimulator``/``FullStokesCroSimulator``-like simulator.
+    """
+    labels = getattr(sim, "product_labels", None)
+    if labels is None and hasattr(sim, "products"):
+        labels = normalize_products(sim.products)
+    if labels is not None:
+        return {"products": tuple(labels)}
+    return {"combinations": tuple(sim.combinations)}
+
+
+def channel_names(sim):
+    """Human-readable label per output channel, in packed channel order."""
+    meta = channel_metadata(sim)
+    if "products" in meta:
+        return tuple(meta["products"])
+    names = []
+    for i, j in meta["combinations"]:
+        if i == j:
+            names.append(f"{i}{j}R")
+        else:
+            names.extend((f"{i}{j}R", f"{i}{j}I"))
+    return tuple(names)
+
+
 def compute_cl_prior(sky_model, lmax):
     """Compute S^{-1} = 1/C_l from a sky model's power spectrum.
 
