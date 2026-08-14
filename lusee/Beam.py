@@ -17,7 +17,6 @@ import healpy as hp
 from scipy.special import sph_harm_y
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import RegularGridInterpolator
-from .frequencies import canonicalize_frequencies
 
 
 @lru_cache(maxsize=None)
@@ -316,10 +315,36 @@ class Beam:
     :type phi: numpy array
     """
     is_jax_pytree_beam = True
+
+    def __new__(cls, *args, **kwargs):
+        """Dispatch public FITS-v3 construction to the four-port response."""
+        if cls is not Beam:
+            return super().__new__(cls)
+
+        fname = kwargs.get("fname", args[0] if args else None)
+        require_validated = kwargs.get("require_validated", True)
+        if fname is not None and os.path.isfile(fname):
+            try:
+                version = int(dict(fitsio.read_header(fname)).get("VERSION", -1))
+            except (OSError, ValueError, TypeError):
+                version = -1
+            if version == 3:
+                from .InstrumentResponse import InstrumentResponse
+
+                return InstrumentResponse(
+                    fname,
+                    require_validated=require_validated,
+                )
+        return super().__new__(cls)
     
-    def __init__ (self, fname = None, id = None):
+    def __init__(
+        self,
+        fname=None,
+        id=None,
+        require_validated=True,
+    ):
         if fname is None:
-            fname = base = os.environ['LUSEE_DRIVE_DIR']+"Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
+            fname = base = os.environ['LUSEE_DRIVE_DIR']+"Simulations/OldBeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
         if not (os.path.isfile (fname) and os.access(fname, os.R_OK)):
             raise FileNotFoundError(f"Cannot open {fname}")
         header = dict(fitsio.read_header(fname))
@@ -337,7 +362,9 @@ class Beam:
             self.f_ground = jnp.asarray(fits['f_ground'].read())
         elif version==2:
             self.gain_conv = jnp.asarray(fits['gain_conv'].read())
-            self.freq = canonicalize_frequencies(fits['freq'].read(), as_jax=True)
+            # native grid stays host-side numpy: jnp would silently truncate
+            # to float32 without x64, defeating FrequencyMap's tolerances
+            self.freq = np.asarray(fits['freq'].read(), dtype=np.float64)
             
         self.freq_min = float(header['FREQ_MIN'])
         self.freq_max = float(header['FREQ_MAX'])
@@ -350,10 +377,7 @@ class Beam:
         self.Nphi = int(header['PHI_N'])
         self.header = header
         if version==1:
-            self.freq = canonicalize_frequencies(
-                np.linspace(self.freq_min, self.freq_max, self.Nfreq),
-                as_jax=True,
-            )
+            self.freq = np.linspace(self.freq_min, self.freq_max, self.Nfreq, dtype=np.float64)
         self.theta_deg = jnp.linspace(self.theta_min, self.theta_max,self.Ntheta)
         self.phi_deg = jnp.linspace(self.phi_min, self.phi_max,self.Nphi)
         self.theta = self.theta_deg/180*jnp.pi
@@ -424,7 +448,7 @@ class Beam:
         beam.gain = gain
         beam.gain_conv = gain_conv
         beam.f_ground = f_ground
-        beam.freq = jnp.asarray(freq_tuple)
+        beam.freq = np.asarray(freq_tuple, dtype=np.float64)
         beam.freq_min = freq_min
         beam.freq_max = freq_max
         beam.Nfreq = Nfreq

@@ -14,7 +14,7 @@ O = lusee.Observation(
 B = lusee.Beam(
     os.path.join(
         os.environ["LUSEE_DRIVE_DIR"],
-        "Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits",
+        "Simulations/OldBeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits",
     )
 )
 

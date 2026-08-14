@@ -19,7 +19,7 @@ import healpy as hp
 # ── Config ───────────────────────────────────────────────────────────
 
 DRIVE = os.environ.get("LUSEE_DRIVE_DIR", "/fs/zack/LuSEE-Night/")
-BEAM_FILE = DRIVE + "Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
+BEAM_FILE = DRIVE + "Simulations/OldBeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
 SKY_FILE = DRIVE + "Simulations/SkyModels/ULSA_32_ddi_smooth.fits"
 
 # Paper values: lmax=47, all 50 freqs, full cycle
@@ -53,7 +53,7 @@ t0 = time.time()
 data_clean = sim.simulate(sky=sky)
 print(f"Simulated in {time.time() - t0:.1f}s, data shape = {data_clean.shape}")
 
-# Radiometric noise: σ²_ij(t) = (T_ii T_jj + |V_ij|²) / (2 Δf Δt)
+# Packed real/imag radiometric variances are evaluated separately
 # Paper uses Δf = 1 MHz, Δt = 7200 s (2-hour integration)
 sigma = lusee.mapmaker.compute_radiometric_noise(
     data_clean, delta_f_hz=1e6, delta_t_sec=7200.0,

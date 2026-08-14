@@ -43,8 +43,11 @@ class TopoNumpySimulator(SimulatorBase):
     def __init__ (self, obs, beams, sky_model, Tground = 200.0,
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None,
                   lmax = 128, cross_power = None,
-                  extra_opts = {}):
-        super().__init__(obs, beams, sky_model, Tground, combinations, freq)
+                  extra_opts = {}, *, frequency_policy = "exact"):
+        super().__init__(
+            obs, beams, sky_model, Tground, combinations, freq,
+            frequency_policy=frequency_policy,
+        )
         self.lmax = lmax
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
@@ -94,7 +97,8 @@ class TopoNumpySimulator(SimulatorBase):
         else:
             raise NotImplementedError
 
-        sky_base = [np.asarray(s_, dtype=np.complex128) for s_ in self.sky_model.get_alm (self.freq_ndx_sky, self.freq)]
+        sky_target = self.sky_alm_at_freq(self.sky_model)
+        sky_base = [np.asarray(s_, dtype=np.complex128) for s_ in sky_target]
         wfall = []
         Nt = len (times)
         for ti, t in enumerate(times):

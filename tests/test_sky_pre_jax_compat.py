@@ -90,8 +90,11 @@ def assert_same_value(old_value, new_value, label):
     assert old_value == new_value, label
 
 
-def assert_same_members(old_obj, new_obj):
-    assert set(old_obj.__dict__) == set(new_obj.__dict__)
+def assert_same_members(old_obj, new_obj, ignore_new=()):
+    missing = set(old_obj.__dict__) - set(new_obj.__dict__)
+    assert not missing, f"attrs missing on new object: {sorted(missing)}"
+    extra = set(new_obj.__dict__) - set(old_obj.__dict__) - set(ignore_new)
+    assert not extra, f"undeclared new attrs: {sorted(extra)}"
     for name in sorted(old_obj.__dict__):
         assert_same_value(old_obj.__dict__[name], new_obj.__dict__[name], f"attr:{name}")
 
@@ -116,8 +119,8 @@ def assert_same_monosky_functions():
     assert_same_value(pre_monosky.B2T(brightness, np.array([5.0, 10.0, 20.0])), monosky.B2T(brightness, np.array([5.0, 10.0, 20.0])), "B2T")
 
 
-def assert_same_constsky_methods(old_sky, new_sky, ndx):
-    assert_same_members(old_sky, new_sky)
+def assert_same_constsky_methods(old_sky, new_sky, ndx, ignore_new=()):
+    assert_same_members(old_sky, new_sky, ignore_new=ignore_new)
     assert_same_value(old_sky.T(ndx), new_sky.T(ndx), "T")
     assert_same_value(old_sky.get_alm(ndx), new_sky.get_alm(ndx), "get_alm")
 
@@ -149,7 +152,12 @@ def test_skymodels_match_pre_jax_reference(tmp_path):
 
     old_dark = pre_sky.DarkAgesMonopole(nside, lmax, scaled=True, nu_min=17.0, nu_rms=12.0, A=0.05, freq=freq)
     new_dark = sky.DarkAgesMonopole(nside, lmax, scaled=True, nu_min=17.0, nu_rms=12.0, A=0.05, freq=freq)
-    assert_same_constsky_methods(old_dark, new_dark, ndx)
+    # the new class stores its spectrum parameters for get_alm_at_freq;
+    # the pre-jax reference predates that method
+    assert_same_constsky_methods(
+        old_dark, new_dark, ndx,
+        ignore_new=("_scaled", "_nu_min", "_nu_rms", "_A"),
+    )
 
     old_gal = pre_sky.GalCenter(nside, lmax, T=175.0, freq=freq)
     new_gal = sky.GalCenter(nside, lmax, T=175.0, freq=freq)

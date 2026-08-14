@@ -1,0 +1,702 @@
+# Four-port physical and scientific review
+
+Date: 2026-07-30
+
+Status: implementation update, items 1--6 of the recommended plan complete
+
+Reviewed revisions:
+
+- luseepy `codex/four-port-polarization-refactor`, six-finding
+  implementation baseline `b1e3534194c372658d1823a708a8adb2557d9eec`,
+  plus the integration changes recorded below
+- frequency-policy base `origin/an/fix_freqs_clean` at
+  `0c622cf90e844eec2975a2596c2f477dd75c0c64`
+- companion Croissant `codex/full-stokes-pair-response-topo` at
+  `daf1545bc57cb7fdf3d28cc468789a139c6eeb68`
+- TeX source of truth:
+  [`04_AsymmetricTwoAntenna.tex`](../../new_four_port_paper/04_AsymmetricTwoAntenna.tex)
+
+> **[AS/Claude, 2026-08-04] Reviewer comments in light of the now-known
+> receive-matrix provenance.** The provenance questions this review had to
+> leave open are resolved by `resources/HFSS/kaja.md`,
+> `resources/HFSS/ReceiveMatrix.ipynb`, and the accompanying
+> `Complex_Z_Matrix.csv`. Detailed comments are collected in the section
+> "2026-08-04 provenance update" below; the headline changes are:
+>
+> 1. The production `Receive_Matrix_Fields_{N,E,S,W}.csv` exports are none
+>    of the four supported converter contracts. They are **loaded** receive
+>    fields `R = ZL (ZA + ZL)^-1 H` in meters, with an averaged
+>    spare-preamp `ZL` baked in. A fifth explicit contract
+>    (`INPUT_KIND='loaded'`, `NORM_KIND='unloaded-zl'`, persisted `ZLoad`
+>    payload) has been added and the real artifact now converts and passes
+>    the full `VALIDATED=True` gate.
+> 2. The review's blocking caveat "no production four-port antenna response
+>    is currently available" is lifted: a real validated response file now
+>    exists, so absolute normalization, conditioning, and convergence work
+>    can move from synthetic fixtures to flight-like data.
+> 3. The solver coordinate frame is pinned by the hardware team: west
+>    antenna along HFSS +x, south along +y, so the export's phi=0 is ENU
+>    azimuth 180 degrees. Ingesting the CSV azimuth directly as
+>    response phi would have rotated the instrument by 180 degrees — this
+>    was not detectable from inside the repository and is exactly the class
+>    of error the review's C13-style warnings anticipated.
+
+This review covers only the new four-port `InstrumentResponse` path. In
+particular, constructing
+[`TopoJaxSimulator`](../lusee/TopoJaxSimulator.py#L20) with an
+`InstrumentResponse` dispatches to
+[`FullStokesTopoJaxSimulator`](../lusee/FullStokesSimulator.py#L666).
+The legacy beam path is out of scope.
+
+No production four-port antenna response is currently available. The beam
+files under `LUSEE_DRIVE_DIR` belong to the legacy path and were not used as
+surrogates. Consequently, this review can establish whether the equations
+and software contracts are correct, but it cannot certify absolute
+normalization, angular convergence, conditioning, or material-loss
+decomposition for a real response artifact.
+
+## Verdict
+
+The central full-Stokes and coupled-network calculation in the new
+`TopoJaxSimulator` path is physically sound. The coherency convention,
+pair-response kernels, effective-length scaling, visible-sky resistance,
+four-port loading matrix, and covariance contraction agree with the TeX
+derivation.
+
+The earlier ENU parity blocker is fixed in the reviewed Croissant revision.
+The earlier claim that peak-labelled inputs universally halve sky covariance
+was too broad. The converter now describes field units and field/source
+phasor conventions separately, normalizes raw phasors to SI RMS before
+forming a ratio, and treats already-normalized `rE/I` and effective length as
+ratio quantities. This removes both the conditional factor-of-two error and
+the untreated-HFSS-mV error from the supported conversion paths.
+
+The response and covariance schema now represents antenna metal loss
+separately and applies its own antenna temperature. This removes the
+previous software error for unequal lunar and antenna temperatures.
+Producing a realistic lossy response still requires new lossy and PEC
+solver products, which are not currently available.
+
+The two previously identified blockers in the software model are resolved.
+A scientifically validated realistic response still requires a new solver
+export and an independent accepted-power or plane-wave terminal-voltage
+check; no such artifact is currently available.
+
+The map-making radiometric-noise calculation now uses the correct separate
+real and imaginary cross-product variances. The map-maker still uses
+diagonal weights, so it does not yet represent covariance between the two
+components or between products that share a port; that approximation is now
+explicit.
+
+An independent Hertzian-dipole oracle exposed and now fixes a
+resolution-dependent horizon-ring bias in both the native `Rsky` integral
+and the harmonic response. The corrected half-weight convention agrees with
+the closed-form resistance at machine precision and converges to independent
+angular quadrature as `lmax` increases.
+
+Polarized sky `coord` and `frame` aliases are now canonicalized and required
+to agree before harmonic preparation. The whole-instrument rotation sign is
+documented and tested in both map and harmonic space.
+
+Finite-`lmax` positivity remains an important release-readiness risk, not a
+demonstrated operational bug: the simulator now records the relevant matrix
+diagnostics, but there is no real four-port response on which to set an
+operational threshold yet.
+
+## Wrong-result findings
+
+### 1. Resolved in software: antenna metal loss is separate from lunar loss
+
+The TeX explicitly decomposes the physical covariance into sky, lunar, and
+antenna-loss terms
+([lines 425--430](../../new_four_port_paper/04_AsymmetricTwoAntenna.tex#L425))
+and requires
+
+```text
+Herm(ZA) = Rsky + Rmoon + Rloss
+Rmoon = Herm(ZA) - Rsky - Rloss.
+```
+
+It recommends deriving the dense metal-loss matrix from lossy and PEC solver
+runs
+([lines 578--590](../../new_four_port_paper/04_AsymmetricTwoAntenna.tex#L578)):
+
+```text
+Rloss = Herm(ZA_lossy) - Herm(ZA_PEC)
+K_ant = 4 k_B T_ant Rloss.
+```
+
+The response schema now stores `Rsky`, `Rmoon`, and `Rloss`, and binds all
+three into the content hash. `LOSSMODEL` and `RLOSSSRC` are required
+provenance. A PEC response must explicitly declare `LOSSMODEL=PEC` and has a
+validated zero `Rloss`; a lossy response must supply the matrix rather than
+silently treating a missing matrix as zero.
+
+[`compute_sky_moon_resistance`](../lusee/ResponsePhysics.py) now defines
+
+```text
+Rmoon = Herm(ZA) - Rsky - Rloss.
+```
+
+The writer and loader validate reciprocity, passivity, Hermiticity, the
+three-term resistance identity, and PSD of `Rsky`, `Rmoon`, and `Rloss`.
+The interpolated target-frequency matrices are checked again before
+simulation.
+[`assemble_open_covariance`](../lusee/Covariance.py) now assembles
+
+```text
+K_open =
+    K_sky
+    + 4 k_B T_moon Rmoon
+    + 4 k_B T_ant Rloss.
+```
+
+`T_ant` is propagated by the driver, full-Stokes simulator, and calibrator
+and, when specified, recorded with `T_moon` in output provenance. An omitted
+temperature for a PEC response remains unspecified in the output rather than
+being misreported as a physical 0 K; zero is used only as the internal
+multiplier of its zero loss matrix. Output also carries `LOSSMODEL` and
+`RLOSSSRC`, and loading it exposes the loss provenance, temperatures, and
+`Rloss`. A nonzero lossy response without an explicit antenna temperature is
+rejected. Unequal-temperature, off-grid tests now distinguish Moon and metal
+heating through both the simulator and calibrator, while lossy
+equal-temperature blackbody closure verifies the complete resistance budget.
+MapMaker explicitly sets both thermal multipliers to zero because its
+forward operator is intentionally sky-linear and offset-free.
+
+This resolves the identified programming bug. It does not manufacture the
+missing physical inputs: a production `Rloss` and antenna-temperature model
+still require new solver products or instrument-expert input. The current
+schema revision was updated in place because no production version-3
+four-port artifact exists; any experimental pre-change version-3 file is
+intentionally incompatible with the new required provenance.
+
+### 2. Resolved in software: converter units and normalization are explicit
+
+The TeX gives two separate HFSS requirements:
+
+- exported `rE_peak` is in mV and must be multiplied by
+  `1e-3/sqrt(2)` to obtain RMS volts
+  ([line 217](../../new_four_port_paper/04_AsymmetricTwoAntenna.tex#L217));
+- a 1 V peak incident wave at a matched port corresponds to a 2 V peak,
+  or `sqrt(2)` V RMS, Thevenin source
+  ([lines 249--253](../../new_four_port_paper/04_AsymmetricTwoAntenna.tex#L249)).
+
+The converter now accepts four mutually explicit physical contracts:
+
+1. embedded raw `rE` in V or mV, with a separately described Thevenin
+   `Vsource`;
+2. direct bare raw `rE` in V or mV, with a complex
+   `(frequency, 4)` normalization-current array;
+3. an explicit already-per-ampere `rE/I` in V/A or mV/A; or
+4. effective length in m.
+
+For the first two paths, field and voltage/current phasors each carry their
+own RMS/peak convention. They are independently converted to SI RMS before
+the current reconstruction or division. Consequently, a peak/peak ratio is
+unchanged, while the TeX's mixed HFSS representation correctly applies
+`1e-3/sqrt(2)` to `rE_peak` and uses the independently supplied
+`sqrt(2) V` RMS Thevenin source. Already-formed `rE/I` and effective length
+are declared as ratio quantities and receive no field-only peak/RMS scale.
+
+Embedded effective length is rejected because current-basis unmixing is
+defined on the raw embedded field, not on a receive ratio that has already
+lost its excitation normalization. A direct raw bare field is no longer
+silently assumed to represent a 1 A basis.
+
+Validated provenance now records `FIELD_KIND`, `FIELD_UNIT`, `FIELD_AMP`,
+`NORM_KIND`, `NORM_UNIT`, `NORM_AMP`, and the canonical
+`H[m],SI-RMS` representation. Cross-field combinations are validated both
+when writing and loading. The canonical SI RMS `Vsource` or `Inorm`
+numerical payload is persisted and included in `CONTENT`, as is `Zref` for
+embedded input.
+
+Tests now cover the exact HFSS mV-peak/`sqrt(2) V`-RMS case, peak/RMS
+representation invariance, complex direct-current normalization, rejection
+of embedded effective length, frequency selection, and round trips of both
+normalization payloads. These close the identified software hole. Certifying
+a real artifact still requires one raw solver export and an independent
+accepted-power or plane-wave terminal-voltage check.
+
+### 3. Resolved at diagonal order: radiometric component variances
+
+For a proper complex Gaussian voltage vector and
+`N = delta_f delta_t` independent complex samples, the component statistics
+are
+
+```text
+Var(Re C_hat_ab) =
+    [Caa Cbb + Re(Cab^2)] / (2 N)
+
+Var(Im C_hat_ab) =
+    [Caa Cbb - Re(Cab^2)] / (2 N)
+
+Cov(Re C_hat_ab, Im C_hat_ab) = Im(Cab^2) / (2 N).
+```
+
+[`compute_radiometric_noise`](../lusee/MapMaker.py) now evaluates those two
+variances separately in both the response-v3 product-label path and the
+legacy combination path. Autos retain `Var(Caa) = Caa^2/N`. A previous
+absolute variance floor of `1e-30` was also removed: it was unit-dependent
+and overwhelmed realistic `V^2/Hz` covariance scales. Only negative
+values are clamped to zero before the square root; for a physical covariance
+such negatives can arise only from roundoff.
+
+Deterministic formula tests cover complex phase and very small physical
+units, and a proper-complex Gaussian Monte Carlo independently reproduces
+the real variance, imaginary variance, and their nonzero covariance.
+
+This fixes every diagonal variance passed to the current solver. It does not
+make the likelihood fully exact: real and imaginary channels are not
+generally independent, and products that share ports also have sampling
+covariance. [`solve`](../lusee/MapMaker.py) currently accepts diagonal
+weights, so the omitted covariance is explicitly documented as an
+approximation. A later extension can apply the full packed-real covariance
+per time/frequency sample.
+
+### 4. Resolved in software: the horizon ring was overweighted
+
+The response is available through `theta=90 degrees`, then padded by zero
+over the lower hemisphere. Previously, both
+[`compute_sky_moon_resistance`](../lusee/ResponsePhysics.py) and
+[`InstrumentResponse._full_sphere_maps`](../lusee/InstrumentResponse.py)
+assigned the entire equatorial sample ring to the upper hemisphere. Although
+the equator has measure zero in the continuum, it has nonzero weight in the
+finite MWSS quadrature. The result was a first-order endpoint bias that
+could not be removed by raising `lmax`.
+
+For four non-orthogonal Hertzian dipoles, the independent closed form is
+
+```text
+Rsky = eta0 pi leff^2 / (3 lambda^2) D D^T,
+```
+
+where the rows of `D` are the dipole unit vectors. With the former full-ring
+convention, the maximum relative matrix error was 34.58%, 17.02%, 8.49%,
+4.24%, and 2.12% at angular steps of 45, 22.5, 11.25, 5.625, and 2.8125
+degrees. This is a realistic wrong-result bug: the excess was assigned to
+`Rsky` and removed from `Rmoon`, so equal-temperature closure could pass
+while simulations with different sky and lunar temperatures were biased.
+
+At a step discontinuity, the spherical-harmonic midpoint value is one half.
+Both response-integration paths now give the shared `theta=90 degrees` ring
+half weight before transforming. The closed-form four-dipole matrix is then
+recovered to about `1e-15` relative accuracy at every tested grid from 45 to
+5.625 degrees.
+
+A separate smooth, localized, positive sky was integrated with
+160-point Gauss--Legendre quadrature in `cos(theta)` and 512 periodic
+azimuth samples. The harmonic contraction's relative matrix errors at
+`lmax=2,4,8` were approximately
+
+```text
+1.14e-2, 7.06e-4, 2.46e-5.
+```
+
+Thus the test independently verifies both continuum normalization and
+`lmax` convergence rather than comparing two calls to the same transform.
+The reusable synthetic response now takes its dissipative matrices from the
+closed form as well; loader validation compares that independent expectation
+against the production integration.
+
+## Resolved or corrected conclusions from the earlier review
+
+### ENU parity is fixed
+
+Croissant commit `1b0902e`, included in the reviewed `daf1545`, converts
+Astropy/lunarsky's left-handed North-East-Up local chart to the package's
+right-handed East-North-Up convention in
+[`get_rot_mat`](../../croissant/src/croissant/rotations.py#L95). It swaps the
+appropriate source columns or target rows before an Euler/Wigner rotation.
+
+At the LuSEE-Night site and a representative epoch, an independent direct
+check found:
+
+```text
+det(rotation)                  1.0
+orthogonality residual        about 1e-15
+East/North/Up mapping errors   below 1e-15
+```
+
+The earlier determinant `-1` and polarized-V sign reversal are therefore not
+current findings. The reviewed `FullStokesTopoJaxSimulator` now passes proper
+SO(3) matrices into the per-time Wigner rotation.
+
+### Whole-instrument rotation is consistent and documented
+
+[`InstrumentResponse.rotate`](../lusee/InstrumentResponse.py#L806) rolls
+maps by `-bins`, moving a directional response toward decreasing ENU phi.
+On the reviewed Croissant branch, `beam_rot` applies the same
+`exp(+i m alpha)` harmonic phase and documents positive rotation using
+astronomical azimuth: North toward East. For example, positive 90 degrees
+moves an initially East-pointing axis toward South.
+
+The luseepy method, instrument-response documentation, and example
+`rotation_deg` configuration now state this convention. A directional
+regression starts with an intensity response peaking at ENU `phi=0`
+(East), applies `+90 degrees`, and verifies both a new peak at
+`phi=270 degrees` (South) and the `exp(+i m alpha)` phase of every retained
+harmonic mode. Reversing the operation would be a convention change, not a
+bug fix justified by the code or Croissant.
+
+### Coordinate-frame contracts are now explicit
+
+Croissant `PolarizedSky` accepts `galactic`, `equatorial`, `mepa`, and
+`topo`. MEPA is the inertial frame obtained by freezing SPICE's `MOON_ME`
+orientation at a reference epoch; it is not the body-fixed MCMF frame.
+Croissant stores both `coord` and `frame`, so contradictory metadata must
+not select different transforms across the two packages.
+
+The polarized-sky boundary now canonicalizes both fields through the same
+aliases and rejects disagreement before preparing harmonic coefficients.
+Equivalent names such as `equatorial`, `fk5`, and `icrs` remain compatible,
+but MCMF is rejected with an explicit request for epoch-dependent transport.
+A native MEPA sky is left in the MEPA frame frozen at the first simulation
+timestamp. A native topocentric sky remains fixed in the local frame.
+Croissant `PolarizedSky` does not store a MEPA epoch, so native MEPA input
+uses that first-timestamp interpretation as an explicit caller contract.
+The output FITS records the canonical sky frame and the assumed TDB
+reference epoch.
+
+For celestial input, the Croissant engine rotates the response and sky into
+the frozen MEPA frame once and evolves the contraction with
+`exp(-i m phi(t))`. This is the intended efficient approximation to lunar
+sidereal rotation. It omits small nonuniform-rotation and non-z-axis
+libration/nutation corrections; the independent topocentric engine instead
+performs a full rotation at every timestamp, using the same fixed MEPA
+reference epoch when its input is native MEPA.
+
+The new four-port driver path also constructs analytic CMB, Cane1979, and
+Dark Ages monopoles as full-sky Galactic maps. It does not reuse the legacy
+monopole fixture's MCMF label or its hard-coded lower-sky cone mask, because
+the four-port response already supplies the local horizon. Full-sky
+monopoles are constructed directly as an exact `l=0` coefficient, avoiding
+HEALPix quadrature leakage into artificial time-varying modes. The legacy
+simulator defaults remain unchanged.
+
+## Resolution and validation risks
+
+The following items should be addressed before scientific release, but the
+available evidence does not show that they corrupt realistic current
+simulations.
+
+### Finite `lmax` does not guarantee a PSD covariance
+
+The sky and response are separately truncated in harmonic space. Their
+finite-bandlimit contraction is Hermitianized by
+[`load_covariance`](../lusee/Covariance.py#L77), but separate truncation no
+longer preserves the exact positive angular-integral representation.
+
+A deliberately under-resolved diagnostic used a physical unpolarized sky
+with one sharp hot pixel at `lmax=2` and obtained
+
+```text
+lambda_min / lambda_max = -0.1916.
+```
+
+This demonstrates that the API cannot promise PSD for arbitrary maps and
+bandlimits. It is expected spectral-truncation behavior, not by itself a
+programming error or evidence that an operational `lmax` is inadequate.
+Without a real four-port response, the realistic magnitude is unknown.
+
+The simulator now records every covariance eigenvalue and
+`lambda_min/max(abs(lambda))` for every time/frequency sample, without
+clipping or rejecting a negative result. These arrays, plus their minimum
+summary, are persisted in simulation FITS and exposed by `Data`. This makes
+under-resolution visible without confusing it with an algebraically invalid
+input.
+
+The analytic horizon regression now demonstrates convergence against direct
+angular quadrature. Choosing an operational `lmax` for a real response and
+sky remains data-dependent. Do not silently clip negative eigenvalues:
+clipping would hide inadequate angular resolution.
+
+### Analytic absolute oracle complete; no realistic solver oracle
+
+[`validate_response_matrices`](../lusee/ResponsePhysics.py) now checks
+finiteness, `Rsky`/`Rmoon`/`Rloss` Hermiticity, the three-term complement,
+the PEC-zero-loss constraint, agreement between stored and field-derived
+`Rsky`, reciprocity (`ZA approximately ZA.T`), passivity of `Herm(ZA)`, and
+PSD of all three resistance matrices. The same gates are applied to the
+interpolated target-frequency matrices before simulation.
+
+[`InstrumentResponse.response_diagnostics`](../lusee/InstrumentResponse.py)
+reports per-frequency absolute and relative reciprocity, Hermiticity, and
+closure residuals; the eigenvalues of `Herm(ZA)`, `Rsky`, `Rmoon`, and
+`Rloss`; and the condition number of `ZA`. For embedded exports it also
+reconstructs and reports every solver-current unmixing condition number from
+the persisted `ZA`, `Vsource`, and `Zref`. The converter records the maximum
+as hash-bound `MAX_ICOND`, but deliberately does not impose a hard threshold.
+
+The independent Hertzian-dipole oracle now tests the absolute continuum
+normalization of the analytic fixture. It does not replace a realistic
+solver reference. A hard conditioning threshold and a solver accepted-power
+oracle should wait for a representative export and numerical-precision
+requirements.
+
+### Physical-input diagnostics remain optional
+
+Physical Stokes maps satisfy
+
+```text
+I >= 0
+I^2 >= Q^2 + U^2 + V^2.
+```
+
+Signed components and map-making perturbations can be intentional, so these
+conditions should be an optional physical-simulation diagnostic rather than
+an unconditional rejection.
+
+The projection gap is resolved. Before projecting onto the Hermitian
+subspace, both full-Stokes simulators now record the maximum absolute and
+relative anti-Hermitian residual for every time/frequency matrix. The
+residual arrays and maximum summaries are persisted in simulation FITS and
+exposed by `Data`, alongside the per-frequency condition number of
+`ZA + ZL`. This distinguishes convention or truncation problems from
+roundoff while retaining the explicitly Hermitian science output.
+
+## Scientifically sound components
+
+1. The pair-response definitions in
+   [`pair_stokes_maps`](../lusee/InstrumentResponse.py#L497) agree with the
+   declared coherency matrix:
+
+   ```text
+   [[I + Q, U - i V],
+    [U + i V, I - Q]].
+   ```
+
+   In particular,
+
+   ```text
+   B_V = i (H_a_phi H_b_theta* - H_a_theta H_b_phi*)
+   ```
+
+   has the correct sign for the documented positive-V convention.
+
+2. Scaling effective-length products by `eta0/lambda^2`, followed by
+
+   ```text
+   K_sky = k_B integral W S dOmega,
+   ```
+
+   is consistent with RMS one-sided voltage PSDs and Rayleigh-Jeans
+   brightness temperature.
+
+3. The visible-sky resistance
+
+   ```text
+   Rsky = eta0/(4 lambda^2) integral H H^dagger dOmega
+   ```
+
+   and each fluctuation-dissipation term
+
+   ```text
+   K_alpha = 4 k_B T_alpha R_alpha
+   ```
+
+   have the correct factor of four.
+
+4. The noncommuting loading equation
+
+   ```text
+   M = ZL (ZA + ZL)^-1
+   C_v = M K_open M^dagger
+   ```
+
+   is correct. The implementation's right-side solve avoids an unnecessary
+   explicit inverse.
+
+5. The effective-length bilinear form, pair ordering `a <= b`, visibility
+   definition `<v_a v_b*>`, and complex conjugations are mutually
+   consistent.
+
+6. The fixed-frame full-Stokes harmonic dual agrees with direct MWSS
+   quadrature in the synthetic checks. The IAU/COSMO conversion and
+   algebraic positive-V fixture are internally consistent.
+
+7. The point-source covariance normalization and native-frequency direct
+   loaded-response comparison are correct.
+
+8. The Rayleigh-Jeans approximation is entirely adequate for the
+   LuSEE-Night band and expected sky, lunar, and antenna temperatures.
+
+## Verification record and limitations
+
+The luseepy constructors now match the reviewed Croissant API. The benchmark
+rotates its response from a concrete lunar topocentric frame into MEPA at a
+recorded reference epoch, declares its synthetic sky in that same MEPA
+frame, generates physically admissible 20-percent-polarized IQUV samples,
+and advances one nonduplicated sidereal cycle with Croissant's z-rotation
+helper. It no longer combines the distinct body-fixed `coord="mcmf"` with
+`frame="topo"`.
+
+The focused new-path and converter suite, including explicit-loss and
+normalization tests, completed without a compatibility shim with
+
+```text
+82 passed, 6 warnings
+```
+
+The warnings are Astropy's pre-existing assumption that numerical
+`TimeDelta` inputs are days. The independent ENU basis check passed at
+machine precision. The suite includes an isolated-V comparison between the
+MEPA/z-phase and per-timestamp engines at five points spanning a lunar cycle.
+
+After rebasing onto the explicit frequency-policy work, every four-port
+response, polarized-sky, and measured-receiver interpolation now opts into
+the `linear` policy rather than inheriting the legacy simulator's `exact`
+default. A small end-to-end off-grid benchmark completed with output shape
+`(2, 10, 4)`. The combined frequency-policy and four-port seam suite passed
+with
+
+```text
+148 passed, 13 warnings
+```
+
+The complete automated non-ingest suite passed with
+
+```text
+279 passed, 1 manual test deselected, 35 warnings
+```
+
+The broader warnings are the same Astropy time-unit assumptions plus two
+Healpy deprecation warnings. With the sibling `uncrater` checkout on
+`PYTHONPATH`, the ingest suite also completed with
+
+```text
+28 passed, 1 skipped, 1 warning
+```
+
+The skipped test requires optional regression data; the warning is ERFA's
+expected dubious-year warning for a synthetic mission timestamp.
+
+These tests use synthetic responses. They do not replace validation against
+a new lossy/PEC antenna simulation, because no such artifact is available.
+
+## Recommended implementation order
+
+The following work is mechanically and mathematically specified without
+further expert input:
+
+1. **Complete:** extend the response and covariance model with explicit
+   `Rloss` and `T_ant`, including unequal-temperature closure tests.
+2. **Complete:** replace the converter's single amplitude flag with explicit
+   field-unit, field-amplitude, and normalization conventions; add HFSS and
+   representation-invariance tests.
+3. **Complete:** correct real/imaginary radiometric variances and document
+   the diagonal map-making approximation.
+4. **Complete:** add reciprocity, passivity, matrix-PSD,
+   anti-Hermitian-residual, and condition-number diagnostics.
+5. **Complete:** add the grid-converged Hertzian-dipole oracle and
+   direct-quadrature `lmax` convergence tests.
+6. **Complete:** reject `coord`/`frame` disagreement and document/test the
+   positive astronomical-azimuth turntable convention.
+
+Items that still require expert input or new data are the actual
+lossy-versus-PEC `Rloss` artifact, the antenna temperature model, acceptance
+thresholds for solver-current conditioning and operational `lmax`, and an
+independent solver accepted-power or plane-wave normalization reference.
+
+## 2026-08-04 provenance update (A. Slosar / Claude)
+
+The receive-matrix production pipeline is now documented first-hand
+(`resources/HFSS/kaja.md`, `resources/HFSS/ReceiveMatrix.ipynb`,
+`receive_matrix/Complex_Z_Matrix.csv`). Comments on the review's findings,
+in their numbering:
+
+### On finding 2 (converter units and normalization)
+
+The four supported contracts were the right *framework* but none matches
+the actual exports. The notebook pipeline is: HFSS `rE` in **mV peak** at
+1 V peak incident per port -> RMS volts -> embedded-current unmixing with
+`Vsource = sqrt(2) V RMS` (diagonal) and `Zref = 50 Ohm` ->
+`h = -4 pi/(j k eta0) rE_bare` -> **multiplication by the mismatch matrix**
+`ZL (ZA + ZL)^-1` with `ZL` the scalar-diagonal average of the measured
+spare preamps fmpre0/2/5/7. The distributed CSVs are therefore *loaded*
+effective lengths in meters. Two consequences:
+
+- A markdown cell in the notebook argues for `Vsource = sqrt(200) V`
+  (1 W normalization). The executed code uses `sqrt(2)` and kaja.md
+  confirms the 1 V-peak-incident excitation; the `sqrt(200)` cell is stale.
+  The notebook's own energy-conservation check (radiation efficiency ~100%
+  for the vacuum dipole reference sim, 37-56% for LuSEE_BGL_V16 over
+  regolith) rules out the factor-10 alternative, because a 1 W
+  normalization error would inflate `Rsky/Re(ZA)` by x100. This is the
+  independent accepted-power check the review asked for, at solver
+  fidelity: it pins the absolute normalization of `H`.
+- The peak-vs-RMS scalings cancel *identically* in the embedded unmixing
+  (`E_rms I_rms^-1 = E_peak I_peak^-1`), so `H` is
+  amplitude-convention-free, exactly as the review's representation
+  -invariance tests assert. The load-bearing conventions are the incident
+  1 V peak excitation and the mV field unit.
+
+The converter now carries a fifth explicit contract:
+`INPUT_KIND='loaded'` + `FIELD_KIND='effective-length'` +
+`NORM_KIND='unloaded-zl'`, with the solver-side `ZLoad` persisted as a
+complex `(frequency, 4, 4)` HDU, hash-bound, and validated (shape,
+finiteness, invertibility). `lusee.ReceiverImpedance.
+spare_preamp_average_zload` reproduces the notebook's exact four-term
+averaged `ZL`; unloading is `H = (ZA + ZL) ZL^-1 R` by batched solve.
+Verification: unloading the real 35 MHz export and integrating
+`eta0/(4 lambda^2) int H H^dagger dOmega` reproduces the notebook's
+printed `R_rad` diagonal `[250.476, 242.909, 255.138, 204.606] Ohm` to
+all printed digits.
+
+### On the ZA placeholder (plan caveat C3)
+
+Closed. `Complex_Z_Matrix.csv` is the full dense 4x4 `ZA` from the
+stitched `.s4p` sweep (skrf, `Zref = 50 Ohm`), 0.5-75 MHz at 0.5 MHz, and
+matches the notebook's `(I+S)(I-S)^-1` reconstruction bit-for-bit at the
+printed 25 MHz spot check. On the real matrices the loader's reciprocity,
+passivity, Hermiticity, three-term closure, and PSD gates all pass with
+`LOSSMODEL='PEC'`. The converter accepts this CSV directly
+(`--zmatrix-csv`) in addition to Touchstone input.
+
+### On finding 4 (horizon-ring weighting)
+
+The half-weight fix is kept and is now also *empirically* moot for the
+real artifact: the HFSS export is identically zero below the horizon and
+already ~1e-15 on the theta=90 ring itself (the tangential far field
+vanishes at the lossy interface), so ring weighting cannot bias the real
+`Rsky` either way. The synthetic-oracle result stands as the correctness
+argument.
+
+### On finding 1 (metal loss) and the `Rloss` artifact
+
+LuSEE_BGL_V16 is a single lossy-environment run; no PEC companion exists,
+so metal and regolith dissipation cannot be separated from this export.
+The real response is therefore declared `LOSSMODEL='PEC'`: all non-sky
+dissipation is attributed to `Rmoon` at `T_moon`. Kaja's vacuum-dipole
+efficiency study (HFSS `RadiationEfficiency` vs the integral check)
+suggests the metal contribution is small, and the antenna sits near lunar
+ambient temperature at night, so the thermodynamic error of this
+attribution is second order. The review's request for a lossy/PEC pair
+remains the right long-term ask; the schema already supports it.
+
+### On coordinates and the whole-instrument rotation convention
+
+kaja.md pins the solver frame: west antenna along +x, south along +y,
+theta 0-180 from +z, phi 0-360 from +x toward +y. That frame is
+right-handed (W x S = Up) and is the ENU frame rotated by exactly
+180 degrees about zenith, so the converter now rolls the periodic phi
+axis by 180 degrees (`phi_source_zero_deg=180`) and records `SRCAZ0`,
+`SRCXAXIS`, `SRCYAXIS`, and `PORTNAMES='N,E,S,W'` in the header. Port
+order in both the CSVs and `ZA` is N, E, S, W (notebook `monopoles`
+list); the generic `PORTS='0123'` header alone would not have caught a
+permuted invocation, so the port names are now explicit provenance.
+
+### Remaining open items, re-ranked with real data available
+
+1. Operational `lmax` for the real response (the review's
+   convergence-threshold ask) can now be measured directly; the
+   mwss-native grid supports lmax <= 179.
+2. Load-time revalidation of a validated 150-frequency file re-runs the
+   full L=180 transform stack; the CONTENT hash already guarantees
+   payload integrity, so hash-gating the load-time matrix recomputation
+   is a worthwhile optimization before routine use.
+3. The lossy/PEC `Rloss` pair and a flight-unit (not spare-average) `ZL`
+   measurement remain the two data requests for the simulation team; the
+   solver accepted-power reference is addressed by the energy-conservation
+   argument above, but an independent plane-wave terminal-voltage check
+   would still be a valuable cross-validation.

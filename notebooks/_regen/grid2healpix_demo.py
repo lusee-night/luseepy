@@ -63,7 +63,7 @@ hp.mollview(grid2healpix(theta, phi, img, 128, 1024, fast=True),
 # %%
 drive = os.environ.get("LUSEE_DRIVE_DIR")
 beam_path = (
-    f"{drive}/Simulations/BeamModels/LanderFreeSpaceComparison/hfss_lbl_1m_75.fits"
+    f"{drive}/Simulations/OldBeamModels/LanderFreeSpaceComparison/hfss_lbl_1m_75.fits"
     if drive else None
 )
 if beam_path and os.path.exists(beam_path):

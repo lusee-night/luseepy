@@ -12,10 +12,6 @@ This software is documented on the ["Read the Docs" pages](https://luseepy.readt
 
 There are datasets stored in the LuSEE-Night [Google Drive](https://drive.google.com/drive/folders/0AM52i9DVjqkAUk9PVA).
 
-## Docker (deprecated)
-
-The Docker-based workflow is **deprecated**. Prefer a local Python environment (see [Developing](#developing)). Legacy build notes remain under [`docker/README.md`](docker/README.md) for reference only.
-
 ## Developing
 
 Use a virtual environment and an editable install from the `luseepy` repository root:
@@ -34,8 +30,6 @@ Set the environment variables in [Environment variables](#environment-variables)
 python tests/LunarCalendarTest.py
 ```
 
-If you still use the legacy `setup_env.sh` helpers (`lpython`, `ljupyter`, etc.), they assume Docker and `LUSEE_IMAGE`; that path is unmaintained.
-
 ## Environment variables
 
 User is expected to set up the following environment variables:
@@ -43,28 +37,10 @@ User is expected to set up the following environment variables:
  * `LUSEEPY_PATH` -- path to the luseepy checkout
  * `LUSEEOPSIM_PATH` -- path to the lusee opsim package (if used).
  * `LUSEE_DRIVE_DIR` -- path to the checkout of the LuSEE-Night Google Drive
-
-The legacy `setup_env.sh` script may also define `LUSEE_IMAGE` (Docker image name); it is only relevant if you use the deprecated container workflow.
-
-
-
-## Singularity
-
-__NB. The example below corresponds to an early version of software, and reference to the image below is deprecated.__
-
-The `tests` folder contains CI-related and other testing scripts. Here's an example
-of a simple test run with Singularity, on a SDCC/BNL node, from the `luseepy` folder:
-
-```bash
-singularity exec -B /direct/phenix+u/mxmp/projects/luseepy --env PYTHONPATH=/direct/phenix+u/mxmp/projects/luseepy docker://lusee/lusee-night-foundation:0.1 ./tests/LunarCalendarTest.py
-```
-
-
 ## Cutting a new version
 
 Cutting a new version entails:
  * having a clean (non dev) version in `__init__.py`
- * updating `setup_env.sh` (if still in use)
  * tagging the github
  * bumping version again in `__init__.py` to a +0.1 and a dev
  
@@ -74,38 +50,43 @@ Large changes that break API should bump version into next integer.
 
 ## Starting with simulations
 
-Go to `simulation` sub-directory. Make sure the `$LUSEE_DRIVE_DIR` points to the stuff from the LUSEE Drive that the simulations needs (ULSA maps, beam). Run a short simulation as
+Go to the `simulation` sub-directory. Make sure `$LUSEE_DRIVE_DIR` points to a checkout of the LuSEE Drive containing the four-port instrument response (`Simulations/BeamModels/BGL_v16/`). Run a short simulation as
 
 ```
-python driver/run_sim.py config/realistic_example.yaml
+python driver/run_sim.py config/four_port_example.yaml
 ```
+
+This forward-models a full-Stokes sky through the coupled four-port instrument response (`lusee.InstrumentResponse`, FITS v3: bare effective lengths, dense antenna impedance, `Rsky`/`Rmoon`/`Rloss`) and a receiver model, and writes the physical 4x4 cross-correlation covariance in V^2/Hz per time and frequency. For a full lunar day of the ULSA sky through the measured JFET receiver chain, run `config/realistic_example.yaml` (takes a few minutes).
 
 ### Simulation engine (`simulation.engine`)
 
-The driver selects the back end from the YAML **engine** keyword. You may set either top-level `engine` or `simulation.engine` (top-level wins if both are present).
+A config with a `response:` section selects the four-port pipeline; the **engine** keyword picks the time kernel:
 
 | Config value | Back end |
 | --- | --- |
-| `croissant` | [CROISSANT](https://github.com/christianhbye/croissant) (spherical-harmonics / JAX) via `lusee.CroSimulator` |
-| `luseepy` | Built-in `lusee.DefaultSimulator` |
-| `default`, `lusee`, `numpy` | Same as `luseepy` (aliases) |
+| `croissant` | MEPA frame, diagonal-in-m z-phase time evolution (`lusee.FullStokesCroSimulator`) |
+| `topo` | Per-time-step Wigner rotations in the topocentric frame (`lusee.FullStokesTopoJaxSimulator`) |
 
-Croissant requires compatible installs of `croissant-sim`, `s2fft`, and `spiceypy` (see `pyproject.toml`). `luseepy` now furnishes the Moon frame kernels bundled with `lunarsky` automatically during Croissant runs. Example:
+Both are built on [CROISSANT](https://github.com/christianhbye/croissant) and `s2fft` (pinned in `pyproject.toml`); `luseepy` furnishes the Moon-frame kernels bundled with `lunarsky` automatically.
 
-```yaml
-simulation:
-  engine: croissant
-  output: sim_example.fits
-```
+Read and plot the output covariance, e.g. the 0x1 cross-correlation, imaginary part:
 
-See `simulation/config/example.yaml` and `simulation/config/sim_choice_realistic.yaml` for full examples.
+```python
+import fitsio
+import matplotlib.pyplot as plt
 
-In the same directory, open a jupyter notebook and plot the results for the NE cross-correlation, imaginary part as:
-```
-import lusee
-D=lusee.Data('output/sim_output.fits')
-plt.imshow(D[:,'01I',:],aspect='auto',extent=(D.freq[0],D.freq[-1],len(D.times),0))
+fname = "output/four_port_covariance.fits"
+data = fitsio.read(fname, ext="data")      # (time, product, freq) in V^2/Hz
+freq = fitsio.read(fname, ext="freq")      # MHz
+labels = [row["label"].strip() for row in fitsio.read(fname, ext="products")]
+
+plt.imshow(data[:, labels.index("01I"), :], aspect="auto",
+           extent=(freq[0], freq[-1], data.shape[0], 0))
 plt.colorbar()
-plt.xlabel('frequency (MHz)')
-plt.ylabel('time number')
+plt.xlabel("frequency (MHz)")
+plt.ylabel("time number")
 ```
+
+The output also carries the response/receiver matrices (`ZA`, `ZL`, `M`, `Rsky`, `Rmoon`, `Rloss`), covariance diagnostics, and full provenance (response content hash, package versions) in additional HDUs.
+
+The legacy scalar-beam pipeline (per-antenna `lusee.Beam` with the `luseepy`/`default`/`croissant` scalar engines) is deprecated; its configs remain under `simulation/config/` marked as such and need the deprecated beams under `Simulations/OldBeamModels/`.

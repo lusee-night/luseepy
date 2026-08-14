@@ -2,6 +2,7 @@ from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, rot2eul
+from .LabeledArray import units_of, frame_of
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -47,12 +48,30 @@ class TopoJaxSimulator(SimulatorBase):
     :type extra_opts: dict
     """
 
+    def __new__(cls, obs, beams, sky_model, *args, **kwargs):
+        from .InstrumentResponse import InstrumentResponse
+
+        if cls is TopoJaxSimulator and isinstance(beams, InstrumentResponse):
+            from .FullStokesSimulator import FullStokesTopoJaxSimulator
+
+            return FullStokesTopoJaxSimulator(
+                obs,
+                beams,
+                sky_model,
+                *args,
+                **kwargs,
+            )
+        return super().__new__(cls)
+
     def __init__ (self, obs, beams, sky_model, Tground = 200.0,
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None,
                   lmax = 128, cross_power = None,
-                  extra_opts = {}):
+                  extra_opts = {}, *, frequency_policy = "exact"):
         t_init0 = time.perf_counter()
-        super().__init__(obs, beams, sky_model, Tground, combinations, freq)
+        super().__init__(
+            obs, beams, sky_model, Tground, combinations, freq,
+            frequency_policy=frequency_policy,
+        )
         self.lmax = lmax
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
@@ -74,14 +93,16 @@ class TopoJaxSimulator(SimulatorBase):
         self._setup_simulation_kernels()
         self._log_timing("__init__._setup_simulation_kernels", t0)
         if self._debug_enabled:
+            sky_map_str = "closed-form" if self.freq_map_sky is None else repr(self.freq_map_sky)
             self._debug_print(
                 f"init summary: frame={self.sky_model.frame} lmax={self.lmax} "
-                f"nfreq={len(self.freq)} nfreq_sky={len(self.freq_ndx_sky)} "
-                f"nfreq_beam={len(self.freq_ndx_beam)} ncomb={len(self.combinations)}"
+                f"nfreq={len(self.freq)} sky_map={sky_map_str} "
+                f"beam_map={self.freq_map_beam!r} ncomb={len(self.combinations)}"
             )
             self._debug_array_summary("freq", self.freq)
-            self._debug_array_summary("freq_ndx_sky", self.freq_ndx_sky)
-            self._debug_array_summary("freq_ndx_beam", self.freq_ndx_beam)
+            if self.freq_map_sky is not None:
+                self._debug_array_summary("freq_map_sky.source_indices", self.freq_map_sky.source_indices)
+            self._debug_array_summary("freq_map_beam.source_indices", self.freq_map_beam.source_indices)
             self._debug_array_summary("_output_beams", self._output_beams)
             self._debug_array_summary("_output_ground", self._output_ground)
         self._log_timing("__init__.total", t_init0)
@@ -106,6 +127,9 @@ class TopoJaxSimulator(SimulatorBase):
         flat = arr.reshape(-1) if arr.shape else arr.reshape(1)
         sample = flat[:max_items].tolist()
         summary = f"{label}: shape={arr.shape} dtype={arr.dtype} size={arr.size}"
+        units, frame = units_of(value), frame_of(value)
+        if units is not None or frame is not None:
+            summary += f" units={units!r} frame={frame!r}"
         if np.issubdtype(arr.dtype, np.number) or np.issubdtype(arr.dtype, np.complexfloating):
             sample_arr = flat[: min(max_items, flat.size)]
             finite_count = int(np.isfinite(sample_arr).sum()) if sample_arr.size else 0
@@ -156,32 +180,33 @@ class TopoJaxSimulator(SimulatorBase):
         self.beams = beams
         self.efbeams = []
         self.combinations = [(int(i), int(j)) for i, j in combinations]
-        beam_idx = jnp.asarray(np.array(self.freq_ndx_beam, dtype=np.int32))
+        fmap = self.freq_map_beam
 
         for i, j in self.combinations:
             bi, bj = beams[i], beams[j]
             print(f"  intializing beam combination {bi.id} x {bj.id} ...")
-            norm = jnp.sqrt(
-                jnp.asarray(bi.gain_conv)[beam_idx]
-                * jnp.asarray(bj.gain_conv)[beam_idx]
-            )
-            beamreal, beamimag = bi.get_healpix_alm(
+            gain_i = fmap.from_native(jnp.asarray(bi.gain_conv))
+            gain_j = fmap.from_native(jnp.asarray(bj.gain_conv))
+            norm = jnp.sqrt(gain_i * gain_j)
+            beamreal_native, beamimag_native = bi.get_healpix_alm(
                 self.lmax,
-                freq_ndx=self.freq_ndx_beam,
+                freq_ndx=fmap.source_indices,
                 other=bj,
                 return_I_stokes_only=True,
                 return_complex_components=True,
             )
-            beamreal = jnp.asarray(beamreal) * norm[:, None]
-            if beamimag is not None:
-                beamimag = jnp.asarray(beamimag) * norm[:, None]
+            beamreal = jnp.asarray(fmap.from_unique(jnp.asarray(beamreal_native))) * norm[:, None]
+            if beamimag_native is not None:
+                beamimag = jnp.asarray(fmap.from_unique(jnp.asarray(beamimag_native))) * norm[:, None]
+            else:
+                beamimag = None
 
             if i == j:
                 ground_power_real = 1.0 - jnp.real(beamreal[:, 0]) / jnp.sqrt(4.0 * jnp.pi)
                 ground_power_imag = jnp.zeros_like(ground_power_real)
                 beamimag = None
             else:
-                cross_power = jnp.asarray(self.cross_power.Ex_coupling(bi, bj, self.freq_ndx_beam))
+                cross_power = jnp.asarray(self.cross_power.Ex_coupling(bi, bj, fmap))
                 print(f"    cross power is {cross_power[0]} ... {cross_power[-1]} ")
                 ground_power_real = cross_power - jnp.real(beamreal[:, 0]) / jnp.sqrt(4.0 * jnp.pi)
                 ground_power_imag = -jnp.real(beamimag[:, 0]) / jnp.sqrt(4.0 * jnp.pi)
@@ -436,7 +461,7 @@ class TopoJaxSimulator(SimulatorBase):
 
         Nt = len(times)
         t0 = time.perf_counter()
-        sky_base = jnp.asarray(self.sky_model.get_alm(self.freq_ndx_sky))
+        sky_base = self.sky_alm_at_freq(self.sky_model, xp=jnp)
         sky_base_flm = self._hp_to_full_flm_batch_jax(sky_base)
         self._block_ready(sky_base_flm)
         self._log_timing("simulate.sky_model.get_alm", t0)

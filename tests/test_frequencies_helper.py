@@ -1,0 +1,414 @@
+import numpy as np
+import pytest
+
+from lusee.frequencies import (
+    ALL_FREQUENCIES_MHZ_NP,
+    FrequencyMap,
+    FrequencyPolicy,
+    frequency_grids_match,
+    frequency_policy_from_config,
+    frequencies_from_config,
+)
+
+
+def _check_map(fmap, source, expected_target_vals, atol):
+    """Interpolate the source grid through the map and compare to expected."""
+    reconstructed = fmap.from_native(np.asarray(source))
+    np.testing.assert_allclose(reconstructed, expected_target_vals, atol=atol)
+
+
+def test_exact_match_snaps_to_alpha_zero():
+    source = np.linspace(1.0, 50.0, 50)
+    target = np.asarray([1.0, 10.0, 25.0, 50.0])
+    fmap = FrequencyMap.build(target, source)
+
+    assert isinstance(fmap, FrequencyMap)
+    assert np.all(fmap.alpha == 0.0)
+    assert np.all(fmap.lo_in_unique == fmap.hi_in_unique)
+    _check_map(fmap, source, target, atol=0.0)
+
+
+def test_near_match_within_atol_snaps():
+    # Regression for the original canonicalization bug: np.arange(1,51,5) drifts
+    # vs np.linspace(1,50,50)[::5]. The map must snap with alpha = 0.0 exactly.
+    source = np.linspace(1.0, 50.0, 50)
+    target = source + 1e-10
+    fmap = FrequencyMap.build(target, source, atol=1e-6, rtol=1e-9)
+
+    assert np.all(fmap.alpha == 0.0)
+    assert np.all(fmap.lo_in_unique == fmap.hi_in_unique)
+
+
+@pytest.mark.parametrize("policy", ["exact", "linear"])
+def test_dense_grid_snap_selects_closest_native_channel(policy):
+    """If both neighbors are within tolerance, the closest one must win."""
+    source = np.asarray([1.0, 1.0000005, 2.0])
+    target = np.asarray([source[1]])
+    native = np.asarray([10.0, 20.0, 30.0])
+
+    fmap = FrequencyMap.build(target, source, policy=policy)
+
+    np.testing.assert_array_equal(fmap.per_target_indices(), [1])
+    np.testing.assert_array_equal(fmap.from_native(native), [20.0])
+
+
+def test_frequency_grid_match_uses_frequency_map_tolerance():
+    reference = np.asarray([1.0, 50.0])
+    shifted = np.asarray([1.0, 50.0005])  # 500 Hz at the upper endpoint
+
+    assert np.allclose(reference, shifted)
+    assert not frequency_grids_match(reference, shifted)
+
+
+def test_simulator_rejects_beam_grids_outside_map_tolerance():
+    from types import SimpleNamespace
+
+    from lusee.SimulatorBase import SimulatorBase
+
+    reference = np.asarray([1.0, 50.0])
+    shifted = np.asarray([1.0, 50.0005])
+    beams = [
+        SimpleNamespace(id="reference", freq=reference),
+        SimpleNamespace(id="shifted", freq=shifted),
+    ]
+    analytic_sky = SimpleNamespace(get_alm_at_freq=lambda freq: None)
+
+    with pytest.raises(ValueError, match=r"All beams must share"):
+        SimulatorBase(None, beams, analytic_sky, freq=reference)
+
+
+def test_midpoint_interpolation():
+    source = np.linspace(0.0, 10.0, 11)
+    target = np.asarray([0.5, 1.5, 9.5])
+    fmap = FrequencyMap.build(target, source, policy="linear")
+
+    np.testing.assert_allclose(fmap.alpha, [0.5, 0.5, 0.5])
+    _check_map(fmap, source, target, atol=1e-12)
+
+
+def test_out_of_range_raises():
+    source = np.linspace(1.0, 50.0, 50)
+
+    with pytest.raises(ValueError, match=r"out of range"):
+        FrequencyMap.build([55.0], source)
+
+    with pytest.raises(ValueError, match=r"out of range"):
+        FrequencyMap.build([0.5], source)
+
+
+def test_boundary_snap_at_endpoints():
+    source = np.linspace(1.0, 50.0, 50)
+
+    # Exactly at endpoints: snap, no error.
+    fmap_lo = FrequencyMap.build([1.0], source)
+    fmap_hi = FrequencyMap.build([50.0], source)
+    assert fmap_lo.alpha[0] == 0.0
+    assert fmap_hi.alpha[0] == 0.0
+    assert fmap_lo.lo_in_unique[0] == fmap_lo.hi_in_unique[0]
+    assert fmap_hi.lo_in_unique[0] == fmap_hi.hi_in_unique[0]
+    assert int(fmap_lo.source_indices[fmap_lo.lo_in_unique[0]]) == 0
+    assert int(fmap_hi.source_indices[fmap_hi.lo_in_unique[0]]) == 49
+
+    # Within boundary atol on the outside: snap, no error.
+    fmap_eps = FrequencyMap.build([50.0 + 1e-12], source, atol=1e-6)
+    assert fmap_eps.alpha[0] == 0.0
+
+
+def test_source_indices_deduplication():
+    source = np.linspace(1.0, 50.0, 50)
+    target = np.asarray([10.0, 10.0, 10.0, 20.5])
+    fmap = FrequencyMap.build(target, source, policy="linear")
+
+    # 10.0 snaps to index 9; 20.5 brackets indices 19 and 20.
+    assert sorted(np.asarray(fmap.source_indices).tolist()) == [9, 19, 20]
+    # First three targets all reference the snapped index for 10.0.
+    assert fmap.lo_in_unique[0] == fmap.lo_in_unique[1] == fmap.lo_in_unique[2]
+    assert fmap.alpha[0] == fmap.alpha[1] == fmap.alpha[2] == 0.0
+    # Fourth target is genuinely interpolated.
+    np.testing.assert_allclose(fmap.alpha[3], 0.5)
+
+
+def test_per_target_indices_on_grid():
+    source = np.linspace(1.0, 50.0, 50)
+    target = np.asarray([25.0, 12.0, 12.0])  # unsorted, duplicated
+    fmap = FrequencyMap.build(target, source)
+    np.testing.assert_array_equal(fmap.per_target_indices(), [24, 11, 11])
+
+
+def test_per_target_indices_offgrid_raises():
+    source = np.linspace(1.0, 50.0, 50)
+    fmap = FrequencyMap.build([12.5, 25.0], source, policy="linear")
+    with pytest.raises(ValueError, match=r"off-grid"):
+        fmap.per_target_indices()
+
+
+def test_non_increasing_source_raises():
+    with pytest.raises(ValueError, match=r"strictly increasing"):
+        FrequencyMap.build([5.0], np.asarray([10.0, 5.0, 1.0]))
+
+
+def test_none_grids_raise():
+    source = np.linspace(1.0, 50.0, 50)
+
+    with pytest.raises(ValueError, match=r"target_freqs is None"):
+        FrequencyMap.build(None, source)
+
+    # e.g. a sky model constructed with freq=None and no get_alm_at_freq
+    with pytest.raises(ValueError, match=r"source_freqs is None"):
+        FrequencyMap.build([5.0], None)
+
+
+def test_empty_target_raises():
+    source = np.linspace(1.0, 50.0, 50)
+
+    with pytest.raises(ValueError, match=r"target_freqs is empty"):
+        FrequencyMap.build([], source)
+
+
+def test_canonical_grid_is_frozen():
+    # sky models alias this array as their default native grid; mutating it
+    # must fail loudly rather than corrupt the grid process-wide
+    with pytest.raises(ValueError):
+        ALL_FREQUENCIES_MHZ_NP[0] = 0.0
+
+
+def test_non_finite_frequencies_raise():
+    source = np.linspace(1.0, 50.0, 50)
+
+    with pytest.raises(ValueError, match=r"non-finite"):
+        FrequencyMap.build([np.nan], source)
+
+    with pytest.raises(ValueError, match=r"non-finite"):
+        FrequencyMap.build([np.inf], source)
+
+    with pytest.raises(ValueError, match=r"non-finite"):
+        FrequencyMap.build([5.0], np.asarray([1.0, np.nan, 50.0]))
+
+
+def test_from_native_recovers_native_values_on_snap():
+    source = np.linspace(1.0, 50.0, 50)
+    data = np.cos(source) + 2.0
+    fmap = FrequencyMap.build(source, source)
+    result = fmap.from_native(data)
+    np.testing.assert_allclose(result, data, atol=0.0)
+
+
+def test_from_native_multidim_broadcasts_along_first_axis():
+    source = np.linspace(0.0, 10.0, 11)
+    data = np.arange(11 * 3 * 2, dtype=float).reshape(11, 3, 2)
+    target = np.asarray([0.5, 5.5])
+    fmap = FrequencyMap.build(target, source, policy="linear")
+    result = fmap.from_native(data)
+
+    expected = 0.5 * data[[0, 5], ...] + 0.5 * data[[1, 6], ...]
+    np.testing.assert_allclose(result, expected, atol=1e-12)
+
+
+def test_from_unique_matches_from_native_on_full_grid():
+    # from_native(full) and from_unique(full[source_indices]) must agree: this
+    # is the exact split the simulators rely on (cheap full arrays via
+    # from_native vs expensive alm products pre-reduced to source_indices via
+    # from_unique).
+    source = np.linspace(1.0, 50.0, 50)
+    data = np.cos(source)[:, None] * np.arange(1, 4)[None, :]
+    target = np.asarray([12.5, 12.5, 30.0, 50.0])
+    fmap = FrequencyMap.build(target, source, policy="linear")
+
+    via_full = fmap.from_native(data)
+    via_unique = fmap.from_unique(data[fmap.source_indices])
+    np.testing.assert_allclose(via_full, via_unique, atol=0.0)
+
+
+def test_interpolation_is_differentiable_wrt_values():
+    # Differentiability is the point of the JAX path: gradients must flow
+    # through the off-grid blend back to the beam/sky values.
+    import jax
+    import jax.numpy as jnp
+
+    source = np.linspace(1.0, 50.0, 50)
+    target = np.asarray([12.5, 30.0])  # one genuinely off-grid, one on-grid
+    fmap = FrequencyMap.build(target, source, policy="linear")
+
+    unique_vals = jnp.asarray(
+        np.random.default_rng(0).standard_normal((fmap.source_indices.size, 3))
+    )
+
+    def loss(vals):
+        return jnp.sum(fmap.from_unique(vals) ** 2)
+
+    grad = jax.grad(loss)(unique_vals)
+    assert grad.shape == unique_vals.shape
+    assert bool(jnp.all(jnp.isfinite(grad)))
+    assert float(jnp.max(jnp.abs(grad))) > 0.0
+
+
+def test_frequencymap_class_api():
+    source = np.linspace(1.0, 50.0, 50)
+    data = np.cos(source)[:, None] * np.arange(1, 4)[None, :]
+    target = np.asarray([12.5, 12.5, 30.0, 50.0])
+    fmap = FrequencyMap.build(target, source, policy="linear")
+
+    assert len(fmap) == len(target)
+    # source_indices is the dedup'd lookup table (12.5 brackets 11/12, 30/50 snap).
+    np.testing.assert_array_equal(np.asarray(fmap.source_indices), [11, 12, 29, 49])
+    np.testing.assert_allclose(
+        fmap.from_unique(data[fmap.source_indices]), fmap.from_native(data), atol=0.0
+    )
+    assert "n_target=4" in repr(fmap)
+
+
+def test_frequencymap_is_jax_pytree():
+    import jax
+    import jax.numpy as jnp
+
+    source = np.linspace(1.0, 50.0, 50)
+    fmap = FrequencyMap.build(
+        np.asarray([12.5, 30.0]), source, policy="linear"
+    )
+
+    leaves, treedef = jax.tree_util.tree_flatten(fmap)
+    rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
+    np.testing.assert_array_equal(np.asarray(rebuilt.alpha), np.asarray(fmap.alpha))
+    assert rebuilt.policy is FrequencyPolicy.LINEAR
+    assert rebuilt.mode == "linear"
+
+    # Passing the map as a traced argument through jit must work, and gradients
+    # w.r.t. the interpolated values must flow.
+    vals = jnp.asarray(
+        np.random.default_rng(0).standard_normal((fmap.source_indices.shape[0], 2))
+    )
+
+    @jax.jit
+    def loss(m, v):
+        return jnp.sum(m.from_unique(v) ** 2)
+
+    grad = jax.grad(loss, argnums=1)(fmap, vals)
+    assert grad.shape == vals.shape
+    assert bool(jnp.all(jnp.isfinite(grad)))
+
+
+def test_default_exact_rejects_offgrid_with_opt_in_hint():
+    source = np.linspace(1.0, 50.0, 50)
+    with pytest.raises(
+        ValueError,
+        match=r"frequency_policy='exact'.*policy='linear'",
+    ):
+        FrequencyMap.build([12.5], source)
+
+
+def test_identity_policy_is_a_validated_no_op():
+    source = np.linspace(1.0, 50.0, 50)
+    fmap = FrequencyMap.build(source + 1e-10, source, policy="identity")
+    data = np.arange(source.size, dtype=np.float64)
+
+    assert fmap.policy is FrequencyPolicy.IDENTITY
+    assert fmap.mode == "identity"
+    assert fmap.from_native(data) is data
+    np.testing.assert_array_equal(fmap.source_indices, np.arange(source.size))
+    with pytest.raises(ValueError, match=r"native array leading dimension"):
+        fmap.from_native(data[:-1])
+    with pytest.raises(ValueError, match=r"unique array leading dimension"):
+        fmap.from_unique(data[:-1])
+    with pytest.raises(AttributeError):
+        fmap.mode = "linear"
+    with pytest.raises(ValueError):
+        fmap.unique_native_idx[0] = 1
+
+    with pytest.raises(ValueError, match=r"same shape"):
+        FrequencyMap.build(source[:-1], source, policy="identity")
+    with pytest.raises(ValueError, match=r"one-for-one"):
+        FrequencyMap.build(source[::-1], source, policy="identity")
+    with pytest.raises(ValueError, match=r"identity mode"):
+        FrequencyMap(
+            np.asarray([2], dtype=np.int32),
+            np.asarray([0], dtype=np.int32),
+            np.asarray([0], dtype=np.int32),
+            np.asarray([0.0]),
+            policy="identity",
+            mode="identity",
+            source_size=3,
+        )
+
+
+def test_exact_policy_compiles_integer_gather():
+    source = np.linspace(1.0, 50.0, 50)
+    target = np.asarray([25.0, 12.0, 12.0])
+    fmap = FrequencyMap.build(target, source)
+    data = np.arange(source.size)
+
+    assert fmap.policy is FrequencyPolicy.EXACT
+    assert fmap.mode == "gather"
+    np.testing.assert_array_equal(fmap.from_native(data), [24, 11, 11])
+
+
+def test_linear_permission_uses_exact_fast_path_when_possible():
+    source = np.linspace(1.0, 50.0, 50)
+    fmap = FrequencyMap.build(source, source, policy="linear")
+
+    assert fmap.policy is FrequencyPolicy.LINEAR
+    assert fmap.mode == "identity"
+
+
+def test_frequency_policy_from_config_defaults_exact_and_validates():
+    assert frequency_policy_from_config({"values": [1.0]}) is FrequencyPolicy.EXACT
+    assert (
+        frequency_policy_from_config({"policy": "linear", "values": [1.5]})
+        is FrequencyPolicy.LINEAR
+    )
+    with pytest.raises(ValueError, match=r"Unknown frequency policy"):
+        frequency_policy_from_config({"policy": "spline", "values": [1.5]})
+    with pytest.raises(ValueError, match=r"Unknown frequency policy"):
+        frequencies_from_config({"policy": "spline", "values": [1.5]})
+
+
+def test_frequencies_from_config_values():
+    freq = frequencies_from_config({"values": [10.0, 20.0, 30.0]})
+    np.testing.assert_allclose(freq, [10.0, 20.0, 30.0])
+
+
+def test_frequencies_from_config_start_end_step_exclusive():
+    # arange semantics: the end point is not included
+    freq = frequencies_from_config({"start": 1.0, "end": 5.0, "step": 1.0})
+    np.testing.assert_allclose(freq, [1.0, 2.0, 3.0, 4.0])
+
+
+def test_frequencies_from_config_start_end_n():
+    freq = frequencies_from_config({"start": 1.0, "end": 75.0, "n": 75})
+    assert freq.shape == (75,)
+    assert freq[0] == 1.0
+    assert freq[-1] == 75.0
+
+
+def test_frequencies_from_config_rejects_legacy_keys():
+    for legacy in [
+        {"indices": [0, 1]},
+        {"start_idx": 0, "stop_idx": 5},
+        {"step_idx": 2},
+    ]:
+        with pytest.raises(ValueError, match=r"no longer supported"):
+            frequencies_from_config(legacy)
+
+
+def test_frequencies_from_config_step_and_n_conflict():
+    with pytest.raises(ValueError, match=r"'step' or 'n'"):
+        frequencies_from_config({"start": 1.0, "end": 5.0, "step": 1.0, "n": 5})
+
+
+def test_frequencies_from_config_invalid_step():
+    with pytest.raises(ValueError, match=r"positive"):
+        frequencies_from_config({"start": 1.0, "end": 5.0, "step": 0.0})
+
+
+def test_frequencies_from_config_empty_raises():
+    with pytest.raises(ValueError, match=r"one of"):
+        frequencies_from_config({"foo": "bar"})
+
+
+def test_frequencies_from_config_empty_grid_raises():
+    # swapped start/end or an empty values list must fail loudly, not
+    # produce a zero-frequency simulation
+    with pytest.raises(ValueError, match=r"empty"):
+        frequencies_from_config({"start": 5.0, "end": 1.0, "step": 1.0})
+
+    with pytest.raises(ValueError, match=r"empty"):
+        frequencies_from_config({"values": []})

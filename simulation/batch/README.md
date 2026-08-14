@@ -1,63 +1,28 @@
 # Utilities for running luseepy simulations in batch
 
-__
+Batch runs use a local luseepy checkout. Set the usual environment variables in
+the submitting shell (the Condor job definitions use `getenv = True`, so the
+job inherits them):
 
-
-Example of settings for Docker experimentation:
 ```bash
-export LUSEE_IMAGE='lusee/lusee-night-jupyter:0.1'
-export LUSEE_DRIVE_DIR='/home/maxim/data/lusee/'
-#
-# In the above, note the local folder for the LuSEE data.
-# At the SDCC facility, the path would be /gpfs02/astro/workarea/LuSEE_Drive e.g.
-
+export LUSEEPY_PATH=/path/to/luseepy
 export LUSEE_DRIVE_DIR=/gpfs02/astro/workarea/LuSEE_Drive
 ```
 
-The starting point is the bash function defined in the setup file:
-```bash
-
-lpython() { docker run  -e HOME -e PYTHONPATH=/app -w $PWD -v $HOME:$HOME -e LUSEE_DRIVE_DIR --user $(id -u):$(id -g) -it  $LUSEE_IMAGE  python $@; }
-
-lpython_dev driver/run_sim.py config/example.yaml
-```
-
-An example of a custom _entrypoint_:
+A single simulation can be run directly:
 
 ```bash
-$ docker run -it --entrypoint /bin/bash $IMAGE_NAME -s
+python $LUSEEPY_PATH/simulation/driver/run_sim.py $LUSEEPY_PATH/simulation/config/example.yaml
 ```
 
-The updated Jupyter image can be run with the LUSEE data mounted to the new `/data ` folder.
+The batch driver takes a run config, a batch descriptor file, and the index of
+the descriptor line to run:
 
 ```bash
-$ docker run -it --rm -v $LUSEE_DRIVE_DIR:/data --env LUSEE_DRIVE_DIR=/data lusee/lusee-night-jupyter:0.1 bash
+python $LUSEEPY_PATH/simulation/driver/run_batch.py \
+    $LUSEEPY_PATH/simulation/config/pdr_run.yaml \
+    $LUSEEPY_PATH/simulation/config/pdr_config.batch 2
 ```
-
----
-
-# The simulation driver
-
-## Testing with Docker
-
-```bash
-docker run -it --rm -v $LUSEE_DRIVE_DIR:/data -v $PWD:/output --env LUSEE_DRIVE_DIR=/data --env PYTHONPATH=/app --env LUSEE_OUTPUT_DIR=/output --entrypoint /app/simulation/driver/run_sim.py lusee/lusee-night-jupyter:0.1 /app/simulation/config/example.yaml
-```
-
-
-## Testing with Singularity - the basic driver (interactive)
-
-```bash
-singularity exec --env LUSEE_OUTPUT_DIR=/output --bind .:/output --env LUSEE_DRIVE_DIR=/gpfs02/astro/workarea/LuSEE_Drive --env PYTHONPATH=/app -B /gpfs02/astro/workarea/LuSEE_Drive -B ${LOCAL} docker://lusee/lusee-night-jupyter:0.1 /app/simulation/driver/run_sim.py  /app/simulation/config/example.yaml
-```
-
-## Testing with Singularity - the modified batch driver (interactive)
-
-```bash
-singularity exec --env LUSEE_OUTPUT_DIR=/output --bind .:/output --env LUSEE_DRIVE_DIR=/gpfs02/astro/workarea/LuSEE_Drive --env PYTHONPATH=/app -B /gpfs02/astro/workarea/LuSEE_Drive -B `pwd`:/app docker://lusee/lusee-night-jupyter:0.1 python /app/simulation/driver/run_batch.py /app/simulation/config/pdr_run.yaml /app/simulation/config/pdr_config.batch 2
-```
-The last argument is the simulation descriptor number to be picked from `pdr_config.batch`.
-For Condor integration please see the next paragraph.
 
 ## Submitting to HTCondor
 

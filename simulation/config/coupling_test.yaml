@@ -1,7 +1,11 @@
+# DEPRECATED: legacy scalar-beam pipeline. Needs the deprecated beams
+# under Simulations/OldBeamModels/ (absent from the CI Drive snapshot).
+# The current pipeline is the four-port response: see
+# four_port_example.yaml and realistic_example.yaml.
 paths:
   lusee_drive_dir: $LUSEE_DRIVE_DIR
   sky_dir: Simulations/SkyModels
-  beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
+  beam_dir: Simulations/OldBeamModels/LanderRegolithComparison/eight_layer_regolith/
 
 sky:
   file: ULSA_32_ddi_smooth.fits
@@ -39,9 +43,10 @@ observation:
   lmax: 32
   combinations: [ [0,0], [1,1], [0,1], [2,2] ]
   freq:
-    start_idx: 0
-    stop_idx: 50
-    step_idx: 1
+    policy: exact
+    start: 1.0
+    end: 50.0
+    n: 50
 
 simulation:
   engine: luseepy

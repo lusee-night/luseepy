@@ -5,9 +5,38 @@ from .CalibratorTrack import CalibratorTrack
 from .Data          import Data
 from .Satellite     import Satellite, ObservedSatellite
 from .Beam          import Beam, grid2healpix, grid2healpix_alm_fast
+from .InstrumentResponse import InstrumentResponse, FourPortBeam
+from .ReceiverImpedance import (
+    JFETReceiver,
+    IdealCapacitorReceiver,
+    MeasuredReceiver,
+    loading_matrix,
+    receiver_from_config,
+)
+from .FullStokesSimulator import (
+    FullStokesCroSimulator,
+    FullStokesTopoJaxSimulator,
+    CovarianceCroSimulator,
+    CovarianceTopoJaxSimulator,
+)
+from .FullStokesCalibrator import FullStokesCalibratorSimulator
+from .SyntheticResponse import synthetic_four_port_response
 from .BeamInterpolator import BeamInterpolator
 from .BeamGauss     import BeamGauss
 from .NpWrapper     import NpWrapper
+from .LabeledArray  import (
+    LabeledArray, label, relabel, asarray, units_of, frame_of, is_labeled,
+    describe,
+    FRAME_GALACTIC, FRAME_EQUATORIAL, FRAME_MCMF, FRAME_TOPO, FRAME_MEPA,
+)
+from .GainModel     import (
+    SpectrometerGain, set_models, get_models,
+    counts_to_nv_auto, counts_to_nv_cross,
+    counts_to_nv2_auto, counts_to_nv2_cross,
+    asd_to_psd, psd_to_asd,
+    bin_frequencies, CHANNEL_BIN_MHZ,
+    NV_PER_SQRT_HZ, NV2_PER_HZ, V2_PER_HZ,
+)
 from .CachedBeam   import CachedBeam
 from .BeamCouplings import BeamCouplings
 from .DefaultSimulator import TopoNumpySimulator
@@ -39,18 +68,22 @@ from . import MapMaker      as mapmaker
 from . import Fitting       as fitting
 
 
-from . import MonoSkyModels as monosky 
+from . import MonoSkyModels as monosky
 from .PCAanalyzer import PCAanalyzer, CompositePCAanalyzer
 from .Throughput import Throughput
 from .SpectrometerResponse import spectrometer_response, spectrometer_response_zoom
 from .frequencies import (
     ALL_FREQUENCIES_MHZ,
     ALL_FREQUENCY_INDICES,
+    FrequencyMap,
+    FrequencyPolicy,
     canonical_frequencies,
     canonical_frequency_indices,
-    frequency_indices_from_config,
+    canonicalize_frequencies,
+    frequency_policy_from_config,
+    frequencies_from_config,
     frequency_indices_from_values,
 )
 
-__version__ = '1.3'
-__comment__ = '1.3 dev'
+__version__ = "2.1.dev0"
+__comment__ = "2.1 dev"

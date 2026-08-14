@@ -1,0 +1,366 @@
+"""Tests for receiver loading and four-port covariance kernels."""
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pytest
+
+from lusee.Covariance import (
+    K_BOLTZMANN,
+    apply_receiver_loading,
+    assemble_open_covariance,
+    blackbody_normalization,
+    covariance_projection_diagnostics,
+    default_product_labels,
+    load_covariance,
+    matrix_condition_number,
+    pack_covariance,
+    project_hermitian,
+)
+from lusee.MapMaker import compute_radiometric_noise
+from lusee.InstrumentResponse import PORT_PAIRS
+from lusee.ReceiverImpedance import (
+    IdealCapacitorReceiver,
+    JFETReceiver,
+    MeasuredReceiver,
+    loading_matrix,
+)
+
+
+def random_well_conditioned_matrices(seed=2, nfreq=3):
+    rng = np.random.default_rng(seed)
+    ZA = rng.normal(size=(nfreq, 4, 4)) + 1j * rng.normal(
+        size=(nfreq, 4, 4)
+    )
+    ZL = rng.normal(size=(nfreq, 4, 4)) + 1j * rng.normal(
+        size=(nfreq, 4, 4)
+    )
+    ZA += 10 * np.eye(4)[None]
+    ZL += 20 * np.eye(4)[None]
+    return jnp.asarray(ZA), jnp.asarray(ZL)
+
+
+def test_loading_matrix_is_right_solve_for_noncommuting_batches():
+    ZA, ZL = random_well_conditioned_matrices()
+    M = loading_matrix(ZA, ZL)
+    assert jnp.allclose(jnp.einsum("fab,fbc->fac", M, ZA + ZL), ZL)
+    assert not jnp.allclose(
+        M,
+        jnp.linalg.solve(ZA + ZL, ZL),
+    )
+
+
+def test_receiver_models_accept_arbitrary_target_arrays():
+    target = np.asarray([17.5, 10.0, 17.5])
+    assert JFETReceiver().Z(target).shape == (3, 4, 4)
+    assert IdealCapacitorReceiver().Z(target).shape == (3, 4, 4)
+    native = np.asarray([10.0, 20.0])
+    values = np.stack((10 * np.eye(4), 20 * np.eye(4))).astype(complex)
+    measured = MeasuredReceiver(native, values)
+    result = measured.Z(target)
+    assert jnp.allclose(result[0], 17.5 * jnp.eye(4))
+    assert jnp.array_equal(result[0], result[2])
+
+
+def test_blackbody_identity_native_and_off_grid():
+    nfreq = 3
+    temperature = 247.0
+    ZA, ZL = random_well_conditioned_matrices(nfreq=nfreq)
+    dissipative = 0.5 * (ZA + jnp.swapaxes(ZA.conjugate(), -1, -2))
+    Rsky = 0.35 * dissipative
+    Rmoon = 0.45 * dissipative
+    Rloss = dissipative - Rsky - Rmoon
+    pair_values = []
+    for a, b in PORT_PAIRS:
+        pair_values.append(4 * temperature * Rsky[:, a, b])
+    pair_values = jnp.stack(pair_values, axis=-1)[None]
+    open_covariance = assemble_open_covariance(
+        pair_values,
+        Rmoon,
+        Rloss,
+        T_moon=temperature,
+        T_ant=temperature,
+    )
+    covariance, M = load_covariance(open_covariance, ZA, ZL)
+    expected = temperature * blackbody_normalization(ZA, M)
+    assert jnp.allclose(covariance[0], expected, rtol=1e-11, atol=1e-25)
+
+
+def test_covariance_is_hermitian_and_packs_16_real_channels():
+    ZA, ZL = random_well_conditioned_matrices(nfreq=2)
+    Rmoon = jnp.broadcast_to(jnp.eye(4)[None], (2, 4, 4))
+    Rloss = jnp.zeros_like(Rmoon)
+    pair_values = jnp.zeros((3, 2, 10), dtype=jnp.complex128)
+    open_covariance = assemble_open_covariance(
+        pair_values,
+        Rmoon,
+        Rloss,
+        T_moon=250.0,
+        T_ant=0.0,
+    )
+    covariance, _ = load_covariance(open_covariance, ZA, ZL)
+    packed, labels = pack_covariance(covariance)
+    assert packed.shape == (3, 16, 2)
+    assert len(labels) == 16
+    assert jnp.isrealobj(packed)
+    assert jnp.allclose(
+        covariance,
+        jnp.swapaxes(covariance.conjugate(), -1, -2),
+    )
+
+
+def test_preprojection_diagnostics_preserve_antihermitian_residual():
+    ZA = jnp.zeros((1, 4, 4), dtype=jnp.complex128)
+    ZL = jnp.asarray([np.eye(4)], dtype=jnp.complex128)
+    open_covariance = np.zeros((1, 1, 4, 4), dtype=np.complex128)
+    open_covariance[0, 0, 0, 0] = 2.0
+    open_covariance[0, 0, 1, 1] = 3.0
+    open_covariance[0, 0, 0, 1] = 1.0 + 2.0j
+    open_covariance[0, 0, 1, 0] = 0.25 + 0.5j
+
+    unprojected, M = apply_receiver_loading(
+        jnp.asarray(open_covariance),
+        ZA,
+        ZL,
+    )
+    np.testing.assert_allclose(M, np.eye(4)[None])
+    diagnostics = covariance_projection_diagnostics(unprojected)
+    adjoint = np.swapaxes(open_covariance.conjugate(), -1, -2)
+    expected_absolute = np.max(
+        np.abs(open_covariance - adjoint),
+        axis=(-2, -1),
+    )
+    expected_relative = expected_absolute / np.max(
+        np.abs(open_covariance),
+        axis=(-2, -1),
+    )
+    np.testing.assert_allclose(
+        diagnostics["antihermitian_absolute"],
+        expected_absolute,
+    )
+    np.testing.assert_allclose(
+        diagnostics["antihermitian_relative"],
+        expected_relative,
+    )
+    covariance, _ = load_covariance(
+        jnp.asarray(open_covariance),
+        ZA,
+        ZL,
+    )
+    np.testing.assert_allclose(covariance, project_hermitian(unprojected))
+    np.testing.assert_allclose(
+        diagnostics["eigenvalues"],
+        np.linalg.eigvalsh(np.asarray(covariance)),
+    )
+    zero_diagnostics = covariance_projection_diagnostics(
+        jnp.zeros_like(unprojected)
+    )
+    np.testing.assert_array_equal(
+        zero_diagnostics["antihermitian_relative"],
+        0.0,
+    )
+    np.testing.assert_array_equal(
+        zero_diagnostics["minimum_eigenvalue_ratio"],
+        0.0,
+    )
+
+
+def test_matrix_condition_number_reports_each_frequency():
+    matrices = jnp.asarray(
+        [
+            np.diag([1.0, 2.0, 4.0, 8.0]),
+            np.diag([3.0, 3.0, 3.0, 3.0]),
+        ],
+        dtype=jnp.complex128,
+    )
+    np.testing.assert_allclose(
+        matrix_condition_number(matrices),
+        [8.0, 1.0],
+    )
+
+
+def test_moon_and_antenna_loss_use_independent_temperatures():
+    pair_values = jnp.zeros((1, 1, len(PORT_PAIRS)), dtype=jnp.complex128)
+    Rmoon = jnp.asarray([2.0 * np.eye(4)])
+    Rloss = jnp.asarray([0.5 * np.eye(4)])
+    T_moon = 240.0
+    T_ant = 180.0
+    result = assemble_open_covariance(
+        pair_values,
+        Rmoon,
+        Rloss,
+        T_moon=T_moon,
+        T_ant=T_ant,
+    )
+    expected = 4 * (
+        T_moon * Rmoon + T_ant * Rloss
+    ) * jnp.asarray(K_BOLTZMANN)
+    np.testing.assert_allclose(result[0], expected, rtol=1e-12)
+
+
+def test_receiver_parameter_gradient_is_finite():
+    freq = jnp.asarray([10.0, 17.5])
+    ZA = jnp.broadcast_to((30.0 + 4.0j) * jnp.eye(4)[None], (2, 4, 4))
+
+    def loss(C_pf):
+        receiver = JFETReceiver(C_pf=C_pf)
+        M = loading_matrix(ZA, receiver.Z(freq))
+        return jnp.real(jnp.sum(jnp.abs(M) ** 2))
+
+    gradient = jax.grad(loss)(jnp.asarray([35.0, 36.0, 37.0, 38.0]))
+    assert gradient.shape == (4,)
+    assert jnp.all(jnp.isfinite(gradient))
+    assert jnp.any(jnp.abs(gradient) > 0)
+    epsilon = 1e-3
+    base = jnp.asarray([35.0, 36.0, 37.0, 38.0])
+    direction = jnp.asarray([1.0, -0.5, 0.25, -0.75])
+    finite_difference = (
+        loss(base + epsilon * direction)
+        - loss(base - epsilon * direction)
+    ) / (2 * epsilon)
+    autodiff_directional = jnp.vdot(gradient, direction)
+    assert jnp.allclose(
+        autodiff_directional,
+        finite_difference,
+        rtol=2e-5,
+        atol=2e-8,
+    )
+
+
+def test_mapmaker_noise_uses_response_v3_product_order():
+    labels = default_product_labels()
+    data = np.zeros((1, len(labels), 1))
+    channel = {label: index for index, label in enumerate(labels)}
+    for port, value in enumerate((2.0, 3.0, 5.0, 7.0)):
+        data[:, channel[f"{port}{port}R"], :] = value
+    data[:, channel["01R"], :] = 0.4
+    data[:, channel["01I"], :] = -0.3
+
+    sigma = compute_radiometric_noise(
+        data,
+        delta_f_hz=2.0,
+        delta_t_sec=5.0,
+    )
+    np.testing.assert_allclose(
+        sigma[:, channel["00R"], :],
+        2.0 / np.sqrt(10.0),
+    )
+    real_sigma = np.sqrt((2.0 * 3.0 + 0.4**2 - 0.3**2) / 20.0)
+    imag_sigma = np.sqrt((2.0 * 3.0 - 0.4**2 + 0.3**2) / 20.0)
+    np.testing.assert_allclose(
+        sigma[:, channel["01R"], :],
+        real_sigma,
+    )
+    np.testing.assert_allclose(
+        sigma[:, channel["01I"], :],
+        imag_sigma,
+    )
+    assert not np.isclose(real_sigma, imag_sigma)
+
+
+def test_mapmaker_noise_matches_proper_complex_gaussian_monte_carlo():
+    labels = default_product_labels()
+    channel = {label: index for index, label in enumerate(labels)}
+    Caa = 2.0
+    Cbb = 3.0
+    Cab = 0.4 - 0.3j
+    effective_samples = 20.0
+    data = np.zeros((1, len(labels), 1))
+    data[:, channel["00R"], :] = Caa
+    data[:, channel["11R"], :] = Cbb
+    data[:, channel["01R"], :] = Cab.real
+    data[:, channel["01I"], :] = Cab.imag
+    sigma = np.asarray(
+        compute_radiometric_noise(
+            data,
+            delta_f_hz=4.0,
+            delta_t_sec=5.0,
+        )
+    )
+
+    covariance = np.asarray(
+        [[Caa, Cab], [Cab.conjugate(), Cbb]],
+        dtype=np.complex128,
+    )
+    factor = np.linalg.cholesky(covariance)
+    rng = np.random.default_rng(29)
+    standard = (
+        rng.normal(size=(500_000, 2))
+        + 1j * rng.normal(size=(500_000, 2))
+    ) / np.sqrt(2.0)
+    voltage = standard @ factor.T
+    product = voltage[:, 0] * voltage[:, 1].conjugate()
+    empirical_real_variance = np.var(product.real) / effective_samples
+    empirical_imag_variance = np.var(product.imag) / effective_samples
+    empirical_covariance = (
+        np.cov(product.real, product.imag, ddof=0)[0, 1]
+        / effective_samples
+    )
+    np.testing.assert_allclose(
+        sigma[0, channel["01R"], 0] ** 2,
+        empirical_real_variance,
+        rtol=1e-2,
+    )
+    np.testing.assert_allclose(
+        sigma[0, channel["01I"], 0] ** 2,
+        empirical_imag_variance,
+        rtol=1e-2,
+    )
+    np.testing.assert_allclose(
+        empirical_covariance,
+        np.imag(Cab**2) / (2.0 * effective_samples),
+        rtol=7e-2,
+    )
+
+
+def test_mapmaker_noise_has_no_unit_dependent_variance_floor():
+    labels = default_product_labels()
+    channel = {label: index for index, label in enumerate(labels)}
+    scale = 1e-20
+    data = np.zeros((1, len(labels), 1))
+    data[:, channel["00R"], :] = 2.0 * scale
+    data[:, channel["11R"], :] = 3.0 * scale
+    data[:, channel["01R"], :] = 0.4 * scale
+    data[:, channel["01I"], :] = -0.3 * scale
+    sigma = np.asarray(
+        compute_radiometric_noise(
+            data,
+            delta_f_hz=2.0,
+            delta_t_sec=5.0,
+        )
+    )
+    expected = scale * np.sqrt((6.0 + 0.16 - 0.09) / 20.0)
+    np.testing.assert_allclose(
+        sigma[:, channel["01R"], :],
+        expected,
+        rtol=1e-12,
+    )
+    assert sigma[0, channel["01R"], 0] < 1e-19
+
+
+def test_legacy_mapmaker_noise_uses_separate_cross_component_variances():
+    combinations = ((0, 0), (1, 1), (0, 1))
+    data = np.asarray([[[2.0], [3.0], [0.4], [-0.3]]])
+    sigma = np.asarray(
+        compute_radiometric_noise(
+            data,
+            combinations=combinations,
+            delta_f_hz=2.0,
+            delta_t_sec=5.0,
+        )
+    )
+    np.testing.assert_allclose(
+        sigma[0, 2, 0] ** 2,
+        (6.0 + 0.16 - 0.09) / 20.0,
+    )
+    np.testing.assert_allclose(
+        sigma[0, 3, 0] ** 2,
+        (6.0 - 0.16 + 0.09) / 20.0,
+    )
+
+
+def test_mapmaker_noise_rejects_partial_complex_cross_product():
+    products = ("00R", "11R", "01R")
+    data = np.ones((1, len(products), 1))
+    with pytest.raises(ValueError, match="both packed components"):
+        compute_radiometric_noise(data, products=products)

@@ -1,8 +1,16 @@
 **/*.*
 !lusee/*.py
 !lusee/data/*.txt
+!lusee/ingest/
+!lusee/ingest/*.py
 !lusee/pre_jax/*.py
+!lusee/data/gain/*.npy
+!lusee/data/gain/*.csv
+!beam_conversion/*.py
 !tests/*.py
+!tests/ingest/
+!tests/ingest/*.py
+!docs/*.tex
 !notebooks/*.ipynb
 !notebooks/*.py
 !notebooks/old/*.ipynb
@@ -12,7 +20,12 @@
 !**.sh 
 !**.batch
 !.github/* 
-!docker/*
 !simulation/driver/*.py
+!examples/*.py
+!examples/ingest/
+!examples/ingest/*.py
 !setup_env.sh
 setup_env.local.sh
+# local scratch stage and symlink to the sibling uncrater checkout
+ingest_playground/
+uncrater

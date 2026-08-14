@@ -1,5 +1,5 @@
 from .Beam import Beam
-from .frequencies import ALL_FREQUENCIES_MHZ
+import numpy as np
 import jax
 import jax.numpy as jnp
 
@@ -45,16 +45,23 @@ class BeamGauss(Beam):
     :type one_over_freq_scaling: bool
     :param id: ID string for beam, optional
     :type id: str
+    :param freq_min: Minimum frequency of the synthetic beam grid in MHz.
+    :type freq_min: float
+    :param freq_max: Maximum frequency of the synthetic beam grid in MHz.
+    :type freq_max: float
+    :param Nfreq: Number of frequency samples (uniform linspace from freq_min to freq_max).
+    :type Nfreq: int
     """
-    def __init__ (self, alt_deg, az_deg=0, sigma_deg=20.0, one_over_freq_scaling=False, id = None):     
-        self.version=2.1 #what should this be? 
+    def __init__ (self, alt_deg, az_deg=0, sigma_deg=20.0, one_over_freq_scaling=False, id = None,
+                  freq_min=1.0, freq_max=50.0, Nfreq=50):
+        self.version=2.1 #what should this be?
         # v1 so that self.freq followed the simulator's 1-50 MHz grid
         # >v2 so that self.ground_fraction() can be calculated
-        
+
         self.id = id
-        self.freq_min = 1.
-        self.freq_max = 50.
-        self.Nfreq = 50
+        self.freq_min = float(freq_min)
+        self.freq_max = float(freq_max)
+        self.Nfreq = int(Nfreq)
         self.theta_min = 0.
         self.theta_max = 90.
         self.Ntheta = 91
@@ -65,8 +72,8 @@ class BeamGauss(Beam):
         self.ZRe=jnp.zeros(self.Nfreq) #Need this for lusee.Simulator.write()
         self.ZIm=jnp.zeros(self.Nfreq) #Need this for lusee.Simulator.write()
 
-        
-        self.freq = ALL_FREQUENCIES_MHZ
+        # native grid stays host-side numpy float64 (see Beam.freq)
+        self.freq = np.linspace(self.freq_min, self.freq_max, self.Nfreq, dtype=np.float64)
         self.theta_deg = jnp.linspace(self.theta_min, self.theta_max,self.Ntheta)
         self.phi_deg = jnp.linspace(self.phi_min, self.phi_max,self.Nphi)
         self.theta = self.theta_deg*jnp.pi/180.

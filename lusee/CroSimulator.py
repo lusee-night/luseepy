@@ -1,5 +1,4 @@
 from functools import partial
-from importlib.resources import files
 import warnings
 
 from .Observation import Observation
@@ -16,7 +15,6 @@ import croissant as cro
 from croissant.multipair import multi_convolve
 import jax
 from lunarsky import LunarTopo
-import spiceypy as spice
 import s2fft
 
 """
@@ -27,31 +25,6 @@ and antenna location come from the observation object (config). Croissant
 handles single polarization / single dipole per beam; effective beams are
 still one combination each, batched at the convolution step.
 """
-
-
-_SPICE_LUNAR_KERNELS_LOADED = False
-
-
-def _ensure_spice_lunar_frames():
-    """Load Lunarsky's bundled lunar frame definitions for Croissant.
-
-    Lunarsky 1.x evaluates its own coordinate transforms and no longer loads
-    these SPICE kernels as an import side effect.  Croissant still uses SPICE
-    directly for its ``MOON_ME`` to ``J2000`` transform, so register the
-    packaged frame and orientation kernels before asking it for rotations.
-    """
-    global _SPICE_LUNAR_KERNELS_LOADED
-    if _SPICE_LUNAR_KERNELS_LOADED:
-        return
-
-    kernel_root = files("lunarsky.data")
-    for relative_path in (
-        "fk/satellites/moon_080317.tf",
-        "fk/satellites/moon_assoc_me.tf",
-        "pck/moon_pa_de421_1900-2050.bpc",
-    ):
-        spice.furnsh(str(kernel_root.joinpath(relative_path)))
-    _SPICE_LUNAR_KERNELS_LOADED = True
 
 
 class CroSimulator(SimulatorBase):
@@ -82,11 +55,29 @@ class CroSimulator(SimulatorBase):
         freq_idx_plot (int): index of frequency at which to plot sky and beam.
     """
 
+    def __new__(cls, obs, beams, sky_model, *args, **kwargs):
+        from .InstrumentResponse import InstrumentResponse
+
+        if cls is CroSimulator and isinstance(beams, InstrumentResponse):
+            from .FullStokesSimulator import FullStokesCroSimulator
+
+            return FullStokesCroSimulator(
+                obs,
+                beams,
+                sky_model,
+                *args,
+                **kwargs,
+            )
+        return super().__new__(cls)
+
     def __init__ (self, obs, beams, sky_model, Tground = 200.0,
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None,
                   lmax = 128, cross_power = None,
-                  extra_opts = {}):
-        super().__init__(obs, beams, sky_model, Tground, combinations, freq)
+                  extra_opts = {}, *, frequency_policy = "exact"):
+        super().__init__(
+            obs, beams, sky_model, Tground, combinations, freq,
+            frequency_policy=frequency_policy,
+        )
         ensure_lunarsky_moon_frame()
         self.lmax = lmax
         self.extra_opts = extra_opts
@@ -104,32 +95,33 @@ class CroSimulator(SimulatorBase):
         self.beams = beams
         self.efbeams = []
         self.combinations = [(int(i), int(j)) for i, j in combinations]
-        beam_idx = jnp.asarray(np.array(self.freq_ndx_beam, dtype=np.int32))
+        fmap = self.freq_map_beam
 
         for i, j in self.combinations:
             bi, bj = beams[i], beams[j]
             print (f"  intializing beam combination {bi.id} x {bj.id} ...")
-            norm = jnp.sqrt(
-                jnp.asarray(bi.gain_conv)[beam_idx]
-                * jnp.asarray(bj.gain_conv)[beam_idx]
-            )
-            beamreal, beamimag = bi.get_healpix_alm(
+            gain_i = fmap.from_native(jnp.asarray(bi.gain_conv))
+            gain_j = fmap.from_native(jnp.asarray(bj.gain_conv))
+            norm = jnp.sqrt(gain_i * gain_j)
+            beamreal_native, beamimag_native = bi.get_healpix_alm(
                 self.lmax,
-                freq_ndx=self.freq_ndx_beam,
+                freq_ndx=fmap.source_indices,
                 other=bj,
                 return_I_stokes_only=True,
                 return_complex_components=True,
             )
-            beamreal = jnp.asarray(beamreal) * norm[:, None]
-            if beamimag is not None:
-                beamimag = jnp.asarray(beamimag) * norm[:, None]
+            beamreal = jnp.asarray(fmap.from_unique(jnp.asarray(beamreal_native))) * norm[:, None]
+            if beamimag_native is not None:
+                beamimag = jnp.asarray(fmap.from_unique(jnp.asarray(beamimag_native))) * norm[:, None]
+            else:
+                beamimag = None
 
             if i==j:
                 groundPowerReal = 1.0 - jnp.real(beamreal[:,0]) / jnp.sqrt(4*jnp.pi)
                 beamimag = None
                 groundPowerImag = 0.0
             else:
-                cross_power = jnp.asarray(self.cross_power.Ex_coupling(bi,bj,self.freq_ndx_beam))
+                cross_power = jnp.asarray(self.cross_power.Ex_coupling(bi, bj, fmap))
                 print (f"    cross power is {cross_power[0]} ... {cross_power[-1]} ")
                 groundPowerReal = cross_power - jnp.real(beamreal[:,0]) / jnp.sqrt(4*jnp.pi)
                 groundPowerImag = -jnp.real(beamimag[:,0]) / jnp.sqrt(4*jnp.pi)
@@ -299,7 +291,7 @@ class CroSimulator(SimulatorBase):
                                       sky_model=None, efbeams=None):
         """MEPA pipeline: sky gal→MEPA once (epoch-aware), beam topo(t0)→MEPA once,
         rot_alm_z(dt) for time evolution, then convolve."""
-        _ensure_spice_lunar_frames()
+        ensure_lunarsky_moon_frame()
         if sky_model is None:
             sky_model = self.sky_model
         if efbeams is None:
@@ -315,7 +307,9 @@ class CroSimulator(SimulatorBase):
             rotation=eul_topo,
             dl_array=dl_topo,
         )
-        sky_gal = sky_model.get_alm(self.freq_ndx_sky)
+        # dispatch + map for the EFFECTIVE sky: sky_model may be a simulate(sky=...)
+        # override on a different native grid than the constructor sky model
+        sky_gal = self.sky_alm_at_freq(sky_model, xp=jnp)
         sky_2d = jnp.stack([
             s2fft.sampling.reindex.flm_hp_to_2d_fast(jnp.asarray(s_), sim_L)
             for s_ in sky_gal

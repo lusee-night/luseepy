@@ -5,6 +5,26 @@ import lusee
 from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
 
 
+def test_crosimulator_simulation_ensures_spice_frames(monkeypatch):
+    import importlib
+
+    cro_module = importlib.import_module("lusee.CroSimulator")
+
+    class SpiceSetupCalled(Exception):
+        pass
+
+    def mark_spice_setup():
+        raise SpiceSetupCalled
+
+    monkeypatch.setattr(
+        cro_module, "ensure_lunarsky_moon_frame", mark_spice_setup
+    )
+    with pytest.raises(SpiceSetupCalled):
+        cro_module.CroSimulator._simulate_croissant_mepa(
+            object(), times=[], ntimes=0, delta_t=0.0
+        )
+
+
 def test_crosimulator_runs_and_returns_expected_shape():
     if lusee.CroSimulator is None:
         pytest.skip("croissant/s2fft not installed")

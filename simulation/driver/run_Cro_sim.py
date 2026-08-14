@@ -9,7 +9,7 @@ if __name__ == "__main__":
     import  yaml
     from    sim_driver import SimEngine, requires_numpy_wrapper
     from    yaml.loader import SafeLoader
-    from    lusee.frequencies import canonical_frequencies, frequency_indices_from_config
+    from    lusee.frequencies import frequencies_from_config, frequency_policy_from_config
     import jax
     jax.config.update("jax_enable_x64", True)
 
@@ -59,8 +59,8 @@ class SimDriver(dict):
         self.dt = od['dt']
         if type(self.dt)==str:
             self.dt = eval(od['dt'])
-        self.freq_indices = frequency_indices_from_config(od['freq'])
-        self.freq = canonical_frequencies(self.freq_indices)
+        self.freq = frequencies_from_config(od['freq'])
+        self.frequency_policy = frequency_policy_from_config(od['freq'])
 
     def _parse_sky(self):
         engine = self._normalize_engine(self)
@@ -186,6 +186,7 @@ class SimDriver(dict):
                 lmax=self.lmax,
                 cross_power=self.couplings,
                 extra_opts={**self["simulation"], "plot_sky_and_beam": True},
+                frequency_policy=self.frequency_policy,
             )
         elif engine is SimEngine.TOPO_NP:
             print("  setting up Default (NumPy) Simulation object...")
@@ -199,6 +200,7 @@ class SimDriver(dict):
                 lmax=self.lmax,
                 cross_power=self.couplings,
                 extra_opts={**self["simulation"]},
+                frequency_policy=self.frequency_policy,
             )
         elif engine is SimEngine.TOPO:
             print("  setting up JAX Simulation object...")
@@ -212,6 +214,7 @@ class SimDriver(dict):
                 lmax=self.lmax,
                 cross_power=self.couplings,
                 extra_opts={**self["simulation"]},
+                frequency_policy=self.frequency_policy,
             )
         else:
             raise ValueError(f"Unknown engine: {engine}")

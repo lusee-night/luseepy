@@ -57,14 +57,18 @@ def load_config(config_path):
 
 def setup_simulation(cfg, lusee):
     """Build Observation, beams, sky from config (same as SimDriver)."""
-    from lusee.frequencies import canonical_frequencies, frequency_indices_from_config
+    from lusee.frequencies import (
+        frequencies_from_config,
+        frequency_policy_from_config,
+    )
 
     root = cfg["_root"]
     od = cfg["observation"]
     dt = od["dt"]
     if isinstance(dt, str):
         dt = eval(dt)
-    freq = canonical_frequencies(frequency_indices_from_config(od["freq"]))
+    freq = frequencies_from_config(od["freq"])
+    frequency_policy = frequency_policy_from_config(od["freq"])
     lmax = od["lmax"]
 
     # Sky
@@ -116,6 +120,7 @@ def setup_simulation(cfg, lusee):
         "beams": beams,
         "sky": sky,
         "freq": freq,
+        "frequency_policy": frequency_policy,
         "lmax": lmax,
         "combinations": combs,
         "Tground": od["Tground"],
@@ -174,6 +179,7 @@ def run_comparison(config_path=None):
         Tground=setup["Tground"], combinations=setup["combinations"],
         freq=setup["freq"], lmax=setup["lmax"],
         cross_power=setup["cross_power"], extra_opts=setup.get("extra_opts", {}),
+        frequency_policy=setup["frequency_policy"],
     )
     def_sim.simulate()
     out_def = def_sim.result
@@ -184,6 +190,7 @@ def run_comparison(config_path=None):
         freq=setup["freq"], lmax=setup["lmax"],
         cross_power=setup["cross_power"],
         extra_opts=setup.get("extra_opts", {}),
+        frequency_policy=setup["frequency_policy"],
     )
     cro_sim.simulate()
     out_cro = cro_sim.result
@@ -192,7 +199,7 @@ def run_comparison(config_path=None):
     print("\n" + "=" * 60)
     print("STEP 1: Sky model (get_alm, galactic frame)")
     print("=" * 60)
-    sky_alm_raw = setup["sky"].get_alm(def_sim.freq_ndx_sky, freq)
+    sky_alm_raw = def_sim.sky_alm_at_freq(setup["sky"])
     print("  Sky alms: same for both (galactic).")
 
     # Step 2: Beams
@@ -233,7 +240,9 @@ def run_comparison(config_path=None):
     # Cro: sky in MEPA (same as CroSimulator gal2mepa); at t=0 phases[0] is applied in convolve
     sky_2d = np.stack([hp_packed_alm_to_flm_2d(s_) for s_ in sky_alm_raw])
     sky_2d_j = jnp.array(sky_2d)
-    et = cro.rotations.jd_to_et(times[0].jd)
+    # SPICE et is TDB-based; a raw .jd would be in the Time's own (UTC)
+    # scale and introduce a ~69 s epoch offset (see CroSimulator)
+    et = cro.rotations.jd_to_et(times[0].tdb.jd)
     eul_gal, dl_gal = cro.rotations.generate_euler_dl(
         lmax, "galactic", "mepa", et=et
     )
