@@ -1,3 +1,7 @@
+# DEPRECATED: legacy scalar-beam pipeline. Needs the deprecated beams
+# under Simulations/OldBeamModels/ (absent from the CI Drive snapshot).
+# The current pipeline is the four-port response: see
+# four_port_example.yaml and realistic_example.yaml.
 paths:
   lusee_drive_dir: $LUSEE_DRIVE_DIR
   beam_dir: Simulations/OldBeamModels/LanderRegolithComparison/eight_layer_regolith

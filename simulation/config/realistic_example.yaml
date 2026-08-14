@@ -1,51 +1,43 @@
+# Realistic four-port example: the ULSA sky forward-modelled through the
+# coupled BGL_v16 instrument response and the measured JFET receiver chain,
+# over a full lunar day. Output is the physical 4x4 cross-correlation
+# covariance (V^2/Hz) per time and frequency. Takes a few minutes
+# (674 timesteps x 16 frequencies; ~6 min wall on a fast workstation).
 paths:
   lusee_drive_dir: $LUSEE_DRIVE_DIR
   sky_dir: Simulations/SkyModels
-  beam_dir: Simulations/OldBeamModels/LanderRegolithComparison/eight_layer_regolith/
   output_dir: $LUSEE_OUTPUT_DIR
-    
+
+response:
+  file: Simulations/BeamModels/BGL_v16/lusee_bgl_v16_response_v3.fits
+  # Positive astronomical azimuth; +90 moves phi=0 (East) toward South
+  rotation_deg: 0
+  require_validated: true
+
+receiver:
+  model: jfet
+  channel_map: [fmpre0, fmpre2, fmpre5, fmpre7]
+  params: {}
+
 sky:
   file: ULSA_32_ddi_smooth.fits
 
-beam_config:
-  type: fits
-  default_file: hfss_lbl_3m_75deg.fits
-  common_beam_angle: 0
-  couplings:
-    opposite:
-      combinations: [[N,S], [E,W]]
-      two_port: hfss_lbl_3m_75deg.2port.fits 
-      sign: -1
-  
-beams: 
-  N:
-    angle: 0
-  E:
-    angle: -90
-  S:
-    angle: -180
-  W:
-    angle: -270
-
 observation:
-  long: 180
+  time_range: "2025-02-01 13:00:00 to 2025-03-01 13:00:00"
+  dt: 3600
   lat: -10
-  beams: [ N, S, E, W ]
-  lunar_day: "2025-02-01 13:00:00 to 2025-02-28 13:00:00"
-  dt: 3600 
-  Tground: 0
+  long: 180
+  height_m: 0
   lmax: 32
-  combinations: all
+  T_moon: 250.0
+  T_ant: 250.0
+  products: all
   freq:
-    policy: exact
+    policy: linear
     start: 1.0
     end: 50.0
-    n: 50
+    n: 16
 
 simulation:
-  engine: topo-numpy
-  output: sim_output.fits
-  cache_transform: lunar_day.pickle  
-  # JAX-only option. Ignored unless simulation.engine is topo.
-  time_batch_size: 300
-  plot_sky_and_beam: True
+  engine: croissant
+  output: four_port_realistic.fits
