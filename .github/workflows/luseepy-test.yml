@@ -29,6 +29,15 @@ jobs:
       - run: uv sync
       - run: wget "https://drive.google.com/uc?export=download&id=1PbU432IYAFSzOjWRrKMoGFR6F1M3dmaV" -O drive.tgz
       - run: tar zxvf drive.tgz
+      # The CI Drive snapshot predates the 2026-08 Drive reorganisation that
+      # renamed Simulations/BeamModels to Simulations/OldBeamModels (BeamModels
+      # now carries the four-port BGL_v16 responses, which are too large to
+      # snapshot). Adapt an old-layout snapshot in place; this is a no-op once
+      # the snapshot is regenerated from the reorganised Drive.
+      - run: |
+          if [ -d Drive/Simulations/BeamModels/LanderRegolithComparison ]; then
+            mv Drive/Simulations/BeamModels Drive/Simulations/OldBeamModels
+          fi
       - run: uv run pytest tests/ -v -m "not manual and not slow"
       - run: uv run pytest tests/test_lunar_28day_Cro_vs_default.py -v
       - run: cd simulation; ln -s ../Drive .; mkdir -p output; uv run python driver/run_sim.py config/example.yaml; ls -l output
