@@ -161,8 +161,10 @@ until the public cutover. Key pieces:
   legacy `Receive_Matrix_Fields_*` exports — both routes agree to 1e-15.
   Drivers: `lusee_bgl_v16.py` (legacy loaded conversion),
   `symmetrize_response.py` (C4 group average).
-- Validated real artifacts live outside the repo in
-  `../receive_matrix/lusee_bgl_v16_response_v3{,_c4sym}.fits`.
+- Validated real artifacts live in the Drive at
+  `Simulations/BeamModels/BGL_v16/lusee_bgl_v16_response_v3{,_c4sym}.fits`
+  (plus the unvalidated `_diagza` diagnostic); the legacy scalar beams
+  moved to `Simulations/OldBeamModels/`.
 - Complex128 response validation requires `JAX_ENABLE_X64=True`; the
   croissant development checkout installs with
   `uv pip install -e ../croissant -e .` (pins the slosar/s2fft fork).

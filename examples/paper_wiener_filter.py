@@ -19,7 +19,7 @@ import healpy as hp
 # ── Config ───────────────────────────────────────────────────────────
 
 DRIVE = os.environ.get("LUSEE_DRIVE_DIR", "/fs/zack/LuSEE-Night/")
-BEAM_FILE = DRIVE + "Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
+BEAM_FILE = DRIVE + "Simulations/OldBeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
 SKY_FILE = DRIVE + "Simulations/SkyModels/ULSA_32_ddi_smooth.fits"
 
 # Paper values: lmax=47, all 50 freqs, full cycle

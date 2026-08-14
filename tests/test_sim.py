@@ -15,7 +15,7 @@ def observation():
 @pytest.fixture(scope="module")
 def fits_beam(drive_dir):
     return lusee.Beam(
-        os.path.join(drive_dir, 'Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits')
+        os.path.join(drive_dir, 'Simulations/OldBeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits')
     )
 
 

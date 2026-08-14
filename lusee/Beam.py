@@ -344,7 +344,7 @@ class Beam:
         require_validated=True,
     ):
         if fname is None:
-            fname = base = os.environ['LUSEE_DRIVE_DIR']+"Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
+            fname = base = os.environ['LUSEE_DRIVE_DIR']+"Simulations/OldBeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
         if not (os.path.isfile (fname) and os.access(fname, os.R_OK)):
             raise FileNotFoundError(f"Cannot open {fname}")
         header = dict(fitsio.read_header(fname))

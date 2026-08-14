@@ -3,7 +3,7 @@ paths:
   output_dir: $LUSEE_OUTPUT_DIR
 
 response:
-  file: responses/lusee_four_port_v3.fits
+  file: Simulations/BeamModels/BGL_v16/lusee_bgl_v16_response_v3.fits
   # Positive astronomical azimuth; +90 moves phi=0 (East) toward South
   rotation_deg: 0
   require_validated: true
