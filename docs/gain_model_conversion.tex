@@ -1,0 +1,246 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage[T1]{fontenc}
+\usepackage{microtype}
+
+\newcommand{\SDU}{\mathrm{SDU}}
+\newcommand{\NaN}{\mathrm{NaN}}
+\newcommand{\model}{\mathcal{M}}
+
+\title{LuSEE Spectrometer Gain Conversion}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Indices and stored quantity}
+
+Let $t$ index spectra, $p\in\{0,\ldots,15\}$ index spectrometer
+products, $c\in\{0,\ldots,3\}$ index ADC channels, and $f$ denote a
+frequency bin.  Let $C_{tpf}$ be the decoded firmware value and let
+$b^{\mathrm{actual}}_{tp}$ be the corresponding realized bit-slice value.
+Ingestion always restores the decoded normal spectrum to the bit-31
+accumulator convention:
+\begin{equation}
+  X^{\SDU}_{tpf}
+  = \operatorname{ldexp}\!\left(C_{tpf},
+      b^{\mathrm{actual}}_{tp}-31\right)
+  = C_{tpf}\,2^{b^{\mathrm{actual}}_{tp}-31}.
+  \label{eq:bitslice}
+\end{equation}
+Only $X^{\SDU}$ is stored in \texttt{/spectra/data}.  The realized
+bit-slice metadata is retained as an $(N,16)$ array.  This operation is
+not optional and the requested bit-slice value is never substituted for a
+missing realized value.
+
+\section{Vendored coefficient table}
+
+The concrete fit artifact is \texttt{lusee/data/gain/alpha\_refit.csv}.  It
+has 318 data rows and exactly the columns
+\texttt{gain\_setting}, \texttt{component}, \texttt{model}, \texttt{term},
+and \texttt{alpha\_refit}.  Its row counts are:
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+family & PC1 & PC2 & total \\
+\midrule
+linear    & 64 & 68 & 132 \\
+quadratic & 91 & 95 & 186 \\
+\midrule
+total     & 155 & 163 & 318 \\
+\bottomrule
+\end{tabular}
+\end{center}
+There are 12 gain/channel settings, $L0$ through $H3$, and both fitted
+families are present for each of PC1 and PC2.  The table is sparse: its term
+vocabulary is the intercept, five linear telemetry variables, and the three
+temperature products shown below (with ADC0 or ADC1 selected by channel).
+The CSV itself, rather than a presumed polynomial template, is the definitive
+list of nonzero coefficients.
+
+For completeness, Table~\ref{tab:sparse-masks} gives the concrete sparse
+term mask of every fitted group.  The abbreviations are
+\begin{equation*}
+  \begin{aligned}
+    0&=1, & F&=T_{\mathrm{FPGA}}, & A&=T_{A,c}, \\
+    V&=V_{1.8}, & D&=V_{1.2}, & I&=I_{1.8}, \\
+    F^2&=T_{\mathrm{FPGA}}^2, & A^2&=T_{A,c}^2,
+      & FA&=T_{\mathrm{FPGA}}T_{A,c}.
+  \end{aligned}
+\end{equation*}
+Each listed term has its own CSV value
+$\lambda^{(m,r)}_{sck}$; omitted terms have coefficient zero.
+
+\begin{longtable}{@{}llp{0.32\textwidth}p{0.40\textwidth}@{}}
+\caption{Exact nonzero term masks in \texttt{alpha\_refit.csv}.}
+\label{tab:sparse-masks}\\
+\toprule
+setting & PC & linear family & quadratic family \\
+\midrule
+\endfirsthead
+\toprule
+setting & PC & linear family & quadratic family \\
+\midrule
+\endhead
+L0 & 1 & $0,F,A,D,I$ & $F,A,D,F^2,A^2,FA$ \\
+L0 & 2 & $0,F,A,V,D,I$ & $0,F,A,V,D,I,F^2,A^2,FA$ \\
+L1 & 1 & $0,F,A,V,D,I$ & $0,F,A,V,D,I,F^2,A^2,FA$ \\
+L1 & 2 & $0,F,A,V,D,I$ & $0,F,A,D,I,F^2,A^2,FA$ \\
+L2 & 1 & $0,F,A,D,I$ & $F,A,V,D,I,F^2,A^2,FA$ \\
+L2 & 2 & $0,F,A,V,D,I$ & $0,F,A,V,D,I,F^2,A^2,FA$ \\
+L3 & 1 & $0,F,A,V,D,I$ & $0,F,A,V,D,I,F^2,A^2,FA$ \\
+L3 & 2 & $F,A,V,D,I$ & $F,D,I$ \\
+M0 & 1 & $0,F,A,V,D,I$ & $F,A,I,F^2,A^2,FA$ \\
+M0 & 2 & $0,F,A,V,D,I$ & $0,F,A,V,D,I,F^2$ \\
+M1 & 1 & $0,A,V,D,I$ & $0,F,A,V,D,I,F^2,A^2,FA$ \\
+M1 & 2 & $0,F,A,V,D,I$ & $0,F,A,V,D,I,F^2,A^2,FA$ \\
+M2 & 1 & $0,F,A,V,D,I$ & $0,F,A,V,D,I,F^2,A^2,FA$ \\
+M2 & 2 & $F,A,V,D,I$ & $0,F,A,V,D,I,F^2,A^2,FA$ \\
+M3 & 1 & $0,A,V,D,I$ & $0,A,I,F^2$ \\
+M3 & 2 & $0,F,A,V,D,I$ & $0,F,A,V,D,I,F^2,A^2,FA$ \\
+H0 & 1 & $0,F,A,D,I$ & $F,A,D,I,F^2,A^2,FA$ \\
+H0 & 2 & $0,F,A,V,D$ & $0,F,A,V,D,F^2,A^2,FA$ \\
+H1 & 1 & $0,F,A,V,D,I$ & $F,A,V,D,F^2,A^2,FA$ \\
+H1 & 2 & $0,F,A,V,I$ & $0,F,A,V,D,I,F^2,A^2,FA$ \\
+H2 & 1 & $F,A,V,D$ & $0,F,A,V,D,I,F^2,A^2,FA$ \\
+H2 & 2 & $0,F,A,V,D,I$ & $F,A,D,I,F^2,A^2,FA$ \\
+H3 & 1 & $0,F,A,D,I$ & $0,F,A,V,D,I,F^2,FA$ \\
+H3 & 2 & $0,F,A,V,D,I$ & $0,F,A,V,I,F^2,A^2,FA$ \\
+\bottomrule
+\end{longtable}
+
+\section{Telemetry regression}
+
+For channel $c$, define
+\begin{equation}
+  T_{A,c} =
+  \begin{cases}
+    T_{\mathrm{ADC0}}, & c\in\{0,1\},\\
+    T_{\mathrm{ADC1}}, & c\in\{2,3\},
+  \end{cases}
+\end{equation}
+and the common feature vector
+\begin{equation}
+  \boldsymbol{\phi}_c(\mathbf z_t) =
+  \begin{pmatrix}
+    1 & T_{\mathrm{FPGA}} & T_{A,c} & V_{1.8} & V_{1.2} & I_{1.8}
+      & T_{\mathrm{FPGA}}^2 & T_{A,c}^2
+      & T_{\mathrm{FPGA}}T_{A,c}
+  \end{pmatrix}^{\!\mathsf T}_{t}.
+  \label{eq:features}
+\end{equation}
+The coefficient table \texttt{alpha\_refit.csv} contains a sparse subset
+of these terms for gain setting $s\in\{L,M,H\}$, channel $c$, principal
+component $r\in\{1,2\}$, and fitted family
+$m\in\{\mathrm{linear},\mathrm{quadratic}\}$.  Define a missing CSV row to
+have coefficient zero.  Then the predicted score is
+\begin{equation}
+  q^{(m_r)}_{tscr}
+  = \sum_k \lambda^{(m_r,r)}_{sck}\,
+      \phi_{c,k}(\mathbf z_t).
+  \label{eq:pc-score}
+\end{equation}
+For example, the FPGA-temperature contribution is represented symbolically by
+\begin{equation*}
+  \lambda^{(m_r,r)}_{sc,\mathrm{THERM\_FPGA}}\,
+  T_{\mathrm{FPGA},t}.
+\end{equation*}
+No fitted numerical coefficient is part of this definition.
+
+The labels ``linear'' and ``quadratic'' select rows of the fitted artifact.
+They do not dictate which terms must be present.  In particular, a row group
+labelled quadratic may retain linear terms, quadratic terms, both, or only a
+screened subset.  PC1 and PC2 select their families independently:
+\begin{equation}
+  (m_1,m_2) \in
+  \{\mathrm{linear},\mathrm{quadratic}\}^2.
+\end{equation}
+
+\section{Gain reconstruction}
+
+At gain setting $s$, channel $c$, and PCA anchor-frequency index $a$, the
+gain-model artifact supplies a mean $\mu_{sca}$ and two eigenvectors
+$v_{sc1a}$ and $v_{sc2a}$.  The reconstructed gain is
+\begin{equation}
+  G_{tca}
+  = \mu_{sca}
+    +q^{(m_1)}_{tsc1}v_{sc1a}
+    +q^{(m_2)}_{tsc2}v_{sc2a}.
+  \label{eq:gain-anchor}
+\end{equation}
+A cubic spline, with extrapolation disabled, evaluates this quantity on the
+spectrometer frequency grid:
+\begin{equation}
+  G_{tc}(f)
+  = \mathcal S_{sc}\!\left[
+      \mu_{sc\cdot}
+      +q^{(m_1)}_{tsc1}v_{sc1\cdot}
+      +q^{(m_2)}_{tsc2}v_{sc2\cdot}
+    \right](f).
+  \label{eq:gain-interp}
+\end{equation}
+
+\section{Conversion to physical spectral density}
+
+For an auto product $p=c$, the input-referred power spectral density in the
+native gain-model units is
+\begin{equation}
+  P^{\mathrm{nV}^2/\mathrm{Hz}}_{tcf}
+  = \frac{X^{\SDU}_{tcf}}{G_{tc}(f)}.
+  \label{eq:auto-psd}
+\end{equation}
+For either the real or imaginary product of a cross between channels $c$ and
+$d$, it is
+\begin{equation}
+  P^{\mathrm{nV}^2/\mathrm{Hz}}_{t,(cd),f}
+  = \frac{X^{\SDU}_{t,(cd),f}}
+         {\sqrt{G_{tc}(f)G_{td}(f)}}.
+  \label{eq:cross-psd}
+\end{equation}
+The SI-unit result is
+\begin{equation}
+  P^{\mathrm{V}^2/\mathrm{Hz}} = 10^{-18}
+  P^{\mathrm{nV}^2/\mathrm{Hz}}.
+\end{equation}
+
+For compatibility with the production reference, the amplitude-spectral-
+density view is
+\begin{align}
+  A^{\mathrm{nV}/\sqrt{\mathrm{Hz}}}_{tcf}
+    &= \sqrt{X^{\SDU}_{tcf}/G_{tc}(f)},
+      &&\text{auto}, \label{eq:auto-asd}\\
+  A^{\mathrm{nV}/\sqrt{\mathrm{Hz}}}_{t,(cd),f}
+    &= \operatorname{sgn}(X^{\SDU}_{t,(cd),f})
+       \sqrt{\frac{|X^{\SDU}_{t,(cd),f}|}
+                    {\sqrt{G_{tc}(f)G_{td}(f)}}},
+      &&\text{cross component}. \label{eq:cross-asd}
+\end{align}
+Equation~\eqref{eq:cross-asd} is a signed display convention for separate
+real and imaginary components; equation~\eqref{eq:cross-psd} is the
+physically linear cross-power representation.
+
+Non-finite telemetry or data, a non-positive reconstructed gain, a negative
+auto power, or a frequency outside the anchor range produces $\NaN$.  The
+conversion is evaluated lazily when requested and is not written back to the
+HDF5 file.  Returned arrays are decorated with either
+\texttt{nV/sqrt(Hz)}, \texttt{nV\^{}2/Hz}, or \texttt{V\^{}2/Hz}; stored
+normal spectra are decorated with \texttt{SDU}.
+
+\section{Frozen implementation contract}
+
+The implementation intentionally freezes the vendored PCA arrays and the
+rows of \texttt{alpha\_refit.csv}.  A process-wide selection chooses
+$(m_1,m_2)$ once per public conversion call.  Dense coefficient and feature
+arrays are used for the polynomial evaluation, while reconstructed gains are
+vectorized over time, channel, and frequency.  This document specifies
+reproduction of that artifact; it does not independently resolve the
+pre-amplifier reference-temperature or FFT equivalent-noise-bandwidth
+conventions used when the artifact was produced.
+
+\end{document}

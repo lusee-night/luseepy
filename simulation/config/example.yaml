@@ -1,9 +1,11 @@
-# Starter config aligned with sim_choice_realistic.yaml / run_Cro_sim.py pipeline.
-# Engine: croissant (requires croissant-sim + s2fft + spiceypy; see pyproject optional deps).
+# DEPRECATED: legacy scalar-beam pipeline. Needs the deprecated beams
+# under Simulations/OldBeamModels/ (absent from the CI Drive snapshot).
+# The current pipeline is the four-port response: see
+# four_port_example.yaml and realistic_example.yaml.
 paths:
   lusee_drive_dir: $LUSEE_DRIVE_DIR
   sky_dir: Simulations/SkyModels
-  beam_dir: Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/
+  beam_dir: Simulations/OldBeamModels/LanderRegolithComparison/eight_layer_regolith/
   output_dir: $LUSEE_OUTPUT_DIR
     
 sky:
@@ -16,8 +18,8 @@ beam_config:
   couplings:
     opposite:
       combinations: [[N,S], [E,W]]
-      # following is to save CI DL: we should have a 2 port here,
-      # but use this to have CI run through this part of the code
+      # A real two-port coupling file would go here; the default beam
+      # file is reused so the coupling code path stays runnable.
       two_port: hfss_lbl_3m_75deg.fits 
       sign: -1
   
@@ -46,8 +48,6 @@ observation:
 
 simulation:
   engine: croissant
-  # CI and SimReadTest expect this filename; sim_choice_realistic omits output
-  # and uses the driver default name instead.
   output: sim_example.fits
   cache_transform: lunar_day.pickle
   # JAX-only option. Ignored unless simulation.engine is topo.

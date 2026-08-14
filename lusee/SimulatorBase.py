@@ -2,6 +2,7 @@ from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .frequencies import FrequencyMap, FrequencyPolicy, frequency_grids_match
+from .LabeledArray import LabeledArray, FRAME_TOPO
 
 import numpy as np
 import jax.numpy as jnp
@@ -154,6 +155,13 @@ class SimulatorBase:
         self.combinations = combinations
         self.result = None
         self.frequency_policy = FrequencyPolicy.normalize(frequency_policy)
+        # Labels for the simulated waterfall (self.result): antenna brightness
+        # temperature in the instrument/topocentric frame.  Kept as plain
+        # attributes; self.result itself stays a bare array so the jitted
+        # forward model in MapMaker is unaffected.  Use result_labeled to get
+        # a printable LabeledArray view.
+        self.result_units = "K"
+        self.result_frame = FRAME_TOPO
 
         if freq is None:
             self.freq = beams[0].freq
@@ -262,6 +270,19 @@ class SimulatorBase:
         """
 
         raise NotImplementedError("simulate() not implemented in base class")
+
+    @property
+    def result_labeled(self):
+        """Return self.result as a printable LabeledArray (units/frame), or None.
+
+        This is a convenience view for inspection/debugging; simulate() and
+        self.result remain bare arrays so jitted/autodiff callers (e.g.
+        MapMaker) are unaffected.
+        """
+        if self.result is None:
+            return None
+        return LabeledArray(self.result, units=self.result_units,
+                            frame=self.result_frame)
 
     def _cache_bool(self, value):
         if isinstance(value, bool):

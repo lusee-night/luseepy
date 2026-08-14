@@ -147,11 +147,8 @@ def assert_same_public_methods(old_beam, new_beam):
 
 
 @pytest.mark.integration
-def test_beam_matches_pre_jax_reference(drive_dir):
-    fname = os.path.join(
-        drive_dir,
-        "Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits",
-    )
+def test_beam_matches_pre_jax_reference(legacy_beam_path):
+    fname = legacy_beam_path
     old_beam = PreJaxBeam(fname=fname, id="pre_jax")
     new_beam = Beam(fname=fname, id="pre_jax")
 

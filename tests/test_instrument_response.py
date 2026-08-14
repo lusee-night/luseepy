@@ -1,0 +1,630 @@
+"""Tests for FITS-v3 four-port instrument responses."""
+
+import jax.numpy as jnp
+import fitsio
+import numpy as np
+import pytest
+
+from beam_conversion.common import (
+    ResponseArrays,
+    compute_sky_moon_resistance,
+    embedded_fields_to_bare,
+    write_response_fits,
+)
+from lusee.InstrumentResponse import InstrumentResponse, PORT_PAIRS
+
+
+def make_response_arrays(freq=(10.0, 20.0)):
+    """Build a small mwss-compatible physical response fixture."""
+    freq = np.asarray(freq, dtype=np.float64)
+    theta = np.arange(0.0, 91.0, 45.0)
+    phi = np.arange(0.0, 361.0, 45.0)
+    tt, pp = np.meshgrid(np.radians(theta), np.radians(phi), indexing="ij")
+    H_theta = np.empty((4, freq.size, theta.size, phi.size), dtype=np.complex128)
+    H_phi = np.empty_like(H_theta)
+    for port in range(4):
+        frequency_scale = (1.0 + 0.1 * np.arange(freq.size))[None, :, None, None]
+        phase = np.exp(1j * port * pp)[None, None]
+        H_theta[port : port + 1] = (
+            0.05
+            * (port + 1)
+            * frequency_scale
+            * np.cos(tt)[None, None]
+            * phase
+        )
+        H_phi[port : port + 1] = (
+            0.03
+            * frequency_scale
+            * np.sin(tt)[None, None]
+            * np.exp(-1j * (port + 1) * pp)[None, None]
+        )
+    ZA = np.broadcast_to(
+        (30.0 + 5.0j) * np.eye(4)[None],
+        (freq.size, 4, 4),
+    ).copy()
+    Rloss = np.zeros_like(ZA)
+    Rsky, Rmoon = compute_sky_moon_resistance(
+        freq, theta, phi, H_theta, H_phi, ZA, Rloss
+    )
+    return ResponseArrays(
+        freq,
+        theta,
+        phi,
+        H_theta,
+        H_phi,
+        ZA,
+        Rsky,
+        Rmoon,
+        Rloss,
+        metadata={
+            "SOURCE": "synthetic",
+            "SOURCE_ROOT": "pytest",
+            "INPUT_KIND": "bare",
+            "FIELD_KIND": "effective-length",
+            "FIELD_UNIT": "m",
+            "FIELD_AMP": "ratio",
+            "NORM_KIND": "already-effective-length",
+            "NORM_UNIT": "not-applicable",
+            "NORM_AMP": "ratio",
+            "CANONICAL": "H[m],SI-RMS",
+            "LOSSMODEL": "PEC",
+            "RLOSSSRC": "explicit-zero-test-fixture",
+            "ZA_SOURCE": "analytic",
+            "GIT_SHA": "test",
+            "TIMECONV": "e+jwt",
+            "COORDSYS": "instrument-topocentric",
+            "THETADEF": "colatitude-from-+z",
+            "PHIDEF": "right-handed-about-+z",
+            "OMEGADEF": "source-arrival-direction",
+            "POLBASIS": "e_theta,e_phi",
+            "PHASEREF": "analytic-origin",
+            "PORTS": "0123",
+        },
+    )
+
+
+def test_response_fits_round_trip_preserves_float64_grid_and_units(tmp_path):
+    arrays = make_response_arrays()
+    filename = tmp_path / "response.fits"
+    write_response_fits(filename, arrays, dtype="float32", validated=True)
+    response = InstrumentResponse(filename)
+    assert response.freq.dtype == np.float64
+    assert response.H_theta.dtype == jnp.complex64
+    assert response.H_theta.shape == arrays.H_theta.shape
+    assert response.ZA.shape == (2, 4, 4)
+    assert response.sky_coupling_check()["physical"]
+    np.testing.assert_allclose(
+        response.Rsky_native,
+        arrays.Rsky,
+        rtol=2e-6,
+        atol=2e-6,
+    )
+    assert np.all(np.asarray(response.Rloss_native) == 0.0)
+
+
+def test_lossy_response_round_trip_preserves_moon_and_metal_split(tmp_path):
+    arrays = make_response_arrays()
+    arrays.Rloss = 0.2 * arrays.Rmoon
+    arrays.Rmoon = 0.8 * arrays.Rmoon
+    arrays.metadata["LOSSMODEL"] = "lossy"
+    arrays.metadata["RLOSSSRC"] = "synthetic-pec-baseline"
+    filename = tmp_path / "lossy_response.fits"
+    write_response_fits(filename, arrays, dtype="float64")
+    response = InstrumentResponse(filename)
+    np.testing.assert_allclose(response.Rmoon_native, arrays.Rmoon)
+    np.testing.assert_allclose(response.Rloss_native, arrays.Rloss, atol=1e-30)
+    np.testing.assert_allclose(
+        response.Rsky_native + response.Rmoon_native + response.Rloss_native,
+        0.5 * (
+            response.ZA
+            + np.swapaxes(response.ZA.conjugate(), -1, -2)
+        ),
+        atol=1e-30,
+    )
+
+
+def test_pec_response_rejects_nonzero_metal_loss(tmp_path):
+    arrays = make_response_arrays()
+    shift = 0.1 * arrays.Rmoon
+    arrays.Rloss = shift
+    arrays.Rmoon = arrays.Rmoon - shift
+    with pytest.raises(ValueError, match="requires Rloss=0"):
+        write_response_fits(tmp_path / "false_pec.fits", arrays)
+
+
+def test_response_requires_explicit_loss_model(tmp_path):
+    arrays = make_response_arrays()
+    arrays.metadata.pop("LOSSMODEL")
+    with pytest.raises(ValueError, match="must declare LOSSMODEL"):
+        write_response_fits(tmp_path / "missing_loss_model.fits", arrays)
+
+
+def test_response_loader_rejects_unvalidated_by_default(tmp_path):
+    arrays = make_response_arrays()
+    filename = tmp_path / "unvalidated.fits"
+    write_response_fits(filename, arrays, validated=False)
+    with pytest.raises(ValueError, match="VALIDATED=False"):
+        InstrumentResponse(filename)
+    response = InstrumentResponse(filename, require_validated=False)
+    assert not response.validated
+
+
+def test_response_loader_rejects_fractional_future_version(tmp_path):
+    arrays = make_response_arrays()
+    filename = tmp_path / "future_response.fits"
+    write_response_fits(filename, arrays)
+    with fitsio.FITS(filename, "rw") as fits:
+        fits[0].write_key("VERSION", 3.1)
+    with pytest.raises(ValueError, match="requires FITS VERSION=3"):
+        InstrumentResponse(filename)
+
+
+def test_response_loader_rejects_noncanonical_validated_metadata(tmp_path):
+    arrays = make_response_arrays()
+    filename = tmp_path / "bad_convention.fits"
+    write_response_fits(filename, arrays)
+    with fitsio.FITS(filename, "rw") as fits:
+        fits["H_theta_real"].write_key("POLBASIS", "mystery-basis")
+    with pytest.raises(ValueError, match="unsupported POLBASIS"):
+        InstrumentResponse(filename)
+
+
+def test_response_loader_rechecks_validated_physical_matrices(tmp_path):
+    arrays = make_response_arrays()
+    filename = tmp_path / "bad_physics.fits"
+    write_response_fits(filename, arrays, dtype="float64")
+    with fitsio.FITS(filename, "rw") as fits:
+        moon = fits["Rmoon_real"].read()
+        sky = fits["Rsky_real"].read()
+        shift = 2.0 * np.max(np.linalg.eigvalsh(arrays.Rmoon[0]))
+        moon[0, 0, 0] -= shift
+        sky[0, 0, 0] += shift
+        fits["Rmoon_real"].write(moon)
+        fits["Rsky_real"].write(sky)
+    with pytest.raises(ValueError, match="negative eigenvalue"):
+        InstrumentResponse(filename, verify_physics=True)
+
+
+def test_validated_response_rejects_nonreciprocal_impedance(tmp_path):
+    arrays = make_response_arrays()
+    arrays.ZA = arrays.ZA.copy()
+    arrays.ZA[:, 0, 1] += 0.25
+    arrays.ZA[:, 1, 0] -= 0.25
+    with pytest.raises(ValueError, match="must be reciprocal"):
+        write_response_fits(tmp_path / "nonreciprocal.fits", arrays)
+
+
+def test_validated_response_rejects_nonpassive_impedance(tmp_path):
+    arrays = make_response_arrays()
+    shift = 40.0 * np.eye(4)[None]
+    arrays.ZA = arrays.ZA - shift
+    arrays.Rmoon = arrays.Rmoon - shift
+    with pytest.raises(ValueError, match=r"Herm\(ZA\).*negative eigenvalue"):
+        write_response_fits(tmp_path / "nonpassive.fits", arrays)
+
+
+def test_validated_response_rejects_non_psd_sky_resistance(tmp_path):
+    arrays = make_response_arrays()
+    eigenvalues, eigenvectors = np.linalg.eigh(arrays.Rsky[0])
+    vector = eigenvectors[:, 0]
+    shift = (
+        abs(eigenvalues[0]) + 1.0
+    ) * np.outer(vector, vector.conjugate())
+    arrays.Rsky = arrays.Rsky.copy()
+    arrays.Rmoon = arrays.Rmoon.copy()
+    arrays.Rsky[0] -= shift
+    arrays.Rmoon[0] += shift
+    with pytest.raises(ValueError, match="Rsky has a negative eigenvalue"):
+        write_response_fits(tmp_path / "non_psd_sky.fits", arrays)
+
+
+def test_response_matrix_diagnostics_report_all_physical_gates():
+    arrays = make_response_arrays()
+    response = InstrumentResponse.from_arrays(
+        arrays.freq_mhz,
+        arrays.theta_deg,
+        arrays.phi_deg,
+        arrays.H_theta,
+        arrays.H_phi,
+        arrays.ZA,
+        arrays.Rsky,
+        arrays.Rmoon,
+        arrays.Rloss,
+        validated=True,
+        metadata=arrays.metadata,
+    )
+    diagnostics = response.response_diagnostics()
+    assert diagnostics["za_reciprocity_error"].shape == (2,)
+    assert diagnostics["passivity_eigenvalues"].shape == (2, 4)
+    assert diagnostics["sky_eigenvalues"].shape == (2, 4)
+    assert diagnostics["moon_eigenvalues"].shape == (2, 4)
+    assert diagnostics["loss_eigenvalues"].shape == (2, 4)
+    assert diagnostics["za_condition_number"].shape == (2,)
+    assert np.all(diagnostics["za_reciprocity_error"] == 0.0)
+    assert np.all(diagnostics["resistance_closure_relative"] < 1e-12)
+    assert diagnostics["normalization_condition_number"] is None
+    assert response.sky_coupling_check()["physical"]
+
+
+def test_response_loader_verifies_persisted_content_hash(tmp_path):
+    arrays = make_response_arrays()
+    filename = tmp_path / "content_hash.fits"
+    write_response_fits(filename, arrays)
+    response = InstrumentResponse(filename)
+    assert response.content_hash == fitsio.read_header(filename)["CONTENT"]
+    with fitsio.FITS(filename, "rw") as fits:
+        fits["H_theta_real"].write_key("CONTENT", "0" * 64)
+    with pytest.raises(ValueError, match="CONTENT hash"):
+        InstrumentResponse(filename)
+
+
+def test_validated_writer_binds_stored_resistance_to_fields(tmp_path):
+    arrays = make_response_arrays()
+    arrays.Rsky = arrays.Rsky.copy()
+    arrays.Rmoon = arrays.Rmoon.copy()
+    identity = np.eye(4)[None]
+    arrays.Rsky += identity
+    arrays.Rmoon -= identity
+    with pytest.raises(ValueError, match="inconsistent with H_theta"):
+        write_response_fits(tmp_path / "shifted_matrices.fits", arrays)
+
+
+def test_default_load_skips_physics_rederivation(tmp_path, monkeypatch):
+    arrays = make_response_arrays()
+    filename = tmp_path / "light_load.fits"
+    write_response_fits(filename, arrays, dtype="float64")
+
+    def boom(*args, **kwargs):
+        raise AssertionError(
+            "compute_sky_moon_resistance must not run on a default load"
+        )
+
+    import importlib
+
+    response_module = importlib.import_module("lusee.InstrumentResponse")
+    monkeypatch.setattr(response_module, "compute_sky_moon_resistance", boom)
+    response = InstrumentResponse(filename)
+    assert response.validated
+
+
+def test_default_load_still_rejects_tampered_payload(tmp_path):
+    arrays = make_response_arrays()
+    filename = tmp_path / "tampered_payload.fits"
+    write_response_fits(filename, arrays, dtype="float64")
+    with fitsio.FITS(filename, "rw") as fits:
+        sky = fits["Rsky_real"].read()
+        sky += np.eye(4)[None]
+        fits["Rsky_real"].write(sky)
+    with pytest.raises(ValueError, match="CONTENT hash"):
+        InstrumentResponse(filename)
+
+
+def test_validated_loader_binds_stored_resistance_to_fields(tmp_path):
+    arrays = make_response_arrays()
+    filename = tmp_path / "shifted_matrices.fits"
+    write_response_fits(filename, arrays, dtype="float64")
+    with fitsio.FITS(filename, "rw") as fits:
+        sky = fits["Rsky_real"].read()
+        moon = fits["Rmoon_real"].read()
+        sky += np.eye(4)[None]
+        moon -= np.eye(4)[None]
+        fits["Rsky_real"].write(sky)
+        fits["Rmoon_real"].write(moon)
+    with pytest.raises(ValueError, match="inconsistent with H_theta"):
+        InstrumentResponse(filename, verify_physics=True)
+
+
+def test_validated_writer_requires_explicit_provenance(tmp_path):
+    arrays = make_response_arrays()
+    arrays.metadata = {
+        "SOURCE": "synthetic",
+        "LOSSMODEL": "PEC",
+        "RLOSSSRC": "explicit-zero-test-fixture",
+    }
+    with pytest.raises(ValueError, match="explicit response provenance"):
+        write_response_fits(tmp_path / "missing.fits", arrays)
+
+
+def test_validated_writer_rejects_noncanonical_provenance(tmp_path):
+    arrays = make_response_arrays()
+    arrays.metadata["POLBASIS"] = "mystery-basis"
+    with pytest.raises(ValueError, match="unsupported POLBASIS"):
+        write_response_fits(tmp_path / "bad_convention.fits", arrays)
+
+
+def test_validated_writer_rejects_inconsistent_conversion_contract(tmp_path):
+    arrays = make_response_arrays()
+    arrays.metadata["FIELD_KIND"] = "rE"
+    with pytest.raises(ValueError, match="inconsistent FIELD_UNIT"):
+        write_response_fits(tmp_path / "bad_conversion.fits", arrays)
+
+
+def test_raw_bare_contract_requires_persisted_normalization_current(tmp_path):
+    arrays = make_response_arrays()
+    arrays.metadata.update(
+        {
+            "FIELD_KIND": "rE",
+            "FIELD_UNIT": "V",
+            "FIELD_AMP": "rms",
+            "NORM_KIND": "current",
+            "NORM_UNIT": "A",
+            "NORM_AMP": "rms",
+        }
+    )
+    with pytest.raises(ValueError, match="requires Inorm"):
+        write_response_fits(tmp_path / "missing_inorm.fits", arrays)
+
+
+def test_writer_argument_controls_validated_header(tmp_path):
+    arrays = make_response_arrays()
+    arrays.metadata["VALIDATED"] = False
+    validated_filename = tmp_path / "validated.fits"
+    write_response_fits(validated_filename, arrays, validated=True)
+    assert bool(fitsio.read_header(validated_filename)["VALIDATED"])
+
+    arrays.metadata["VALIDATED"] = True
+    unvalidated_filename = tmp_path / "unvalidated.fits"
+    write_response_fits(unvalidated_filename, arrays, validated=False)
+    assert not bool(fitsio.read_header(unvalidated_filename)["VALIDATED"])
+
+
+def test_validated_writer_requires_horizon_and_phi_wrap(tmp_path):
+    arrays = make_response_arrays()
+    arrays.theta_deg = arrays.theta_deg[:-1]
+    arrays.H_theta = arrays.H_theta[:, :, :-1]
+    arrays.H_phi = arrays.H_phi[:, :, :-1]
+    with pytest.raises(ValueError, match="span 0 through 90"):
+        write_response_fits(tmp_path / "short_theta.fits", arrays)
+
+    arrays = make_response_arrays()
+    arrays.phi_deg = arrays.phi_deg[:-1]
+    arrays.H_theta = arrays.H_theta[..., :-1]
+    arrays.H_phi = arrays.H_phi[..., :-1]
+    with pytest.raises(ValueError, match="retain the 0/360 wrap"):
+        write_response_fits(tmp_path / "no_wrap.fits", arrays)
+
+    arrays = make_response_arrays()
+    phi_indices = [0, 2, 4, 6, 8]
+    arrays.phi_deg = arrays.phi_deg[phi_indices]
+    arrays.H_theta = arrays.H_theta[..., phi_indices]
+    arrays.H_phi = arrays.H_phi[..., phi_indices]
+    with pytest.raises(ValueError, match="Nphi-1"):
+        write_response_fits(tmp_path / "incompatible_mwss.fits", arrays)
+
+
+def test_validated_loader_rechecks_horizon_geometry(tmp_path):
+    arrays = make_response_arrays()
+    filename = tmp_path / "bad_theta.fits"
+    write_response_fits(filename, arrays)
+    with fitsio.FITS(filename, "rw") as fits:
+        theta = fits["theta"].read()
+        theta[-1] = 80.0
+        fits["theta"].write(theta)
+    with pytest.raises(ValueError, match="end at 90"):
+        InstrumentResponse(filename)
+
+    arrays = make_response_arrays()
+    with pytest.raises(ValueError, match="three stored phi"):
+        InstrumentResponse.from_arrays(
+            arrays.freq_mhz,
+            arrays.theta_deg,
+            [0.0, 360.0],
+            arrays.H_theta[..., [0, -1]],
+            arrays.H_phi[..., [0, -1]],
+            arrays.ZA,
+            arrays.Rsky,
+            arrays.Rmoon,
+            arrays.Rloss,
+            validated=True,
+            metadata=arrays.metadata,
+        )
+
+
+def test_validated_writer_rejects_negative_moon_resistance(tmp_path):
+    arrays = make_response_arrays()
+    arrays.Rmoon = arrays.Rmoon.copy()
+    arrays.Rsky = arrays.Rsky.copy()
+    shift = 2.0 * np.max(np.linalg.eigvalsh(arrays.Rmoon[0]))
+    arrays.Rmoon[0, 0, 0] -= shift
+    arrays.Rsky[0, 0, 0] += shift
+    with pytest.raises(ValueError, match="negative eigenvalue"):
+        write_response_fits(tmp_path / "negative_moon.fits", arrays)
+
+
+def test_embedded_basis_right_solve_recovers_noncommuting_bare_fields():
+    rng = np.random.default_rng(4)
+    nfreq = 2
+    ZA = (
+        rng.normal(size=(nfreq, 4, 4))
+        + 1j * rng.normal(size=(nfreq, 4, 4))
+        + 8 * np.eye(4)[None]
+    )
+    Vsource = (
+        rng.normal(size=(nfreq, 4, 4))
+        + 1j * rng.normal(size=(nfreq, 4, 4))
+        + 3 * np.eye(4)[None]
+    )
+    Zref = np.broadcast_to(np.asarray([40.0, 50.0, 60.0, 70.0]), (nfreq, 4))
+    load = np.zeros_like(ZA)
+    diagonal = np.arange(4)
+    load[:, diagonal, diagonal] = Zref
+    currents = np.linalg.solve(ZA + load, Vsource)
+    bare_theta = rng.normal(size=(4, nfreq, 2, 3)) + 1j * rng.normal(
+        size=(4, nfreq, 2, 3)
+    )
+    bare_phi = rng.normal(size=(4, nfreq, 2, 3)) + 1j * rng.normal(
+        size=(4, nfreq, 2, 3)
+    )
+
+    def embed(bare):
+        rows = np.moveaxis(bare, (0, 1), (-1, 0))
+        embedded = np.einsum("ftpa,fae->ftpe", rows, currents)
+        return np.moveaxis(embedded, (0, -1), (1, 0))
+
+    recovered_theta, recovered_phi, recovered_currents = (
+        embedded_fields_to_bare(
+            embed(bare_theta),
+            embed(bare_phi),
+            ZA,
+            Zref,
+            Vsource,
+            field_units="V",
+            field_amplitude_convention="rms",
+            vsource_units="V",
+            vsource_amplitude_convention="rms",
+        )
+    )
+    np.testing.assert_allclose(recovered_currents, currents, rtol=1e-12)
+    np.testing.assert_allclose(recovered_theta, bare_theta, rtol=1e-12)
+    np.testing.assert_allclose(recovered_phi, bare_phi, rtol=1e-12)
+
+
+def test_pair_stokes_maps_obey_baseline_conjugation():
+    arrays = make_response_arrays()
+    response = InstrumentResponse.from_arrays(
+        arrays.freq_mhz,
+        arrays.theta_deg,
+        arrays.phi_deg,
+        arrays.H_theta,
+        arrays.H_phi,
+        arrays.ZA,
+        arrays.Rsky,
+        arrays.Rmoon,
+        arrays.Rloss,
+    )
+    for a, b in PORT_PAIRS:
+        forward = response.pair_stokes_maps(a, b)
+        reverse = response.pair_stokes_maps(b, a)
+        assert jnp.allclose(reverse, forward.conjugate())
+
+
+def test_pair_stokes_positive_v_sign_matches_exp_plus_i_fixture():
+    arrays = make_response_arrays()
+    shape = arrays.H_theta.shape
+    H_theta = np.zeros(shape, dtype=np.complex128)
+    H_phi = np.zeros(shape, dtype=np.complex128)
+    H_theta[0] = 1.0 / np.sqrt(2.0)
+    H_phi[0] = -1.0j / np.sqrt(2.0)
+    H_theta[1] = 1.0 / np.sqrt(2.0)
+    H_phi[1] = 1.0j / np.sqrt(2.0)
+    response = InstrumentResponse.from_arrays(
+        arrays.freq_mhz,
+        arrays.theta_deg,
+        arrays.phi_deg,
+        H_theta,
+        H_phi,
+        arrays.ZA,
+        arrays.Rsky,
+        arrays.Rmoon,
+        arrays.Rloss,
+    )
+    matched = response.pair_stokes_maps(0, 0)
+    rejected = response.pair_stokes_maps(1, 1)
+    assert jnp.allclose(matched[:, 0], 1.0)
+    assert jnp.allclose(matched[:, 3], 1.0)
+    assert jnp.allclose(rejected[:, 0], 1.0)
+    assert jnp.allclose(rejected[:, 3], -1.0)
+
+
+def test_target_pair_alms_preserve_order_duplicates_and_unique_sht_endpoints():
+    arrays = make_response_arrays()
+    response = InstrumentResponse.from_arrays(
+        arrays.freq_mhz,
+        arrays.theta_deg,
+        arrays.phi_deg,
+        arrays.H_theta,
+        arrays.H_phi,
+        arrays.ZA,
+        arrays.Rsky,
+        arrays.Rmoon,
+        arrays.Rloss,
+    )
+    target = np.asarray([17.5, 10.0, 17.5])
+    alms, frequency_map = response.pair_stokes_alms(2, target)
+    assert alms.shape == (10, 3, 4, 3, 5)
+    assert frequency_map.source_indices.tolist() == [0, 1]
+    assert jnp.array_equal(alms[:, 0], alms[:, 2])
+    assert response.native_transform_count == 2
+    response.pair_stokes_alms(2, [10.0])
+    assert response.native_transform_count == 2
+
+
+def test_response_transform_chunks_pairs_and_frequencies_under_budget():
+    arrays = make_response_arrays(freq=(10.0, 15.0, 20.0))
+
+    def build():
+        return InstrumentResponse.from_arrays(
+            arrays.freq_mhz,
+            arrays.theta_deg,
+            arrays.phi_deg,
+            arrays.H_theta,
+            arrays.H_phi,
+            arrays.ZA,
+            arrays.Rsky,
+            arrays.Rmoon,
+            arrays.Rloss,
+        )
+
+    reference = build()
+    chunked = build()
+    chunked.transform_memory_budget_bytes = 1
+    assert chunked._transform_chunk_shape(2) == (1, 1)
+    expected = reference.pair_stokes_alms_native(2, [0, 1, 2])
+    actual = chunked.pair_stokes_alms_native(2, [0, 1, 2])
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12)
+    assert chunked.native_transform_count == 3
+
+
+def test_rotation_moves_all_ports_and_keeps_wraparound():
+    arrays = make_response_arrays()
+    response = InstrumentResponse.from_arrays(
+        arrays.freq_mhz,
+        arrays.theta_deg,
+        arrays.phi_deg,
+        arrays.H_theta,
+        arrays.H_phi,
+        arrays.ZA,
+        arrays.Rsky,
+        arrays.Rmoon,
+        arrays.Rloss,
+    )
+    rotated = response.rotate(45.0)
+    assert jnp.array_equal(rotated.H_theta[..., 0], rotated.H_theta[..., -1])
+    assert jnp.array_equal(rotated.H_theta[..., 0], response.H_theta[..., 1])
+
+
+def test_positive_rotation_moves_east_response_south_with_positive_m_phase():
+    arrays = make_response_arrays(freq=(10.0,))
+    phi = np.radians(arrays.phi_deg)
+    pattern = 2.0 + np.cos(phi)
+    H_theta = np.zeros_like(arrays.H_theta)
+    H_phi = np.zeros_like(arrays.H_phi)
+    H_theta[0] = np.sqrt(pattern)[None, None, :]
+    response = InstrumentResponse.from_arrays(
+        arrays.freq_mhz,
+        arrays.theta_deg,
+        arrays.phi_deg,
+        H_theta,
+        H_phi,
+        arrays.ZA,
+        arrays.Rsky,
+        arrays.Rmoon,
+        arrays.Rloss,
+    )
+
+    rotated = response.rotate(90.0)
+    original_i = np.asarray(response.pair_stokes_maps(0, 0)[0, 0, 1])
+    rotated_i = np.asarray(rotated.pair_stokes_maps(0, 0)[0, 0, 1])
+    assert arrays.phi_deg[np.argmax(original_i[:-1])] == 0.0
+    assert arrays.phi_deg[np.argmax(rotated_i[:-1])] == 270.0
+
+    lmax = 2
+    original_alm = np.asarray(
+        response.pair_stokes_alms_native(lmax, [0])[0, 0, 0]
+    )
+    rotated_alm = np.asarray(
+        rotated.pair_stokes_alms_native(lmax, [0])[0, 0, 0]
+    )
+    m = np.arange(-lmax, lmax + 1)
+    expected = original_alm * np.exp(1j * m * np.radians(90.0))[None]
+    np.testing.assert_allclose(rotated_alm, expected, rtol=2e-6, atol=2e-8)

@@ -15,3 +15,9 @@ Contents
    usage
    api
    misc
+
+Four-port response and full-Stokes simulation
+---------------------------------------------
+
+See ``docs/instrument_response.md`` in the source tree for the FITS-v3
+response, receiver, frequency interpolation, unit, and timestamp contracts.

@@ -2,6 +2,7 @@ from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, rot2eul
+from .LabeledArray import units_of, frame_of
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -46,6 +47,21 @@ class TopoJaxSimulator(SimulatorBase):
         sky and beam.
     :type extra_opts: dict
     """
+
+    def __new__(cls, obs, beams, sky_model, *args, **kwargs):
+        from .InstrumentResponse import InstrumentResponse
+
+        if cls is TopoJaxSimulator and isinstance(beams, InstrumentResponse):
+            from .FullStokesSimulator import FullStokesTopoJaxSimulator
+
+            return FullStokesTopoJaxSimulator(
+                obs,
+                beams,
+                sky_model,
+                *args,
+                **kwargs,
+            )
+        return super().__new__(cls)
 
     def __init__ (self, obs, beams, sky_model, Tground = 200.0,
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None,
@@ -111,6 +127,9 @@ class TopoJaxSimulator(SimulatorBase):
         flat = arr.reshape(-1) if arr.shape else arr.reshape(1)
         sample = flat[:max_items].tolist()
         summary = f"{label}: shape={arr.shape} dtype={arr.dtype} size={arr.size}"
+        units, frame = units_of(value), frame_of(value)
+        if units is not None or frame is not None:
+            summary += f" units={units!r} frame={frame!r}"
         if np.issubdtype(arr.dtype, np.number) or np.issubdtype(arr.dtype, np.complexfloating):
             sample_arr = flat[: min(max_items, flat.size)]
             finite_count = int(np.isfinite(sample_arr).sum()) if sample_arr.size else 0

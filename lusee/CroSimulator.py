@@ -55,6 +55,21 @@ class CroSimulator(SimulatorBase):
         freq_idx_plot (int): index of frequency at which to plot sky and beam.
     """
 
+    def __new__(cls, obs, beams, sky_model, *args, **kwargs):
+        from .InstrumentResponse import InstrumentResponse
+
+        if cls is CroSimulator and isinstance(beams, InstrumentResponse):
+            from .FullStokesSimulator import FullStokesCroSimulator
+
+            return FullStokesCroSimulator(
+                obs,
+                beams,
+                sky_model,
+                *args,
+                **kwargs,
+            )
+        return super().__new__(cls)
+
     def __init__ (self, obs, beams, sky_model, Tground = 200.0,
                   combinations = [(0,0),(1,1),(0,2),(1,3),(1,2)], freq = None,
                   lmax = 128, cross_power = None,

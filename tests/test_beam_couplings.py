@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 
-BEAM_DIR = "Simulations/BeamModels/LanderRegolithComparison/eight_layer_regolith"
+BEAM_DIR = "Simulations/OldBeamModels/LanderRegolithComparison/eight_layer_regolith"
 ONE_PORT = "hfss_lbl_3m_75deg.fits"
 TWO_PORT = "hfss_lbl_3m_75deg.2port.fits"
 
