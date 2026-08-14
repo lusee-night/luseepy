@@ -1,6 +1,13 @@
 # Old-vs-new comparison: results (2026-08-04)
 
-Sky-only ULSA runs, matched times/frequencies/lmax (see README.md).
+Sky-only ULSA runs, matched times/frequencies/lmax. The full analysis
+apparatus — run scripts, the matched-configuration README, every figure
+(PDF+PNG), the cached `.npz` simulation outputs the figures regenerate
+from, and the status deck — is archived as `old_vs_new.tar.gz` on the
+[2.0 GitHub release](https://github.com/lusee-night/luseepy/releases/tag/2.0).
+The legacy side of the comparison ran `main @ 20a92e9` with the
+now-deprecated scalar beams, so the archive is the durable record; the
+old half is not expected to remain rerunnable.
 
 ## Headline: net change of the forecasting quantity (autos, V^2/Hz)
 
