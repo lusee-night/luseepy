@@ -80,5 +80,5 @@ from .frequencies import (
     frequency_indices_from_values,
 )
 
-__version__ = "2.0.dev0"
-__comment__ = "four-port full-Stokes response development"
+__version__ = "2.0"
+__comment__ = "2.0: four-port full-Stokes instrument response"
