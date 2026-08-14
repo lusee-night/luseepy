@@ -226,7 +226,87 @@ the two recovered shapes. Reuse outcome: **only the sky module is new** — the
 registry, `Experiment`, `profile_optimize`, `linear_solve_cg`, `BeamModule` and
 `InstrumentModule` are imported unchanged.
 
-## 5. Performance: CPU baseline and GPU path
+## 5. Running against the four-port instrument response
+
+`lusee.mapmaker.build_instrument` dispatches on the instrument file it is given:
+a **response FITS v3** yields a `FullStokesCroSimulator` over the coupled
+four-port response, while a legacy per-antenna beam FITS yields the old
+`CroSimulator`. Both demos default to the four-port response and accept
+`--beam-file` to point at either.
+
+What changes downstream — and what deliberately does not:
+
+| | legacy beams | four-port response v3 |
+| --- | --- | --- |
+| output channels | `2·N_auto + …` from `combinations` | 16 packed covariance channels (4 autos + 6 crosses × Re/Im) |
+| units | K (antenna temperature) | V²/Hz (`sim.result_units`) |
+| "no ground" setting | `Tground=0` | `T_moon=0`, `T_ant=0` |
+| channel description | `sim.combinations` | `sim.product_labels` / `sim.products` |
+| **linear in the sky** | yes | **yes** |
+
+That last row is the only one the fitting framework actually depends on. The
+covariance is still `C = Σ_lm K(t,f,lm) a_lm(f)` plus fixed terms, so `flux`
+stays an exact Wiener block and VarPro is unchanged. Because the χ² data term
+and the `C_l` prior scale the same way under a change of instrument units, the
+recovery is invariant to the V²/Hz-vs-K difference; only the printed magnitudes
+move.
+
+Three concrete adaptations were needed.
+
+**Channel metadata.** Four-port simulators have no `combinations`, and
+`product_labels` only exists after `simulate()` has run.
+`lusee.mapmaker.channel_metadata(sim)` returns `{"products": …}` or
+`{"combinations": …}` for either engine and is designed to be splatted straight
+into `compute_radiometric_noise`; `channel_names(sim)` gives the same
+information as a flat per-channel label tuple:
+
+```python
+sigma = lusee.mapmaker.compute_radiometric_noise(
+    data, delta_f_hz=1e6, delta_t_sec=dt_sec,
+    **lusee.mapmaker.channel_metadata(sim))
+```
+
+**Frequency handling: `get_alm_at_freq`, and `freq` must stay host-side.** The
+four-port sky path (`FullStokesSimulator._i_only_sky_alms`) prefers a model's
+`get_alm_at_freq(target_freq)` and otherwise builds a `FrequencyMap` onto
+`sky.freq` with `np.asarray`. Both sky models therefore
+
+* keep `self.freq` as **numpy**, not `jnp`. `freq` is static pytree *aux*, but
+  `jnp.asarray` applied to a host array *inside a trace* produces a tracer, and
+  the models are constructed inside the jitted objective on every forward call —
+  which made `np.asarray(sky.freq)` raise `TracerArrayConversionError`;
+* implement `get_alm_at_freq`, so the simulators evaluate the sky exactly on
+  their own target grid with no interpolation. For `SpectralHealpixSky` this is
+  exact at *any* frequency (the model is closed-form in `f`);
+  `SeparableHealpixSky` has one free shape value per fitted frequency, so it
+  implements the method but rejects any grid other than its own.
+
+Any new sky module should follow the same two rules.
+
+**Shape initialisation must be deconvolved.** The separable demo's truth-free
+init PCAs the data over frequency. The four-port response's own frequency
+dependence dominates the packed covariance by orders of magnitude, so a PCA of
+the raw waterfall returns *instrument* modes, not sky modes; seeded with those,
+the fit ran away along a gauge direction (χ² ≈ 7·10⁴ for 832 points). The init
+now divides the auto channels by the response to a spectrally flat 1 K sky
+before the SVD, which cancels the instrument's frequency dependence to leading
+order and recovers the same optimum as a truth-seeded init. Autos only: a flat
+sky's cross-imaginary response passes through zero.
+
+**Cost.** `InstrumentResponse.pair_stokes_alms` memoises per `(lmax, native
+channel)` on the response object, so the first forward call pays the full
+spherical-harmonic transform (~85 s for 7 frequencies at `lmax=31` on CPU) and
+every later call is free. Budget it once per process, not per evaluation. Note
+also the traps in `CLAUDE.md` — do not call `target_matrices()` or
+`pair_stokes_at()` on a full 150-channel response in an inner loop.
+
+Validation on the BGL_v16 response (`lmax=7`, `Nside=4`, 4 frequencies,
+`--fix-beta truth`): Wiener-weighted `ρ = 0.998`, residual power fraction
+0.004, `n_eff = 58.9/64` modes measured, whitened residual std 0.9 (error bars
+calibrated), χ²/dof ≈ 1.04. `tests/test_fitting_four_port.py` locks this in
+against a synthetic response so it runs without Drive data.
+
+## 6. Performance: CPU baseline and GPU path
 
 The original fitting path was faster on CPU than GPU. On an identical
 lmax=31 / Nside=16 / 3-template separable fit:
@@ -277,7 +357,7 @@ small linear blocks; for larger `lmax`, leave `--inner-method auto` or force
 large fraction of the card; cap it with `XLA_PYTHON_CLIENT_MEM_FRACTION` if
 needed.
 
-## 6. Roadmap
+## 7. Roadmap
 
 * **Sampling.** The current `sample_posterior()` still samples the joint
   `(linear, nonlinear)` posterior, but it now exposes BlackJAX engine selection:
@@ -287,7 +367,12 @@ needed.
   benchmarked before replacing the joint sampler.
 * **Parameterised beam.** Subclass `BeamModule` to return a `CachedBeam` pytree
   built from regolith/impedance parameters; it slots into the same `ParamSet`.
-* **Vectorise the forward** (see §5) — the single highest-value performance fix,
+  Note this is currently a legacy-`CroSimulator`-only path: `BeamModule.beam()`
+  must return `None` for the four-port engine, whose `simulate(beam=…)` override
+  takes an `InstrumentResponse`. A four-port equivalent would parameterise the
+  response (or the `ReceiverImpedance`, which is already differentiable) and
+  return that instead.
+* **Vectorise the forward** (see §6) — the single highest-value performance fix,
   and the prerequisite for the GPU ever being worthwhile here.
 
 ## Running the demos (CLI)
@@ -312,10 +397,15 @@ python notebooks/spectral_fit_demo.py --truth powerlaw --lmax 15 --nside 8 \
 
 # Separable (templates) — 3 templates, HMC, data-PCA shape init:
 python notebooks/separable_fit_demo.py --n-templates 3 --hmc -o out/sep.npz
+
+# Legacy per-antenna beam instead of the default four-port response:
+python notebooks/spectral_fit_demo.py --truth ulsa --beam-file \
+    "$LUSEE_DRIVE_DIR/Simulations/OldBeamModels/LanderRegolithComparison/eight_layer_regolith/hfss_lbl_3m_75deg.fits"
 ```
 
 Key options (shared): `--lmax`, `--nside`, `--freq f1 f2 …`, `--dt-hours`,
-`--target-snr`, `--maxiter`, `--inner-maxiter`, `--inner-method {auto,cg,dense}`,
+`--beam-file`, `--target-snr`, `--maxiter`, `--inner-maxiter`,
+`--inner-method {auto,cg,dense}`,
 `--dense-threshold`, `--hmc`, `--hmc-engine {nuts,hmc}`, `--hmc-steps`
 (+`--num-samples` / `--num-warmup`), `--seed`, `-o/--output`. Spectral-only:
 `--truth {powerlaw,ulsa}`, `--beta-nside`, `--fisher`,
