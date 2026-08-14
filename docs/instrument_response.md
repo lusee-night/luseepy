@@ -210,9 +210,14 @@ result; reciprocal antennas must satisfy `ZA approximately ZA.T`;
 `Herm(ZA)` must be passive; `Rsky + Rmoon + Rloss` must equal
 `(ZA + ZA^dagger)/2`; and all three resistance matrices must be Hermitian and
 positive semidefinite. A PEC response must declare its explicit zero
-`Rloss`. The `InstrumentResponse` loader repeats the geometry, convention,
-normalization-payload, field/matrix, and dissipative-matrix checks, so
-`VALIDATED=True` is not accepted as a substitute for checking the payload.
+`Rloss`. The `InstrumentResponse` loader always repeats the geometry,
+convention, and normalization-payload checks and verifies the persisted
+`CONTENT` hash, which binds the payload bytes to what the writer validated.
+The field/matrix re-derivation itself (recomputing `Rsky` from the fields
+and re-running the dissipative-matrix gates) costs minutes of CPU on the
+production artifact and therefore runs only when the loader is called with
+`verify_physics=True` (config key `response.verify_physics` in the sim
+driver).
 
 `InstrumentResponse.response_diagnostics()` reports the corresponding
 per-frequency residuals, eigenvalues, and `ZA` condition number. For an

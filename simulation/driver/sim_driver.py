@@ -165,6 +165,9 @@ class SimDriver:
             require_validated=self._to_bool(
                 response_cfg.get("require_validated", True)
             ),
+            verify_physics=self._to_bool(
+                response_cfg.get("verify_physics", False)
+            ),
         )
         rotation = float(response_cfg.get("rotation_deg", 0.0))
         if rotation:

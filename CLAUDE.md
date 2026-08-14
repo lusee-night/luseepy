@@ -144,7 +144,9 @@ until the public cutover. Key pieces:
 - **`lusee.InstrumentResponse`** — one coupled 4-port response loaded from
   instrument FITS v3 (`H_theta/H_phi` bare effective lengths in meters,
   dense complex `ZA`, `Rsky`/`Rmoon`/`Rloss`). Pair-Stokes maps/alms via
-  the co-developed croissant polarization layer (mwss L=180 grid).
+  the co-developed croissant polarization layer (mwss L=180 grid). Loads
+  verify provenance + the `CONTENT` hash; `verify_physics=True` also
+  re-derives `Rsky` from the fields (minutes on the real artifact).
 - **`lusee.ReceiverImpedance`** — differentiable receiver models;
   `JFETReceiver` defaults are the measured fmpre0/2/5/7 Bode fits;
   `spare_preamp_average_zload()` reproduces the HFSS export's load matrix.

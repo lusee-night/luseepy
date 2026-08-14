@@ -7,6 +7,9 @@ response:
   # Positive astronomical azimuth; +90 moves phi=0 (East) toward South
   rotation_deg: 0
   require_validated: true
+  # Re-derive Rsky from the fields on load (paranoid; minutes of CPU).
+  # The default load still verifies the persisted CONTENT hash.
+  # verify_physics: true
 
 receiver:
   model: jfet

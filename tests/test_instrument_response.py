@@ -182,7 +182,7 @@ def test_response_loader_rechecks_validated_physical_matrices(tmp_path):
         fits["Rmoon_real"].write(moon)
         fits["Rsky_real"].write(sky)
     with pytest.raises(ValueError, match="negative eigenvalue"):
-        InstrumentResponse(filename)
+        InstrumentResponse(filename, verify_physics=True)
 
 
 def test_validated_response_rejects_nonreciprocal_impedance(tmp_path):
@@ -269,6 +269,36 @@ def test_validated_writer_binds_stored_resistance_to_fields(tmp_path):
         write_response_fits(tmp_path / "shifted_matrices.fits", arrays)
 
 
+def test_default_load_skips_physics_rederivation(tmp_path, monkeypatch):
+    arrays = make_response_arrays()
+    filename = tmp_path / "light_load.fits"
+    write_response_fits(filename, arrays, dtype="float64")
+
+    def boom(*args, **kwargs):
+        raise AssertionError(
+            "compute_sky_moon_resistance must not run on a default load"
+        )
+
+    import importlib
+
+    response_module = importlib.import_module("lusee.InstrumentResponse")
+    monkeypatch.setattr(response_module, "compute_sky_moon_resistance", boom)
+    response = InstrumentResponse(filename)
+    assert response.validated
+
+
+def test_default_load_still_rejects_tampered_payload(tmp_path):
+    arrays = make_response_arrays()
+    filename = tmp_path / "tampered_payload.fits"
+    write_response_fits(filename, arrays, dtype="float64")
+    with fitsio.FITS(filename, "rw") as fits:
+        sky = fits["Rsky_real"].read()
+        sky += np.eye(4)[None]
+        fits["Rsky_real"].write(sky)
+    with pytest.raises(ValueError, match="CONTENT hash"):
+        InstrumentResponse(filename)
+
+
 def test_validated_loader_binds_stored_resistance_to_fields(tmp_path):
     arrays = make_response_arrays()
     filename = tmp_path / "shifted_matrices.fits"
@@ -281,7 +311,7 @@ def test_validated_loader_binds_stored_resistance_to_fields(tmp_path):
         fits["Rsky_real"].write(sky)
         fits["Rmoon_real"].write(moon)
     with pytest.raises(ValueError, match="inconsistent with H_theta"):
-        InstrumentResponse(filename)
+        InstrumentResponse(filename, verify_physics=True)
 
 
 def test_validated_writer_requires_explicit_provenance(tmp_path):

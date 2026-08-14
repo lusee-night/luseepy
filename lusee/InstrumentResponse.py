@@ -165,11 +165,17 @@ def _validate_provenance(header):
 
 @jax.tree_util.register_pytree_node_class
 class InstrumentResponse:
-    """One coupled four-port response loaded from instrument FITS v3."""
+    """One coupled four-port response loaded from instrument FITS v3.
+
+    Loading always verifies provenance, the normalization payload, and the
+    persisted ``CONTENT`` hash. Pass ``verify_physics=True`` to additionally
+    re-derive ``Rsky`` from the fields and re-run the dissipative-matrix
+    gates (slow: minutes on the production artifact).
+    """
 
     is_four_port_response = True
 
-    def __init__(self, filename, *, require_validated=True):
+    def __init__(self, filename, *, require_validated=True, verify_physics=False):
         self.filename = str(Path(filename))
         header = dict(fitsio.read_header(self.filename))
         version = float(header.get("VERSION", -1))
@@ -263,7 +269,12 @@ class InstrumentResponse:
         self.freq_min = float(self.freq[0])
         self.freq_max = float(self.freq[-1])
         self._validate()
-        if validated:
+        # The field->matrix re-derivation below recomputes Rsky from the
+        # persisted fields with the production harmonic operator: minutes of
+        # CPU on the real 150-channel artifact. The CONTENT hash already
+        # binds the payload bytes to what the writer validated, so the deep
+        # recheck is opt-in.
+        if validated and verify_physics:
             field_rsky, _ = compute_sky_moon_resistance(
                 self.freq,
                 self.theta_deg,
