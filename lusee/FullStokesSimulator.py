@@ -747,9 +747,6 @@ class FullStokesCroSimulator(FullStokesSimulatorBase):
         else:
             from lunarsky import LunarTopo
 
-            from .spice_utils import ensure_lunarsky_moon_frame
-
-            ensure_lunarsky_moon_frame()
             et = cro.rotations.jd_to_et(times[0].tdb.jd)
             topo = LunarTopo(obstime=times[0], location=self.obs.loc)
             beam_rotation, beam_dl = cro.rotations.generate_euler_dl(
@@ -817,9 +814,6 @@ class FullStokesTopoJaxSimulator(FullStokesSimulatorBase):
         else:
             reference_et = None
             if source == "mepa":
-                from .spice_utils import ensure_lunarsky_moon_frame
-
-                ensure_lunarsky_moon_frame()
                 reference_et = cro.rotations.jd_to_et(times[0].tdb.jd)
             rotations = []
             dl_arrays = []
