@@ -1,610 +1,2221 @@
-"""Stage 7: write a session's products to an HDF5 file (layout v3).
-
-The schema follows spec section 8. Group / dataset coordinates:
-
-  /                           file root, top-level attributes
-  /session_invariants         attributes only, sourced from Hello
-  /constants                  attributes only, lunar location + MJD calibration
-  /spectra/                   dense spectra cube + per-row metadata
-  /tr_spectra/                dense TR cube
-  /calibrator/zoom_spectra/   zoom calibrator cube (optional)
-  /calibrator/data/           variable-length cal data (optional)
-  /grimm_spectra/             optional
-  /waveform/                  per-channel ADC waveforms (optional)
-  /housekeeping/              per-packet records (optional)
-  /DCB_telemetry/             FPGA + encoder time series (optional)
-  /spectra_interpolated_telemetry/  resampled FPGA telemetry on the spectra
-                                    time axis (optional)
-"""
+"""Atomic HDF5 writer for the validated ingest layout v4 contract."""
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import tempfile
+from collections import Counter
+from collections.abc import Mapping, Sequence
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Sequence
 
 import numpy as np
 
+from .clock_reference import ClockSource
 from .constants import (
-    DEFAULT_CLOCK_SOURCE,
-    DEFAULT_LUN_HEIGHT_M,
-    DEFAULT_LUN_LAT_DEG,
-    DEFAULT_LUN_LONG_DEG,
-    DEFAULT_MJD_EPOCH_OFFSET_DAYS,
-    DEFAULT_RAW_TIME_SUBTRACT_SECONDS,
-    DEFAULT_TIME_SCALE,
-    KNOWN_TIME_SCALES,
     BITSLICE_REFERENCE,
-    HDF5_DEFAULT_COMPRESSION,
-    HDF5_DEFAULT_COMPRESSION_OPTS,
     HDF5_LAYOUT_VERSION,
     NCHANNELS,
     NPRODUCTS,
     SPECTRA_NORMALIZATION_VERSION,
-    SPECTRA_REPRESENTATION,
-    SPECTRA_UNITS,
     WAVEFORM_SAMPLES,
-    ZOOM_BINS,
-    ZOOM_COMPONENTS,
 )
-from .decode import Products
 from .dependencies import import_optional_dependency
+from .frequency_contract import FrequencyWindowContract
+from .write_request import FAMILY_TYPES, WriteRequest
 
 log = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Compression defaults
-# ---------------------------------------------------------------------------
-
-def _gzip_kwargs(min_elems: int = 32) -> dict:
+def _dataset_kwargs(request: WriteRequest, data: np.ndarray) -> dict[str, object]:
+    if data.ndim == 0 or data.size == 0 or request.hdf5_compression is None:
+        return {}
     return {
-        "compression": HDF5_DEFAULT_COMPRESSION,
-        "compression_opts": HDF5_DEFAULT_COMPRESSION_OPTS,
+        "compression": request.hdf5_compression,
+        "compression_opts": request.hdf5_compression_level,
     }
 
 
-def _create_dataset(group: h5py.Group, name: str, data: np.ndarray) -> h5py.Dataset:
-    if data.size == 0:
-        # h5py refuses gzip on empty datasets; create uncompressed.
-        return group.create_dataset(name, data=data)
-    return group.create_dataset(name, data=data, **_gzip_kwargs())
-
-
-# ---------------------------------------------------------------------------
-# Session-invariants & constants groups
-# ---------------------------------------------------------------------------
-
-def _write_session_invariants(h5: h5py.File, products: Products) -> None:
-    g = h5.create_group("session_invariants")
-    fields = {
-        "software_version": products.sw_version,
-        "firmware_version": products.fw_version,
-        "firmware_id": products.fw_id,
-        "firmware_date": products.fw_date,
-        "firmware_time": products.fw_time,
-        "start_unique_packet_id": products.start_unique_packet_id,
-        "start_time_32": products.start_time_32,
-        "start_time_16": products.start_time_16,
-    }
-    for k, v in fields.items():
-        if v is None:
-            continue
-        g.attrs[k] = np.int64(v)
-
-
-def _write_constants(
-    h5: h5py.File,
+def _create_dataset(
+    group,
+    name: str,
+    data: object,
+    request: WriteRequest,
     *,
-    lun_lat_deg: float,
-    lun_long_deg: float,
-    lun_height_m: float,
-    raw_time_subtract_seconds: float,
-    mjd_epoch_offset_days: float,
-    time_scale: str,
-    clock_source: str,
-    clock_epoch_isot: Optional[str],
-) -> None:
-    g = h5.create_group("constants")
-    g.attrs["lun_lat_deg"] = np.float64(lun_lat_deg)
-    g.attrs["lun_long_deg"] = np.float64(lun_long_deg)
-    g.attrs["lun_height_m"] = np.float64(lun_height_m)
-    g.attrs["raw_time_subtract_seconds"] = np.float64(raw_time_subtract_seconds)
-    g.attrs["mjd_epoch_offset_days"] = np.float64(mjd_epoch_offset_days)
-    g.attrs["time_scale"] = str(time_scale)
-    g.attrs["clock_source"] = str(clock_source)
-    if clock_epoch_isot is not None:
-        g.attrs["clock_epoch_isot"] = str(clock_epoch_isot)
-
-
-def _to_mjd(raw_seconds: np.ndarray, raw_subtract: float, mjd_offset: float) -> np.ndarray:
-    """Pure arithmetic: (raw - subtract)/86400 + offset.
-
-    No leap-second handling and no time-scale awareness -- the result is
-    an MJD in whatever scale the spacecraft counter effectively runs on.
-    The /constants attr ``time_scale`` declares that scale ("unknown"
-    unless established at ingest time).
-    """
-    return (raw_seconds - raw_subtract) / 86400.0 + mjd_offset
-
-
-# ---------------------------------------------------------------------------
-# /spectra
-# ---------------------------------------------------------------------------
-
-def _write_spectra(
-    h5: h5py.File,
-    products: Products,
-    *,
-    raw_subtract: float,
-    mjd_offset: float,
-) -> None:
-    if not products.spectra:
-        return
-    n = len(products.spectra)
-    cube = np.full((n, NPRODUCTS, NCHANNELS), np.nan, dtype=np.float32)
-    unique_ids = np.zeros(n, dtype=np.int64)
-    raw_times = np.zeros(n, dtype=np.float64)
-    metadata_arrays: Dict[str, list] = {}
-    for i, s in enumerate(products.spectra):
-        cube[i] = s.data
-        unique_ids[i] = s.unique_packet_id
-        raw_times[i] = s.raw_seconds
-        for k, v in s.metadata.items():
-            metadata_arrays.setdefault(k, []).append(v)
-
-    # Sample-retention: drop rows that are entirely NaN (no products at all).
-    finite_mask = np.any(np.isfinite(cube.reshape(n, -1)), axis=1)
-    keep = np.flatnonzero(finite_mask)
-    n_kept = keep.size
-    cube = cube[keep]
-    unique_ids = unique_ids[keep]
-    raw_times = raw_times[keep]
-    mjd_times = _to_mjd(raw_times, raw_subtract, mjd_offset)
-    original_indices = keep.astype(np.int64)
-
-    g = h5.create_group("spectra")
-    g.attrs["count"] = np.int64(n_kept)
-    data_ds = _create_dataset(g, "data", cube)
-    data_ds.attrs["units"] = SPECTRA_UNITS
-    data_ds.attrs["representation"] = SPECTRA_REPRESENTATION
-    data_ds.attrs["bitslice_restored"] = np.int64(1)
-    data_ds.attrs["bitslice_reference"] = np.int64(BITSLICE_REFERENCE)
-    data_ds.attrs["normalization_version"] = np.int64(
-        SPECTRA_NORMALIZATION_VERSION
+    dtype: object | None = None,
+):
+    array = np.asarray(data if dtype is None else np.asarray(data, dtype=dtype))
+    return group.create_dataset(
+        name,
+        data=data,
+        dtype=dtype,
+        **_dataset_kwargs(request, array),
     )
-    _create_dataset(g, "unique_ids", unique_ids)
-    _create_dataset(g, "raw_times", raw_times)
-    _create_dataset(g, "mjd_times", mjd_times)
-    _create_dataset(g, "original_indices", original_indices)
-
-    md = g.create_group("metadata")
-    for name, items in metadata_arrays.items():
-        if len(items) != n:
-            continue
-        try:
-            arr = np.asarray(items)
-        except Exception as exc:    # noqa: BLE001
-            log.debug("skipping metadata field %s: %s", name, exc)
-            continue
-        widths = {
-            "actual_bitslice": NPRODUCTS,
-            "bitslice": NPRODUCTS,
-            "actual_gain": 4,
-            "gain": 4,
-        }
-        if name in widths:
-            width = widths[name]
-            if arr.size != n * width:
-                raise ValueError(
-                    f"normal-spectrum metadata {name!r} must have shape "
-                    f"({n}, {width}); got {arr.shape}"
-                )
-            arr = arr.reshape(n, width)
-        if arr.size == 0:
-            continue
-        arr = arr[keep]
-        if arr.dtype.kind in ("U", "O"):
-            if name in ("actual_gain", "gain"):
-                try:
-                    arr = arr.astype("S1")
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(
-                        f"normal-spectrum metadata {name!r} has malformed "
-                        "character gain codes"
-                    ) from exc
-            elif name in widths:
-                raise ValueError(
-                    f"normal-spectrum metadata {name!r} must be numeric"
-                )
-            else:
-                continue
-        if arr.dtype == np.bool_:
-            arr = arr.astype(np.int64)
-        elif arr.dtype.kind == "i":
-            arr = arr.astype(np.int64)
-        elif arr.dtype.kind in ("f", "u"):
-            arr = arr.astype(np.float64) if arr.dtype.kind == "f" else arr.astype(np.int64)
-        ds = _create_dataset(md, name, arr)
-        if name == "actual_bitslice":
-            ds.attrs["applied_to_spectra"] = np.int64(1)
-            ds.attrs["reference_bit"] = np.int64(BITSLICE_REFERENCE)
 
 
-# ---------------------------------------------------------------------------
-# /tr_spectra
-# ---------------------------------------------------------------------------
+def _write_strings(
+    group,
+    name: str,
+    values: Sequence[str],
+    request: WriteRequest,
+    h5py,
+):
+    data = np.asarray(tuple(values), dtype=object)
+    return _create_dataset(
+        group,
+        name,
+        data,
+        request,
+        dtype=h5py.string_dtype(encoding="utf-8"),
+    )
 
-def _write_tr_spectra(
-    h5: h5py.File,
-    products: Products,
+
+def _write_optional_attr(group, name: str, value: object | None) -> None:
+    group.attrs[f"{name}_valid"] = np.bool_(value is not None)
+    if value is not None:
+        group.attrs[name] = value
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+
+
+def _write_session_invariants(h5, request: WriteRequest) -> None:
+    products = request.products
+    group = h5.create_group("session_invariants")
+    fields = {
+        "software_version": (
+            None if products.sw_version is None else np.uint32(products.sw_version)
+        ),
+        "firmware_version": (
+            None if products.fw_version is None else np.uint32(products.fw_version)
+        ),
+        "firmware_id": (None if products.fw_id is None else np.uint32(products.fw_id)),
+        "firmware_date": (
+            None if products.fw_date is None else np.uint32(products.fw_date)
+        ),
+        "firmware_time": (
+            None if products.fw_time is None else np.uint32(products.fw_time)
+        ),
+        "start_unique_packet_id": (
+            None
+            if products.start_unique_packet_id is None
+            else np.uint32(products.start_unique_packet_id)
+        ),
+        "start_time_32": (
+            None
+            if products.start_time_32 is None
+            else np.uint32(products.start_time_32)
+        ),
+        "start_time_16": (
+            None
+            if products.start_time_16 is None
+            else np.uint16(products.start_time_16)
+        ),
+        "start_raw_seconds": (
+            None
+            if products.start_raw_seconds is None
+            else np.float64(products.start_raw_seconds)
+        ),
+    }
+    for name, value in fields.items():
+        _write_optional_attr(group, name, value)
+
+
+def _write_constants(h5, request: WriteRequest) -> None:
+    group = h5.create_group("constants")
+    group.attrs["lun_lat_deg"] = np.float64(request.location.latitude_deg)
+    group.attrs["lun_long_deg"] = np.float64(request.location.longitude_deg)
+    group.attrs["lun_height_m"] = np.float64(request.location.height_m)
+
+
+def _write_clock_reference(h5, request: WriteRequest, h5py) -> None:
+    group = h5.create_group("clock_reference")
+    reference_set = request.clock_reference_set
+    group.attrs["available"] = np.bool_(reference_set is not None)
+    if reference_set is None:
+        group.attrs["unavailable_reason"] = request.clock_reference_unavailable_reason
+        return
+    group.attrs["format_version"] = np.uint16(reference_set.format_version)
+    group.attrs["reference_event"] = reference_set.reference_event
+    group.attrs["clock_reference_isot"] = reference_set.clock_reference_isot
+    group.attrs["time_scale"] = reference_set.time_scale
+    group.attrs["source"] = reference_set.source
+    group.attrs["assumed"] = np.bool_(reference_set.assumed)
+    group.attrs["source_sha256"] = reference_set.source_sha256
+    _write_strings(
+        group,
+        "clock_sources",
+        [item.clock_source.value for item in reference_set.clocks],
+        request,
+        h5py,
+    )
+    _create_dataset(
+        group,
+        "clock_reference_raw_seconds",
+        np.asarray(
+            [item.clock_reference_raw_seconds for item in reference_set.clocks],
+            dtype=np.float64,
+        ),
+        request,
+    )
+    group.attrs["canonical_record_json"] = _canonical_json(reference_set.as_record())
+
+
+def _write_run_provenance(
+    h5,
+    request: WriteRequest,
     *,
-    raw_subtract: float,
-    mjd_offset: float,
+    destination_preexisted: bool,
 ) -> None:
-    if not products.tr_spectra:
-        return
-    n = len(products.tr_spectra)
-    navg2_max = max(s.navg2 for s in products.tr_spectra)
-    tr_len_max = max(s.tr_length for s in products.tr_spectra)
-    cube = np.full((n, NPRODUCTS, navg2_max, tr_len_max), np.nan, dtype=np.float32)
-    unique_ids = np.zeros(n, dtype=np.int64)
-    raw_times = np.zeros(n, dtype=np.float64)
-    navg2_per = np.zeros(n, dtype=np.int64)
-    tr_len_per = np.zeros(n, dtype=np.int64)
-    metadata_arrays: Dict[str, list] = {}
-    for i, s in enumerate(products.tr_spectra):
-        cube[i, :, :s.navg2, :s.tr_length] = s.data
-        unique_ids[i] = s.unique_packet_id
-        raw_times[i] = s.raw_seconds
-        navg2_per[i] = s.navg2
-        tr_len_per[i] = s.tr_length
-        for k, v in s.metadata.items():
-            metadata_arrays.setdefault(k, []).append(v)
-
-    finite_mask = np.any(np.isfinite(cube.reshape(n, -1)), axis=1)
-    keep = np.flatnonzero(finite_mask)
-    n_kept = keep.size
-    cube = cube[keep]
-    unique_ids = unique_ids[keep]
-    raw_times = raw_times[keep]
-    navg2_per = navg2_per[keep]
-    tr_len_per = tr_len_per[keep]
-    mjd_times = _to_mjd(raw_times, raw_subtract, mjd_offset)
-    original_indices = keep.astype(np.int64)
-
-    g = h5.create_group("tr_spectra")
-    g.attrs["count"] = np.int64(n_kept)
-    g.attrs["tr_spectra_Navg2"] = np.int64(navg2_max)
-    g.attrs["tr_spectra_tr_length"] = np.int64(tr_len_max)
-    _create_dataset(g, "data", cube)
-    _create_dataset(g, "unique_ids", unique_ids)
-    _create_dataset(g, "raw_times", raw_times)
-    _create_dataset(g, "mjd_times", mjd_times)
-    _create_dataset(g, "navg2_per_sample", navg2_per)
-    _create_dataset(g, "tr_length_per_sample", tr_len_per)
-    _create_dataset(g, "original_indices", original_indices)
-
-    md = g.create_group("metadata")
-    for name, items in metadata_arrays.items():
-        if len(items) != n:
-            continue
-        try:
-            arr = np.asarray(items)
-        except Exception:    # noqa: BLE001
-            continue
-        if arr.size == 0 or arr.dtype.kind in ("U", "O", "S"):
-            continue
-        arr = arr[keep]
-        if arr.dtype == np.bool_:
-            arr = arr.astype(np.int64)
-        _create_dataset(md, name, arr)
+    group = h5.create_group("run_provenance")
+    for name, value in request.run_provenance.as_record().items():
+        _write_optional_attr(group, name, value)
+    group.attrs["interpolation_mode"] = request.interpolation_policy.mode
+    group.attrs["interpolation_extrapolate"] = np.bool_(
+        request.interpolation_policy.extrapolate
+    )
+    _write_optional_attr(
+        group,
+        "interpolation_maximum_gap_seconds",
+        request.interpolation_policy.maximum_gap_seconds,
+    )
+    group.attrs["overwrite_requested"] = np.bool_(request.overwrite)
+    group.attrs["destination_preexisted"] = np.bool_(destination_preexisted)
+    _write_optional_attr(group, "hdf5_compression", request.hdf5_compression)
+    _write_optional_attr(
+        group,
+        "hdf5_compression_level",
+        request.hdf5_compression_level,
+    )
 
 
-# ---------------------------------------------------------------------------
-# /calibrator
-# ---------------------------------------------------------------------------
-
-def _write_zoom_spectra(
-    h5: h5py.File,
-    products: Products,
-    *,
-    raw_subtract: float,
-    mjd_offset: float,
-) -> None:
-    if not products.zoom_spectra:
-        return
-    n = len(products.zoom_spectra)
-    cube = np.zeros((n, ZOOM_COMPONENTS, ZOOM_BINS), dtype=np.float32)
-    unique_ids = np.zeros(n, dtype=np.int64)
-    pfb_indices = np.zeros(n, dtype=np.int32)
-    raw_times = np.zeros(n, dtype=np.float64)
-    for i, z in enumerate(products.zoom_spectra):
-        cube[i] = z.data
-        unique_ids[i] = z.unique_packet_id
-        pfb_indices[i] = z.pfb_index
-        raw_times[i] = z.raw_seconds
-    mjd_times = _to_mjd(raw_times, raw_subtract, mjd_offset)
-    original_indices = np.arange(n, dtype=np.int64)
-
-    cal = h5.require_group("calibrator")
-    g = cal.create_group("zoom_spectra")
-    g.attrs["count"] = np.int64(n)
-    _create_dataset(g, "data", cube)
-    _create_dataset(g, "unique_ids", unique_ids)
-    _create_dataset(g, "pfb_indices", pfb_indices)
-    _create_dataset(g, "raw_times", raw_times)
-    _create_dataset(g, "mjd_times", mjd_times)
-    _create_dataset(g, "original_indices", original_indices)
-
-
-def _write_cal_data(h5: h5py.File, products: Products) -> None:
-    if not products.cal_data:
-        return
-    cal = h5.require_group("calibrator")
-    g = cal.create_group("data")
-    g.attrs["count"] = np.int64(len(products.cal_data))
-    for sample in products.cal_data:
-        name = f"packet_{sample.packet_idx}_ch_{sample.channel_idx}"
-        _create_dataset(g, name, sample.data)
-
-
-# ---------------------------------------------------------------------------
-# /grimm_spectra
-# ---------------------------------------------------------------------------
-
-def _write_grimm_spectra(
-    h5: h5py.File,
-    products: Products,
-    *,
-    raw_subtract: float,
-    mjd_offset: float,
-) -> None:
-    if not products.grimm_spectra:
-        return
-    n = len(products.grimm_spectra)
-    cube = np.full((n, NPRODUCTS, NCHANNELS), np.nan, dtype=np.float32)
-    unique_ids = np.zeros(n, dtype=np.int64)
-    raw_times = np.zeros(n, dtype=np.float64)
-    for i, s in enumerate(products.grimm_spectra):
-        cube[i] = s.data
-        unique_ids[i] = s.unique_packet_id
-        raw_times[i] = s.raw_seconds
-    mjd_times = _to_mjd(raw_times, raw_subtract, mjd_offset)
-    g = h5.create_group("grimm_spectra")
-    g.attrs["count"] = np.int64(n)
-    _create_dataset(g, "data", cube)
-    _create_dataset(g, "unique_ids", unique_ids)
-    _create_dataset(g, "raw_times", raw_times)
-    _create_dataset(g, "mjd_times", mjd_times)
+def _write_decoder_provenance(h5, request: WriteRequest, h5py) -> None:
+    provenance = request.products.decode_provenance
+    group = h5.require_group("provenance").create_group("decoder")
+    for name in (
+        "decoder_name",
+        "distribution_version",
+        "decoder_source_commit",
+        "binding_key",
+        "schema_variant",
+        "binding_source_release",
+        "binding_source_commit",
+        "abi_fingerprint",
+        "canonical_report_json",
+    ):
+        _write_optional_attr(group, name, getattr(provenance, name))
+    group.attrs["selected_schema_id"] = np.uint16(provenance.selected_schema_id)
+    group.attrs["schema_assumed"] = np.bool_(provenance.schema_assumed)
+    group.attrs["execution_mode"] = provenance.execution_mode.value
+    group.attrs["input_packet_count"] = np.uint64(provenance.input_packet_count)
+    group.attrs["valid_packet_count"] = np.uint64(provenance.valid_packet_count)
+    _create_dataset(
+        group,
+        "reported_schema_ids",
+        np.asarray(provenance.reported_schema_ids, dtype=np.uint16),
+        request,
+    )
+    _create_dataset(
+        group,
+        "appids",
+        np.asarray([item[0] for item in provenance.appid_counts], dtype=np.uint16),
+        request,
+    )
+    _create_dataset(
+        group,
+        "appid_counts",
+        np.asarray([item[1] for item in provenance.appid_counts], dtype=np.uint64),
+        request,
+    )
+    _write_strings(
+        group,
+        "issue_codes",
+        [item[0] for item in provenance.issue_counts],
+        request,
+        h5py,
+    )
+    _create_dataset(
+        group,
+        "issue_code_counts",
+        np.asarray([item[1] for item in provenance.issue_counts], dtype=np.uint64),
+        request,
+    )
 
 
-# ---------------------------------------------------------------------------
-# /waveform
-# ---------------------------------------------------------------------------
-
-def _write_waveform(h5: h5py.File, products: Products) -> None:
-    if not products.waveforms:
-        return
-    by_channel: Dict[int, list] = {}
-    for w in products.waveforms:
-        by_channel.setdefault(w.channel, []).append(w)
-    g = h5.create_group("waveform")
-    g.attrs["total_count"] = np.int64(len(products.waveforms))
-    g.attrs["channels"] = np.array(sorted(by_channel.keys()), dtype=np.int64)
-    for ch in sorted(by_channel.keys()):
-        items = by_channel[ch]
-        gch = g.create_group(f"channel_{ch}")
-        gch.attrs["count"] = np.int64(len(items))
-        gch.attrs["channel"] = np.int64(ch)
-        wf = np.zeros((len(items), WAVEFORM_SAMPLES), dtype=np.int16)
-        ts = np.zeros(len(items), dtype=np.float64)
-        adc_ts = np.zeros(len(items), dtype=np.uint64)
-        adc_valid = np.zeros(len(items), dtype=np.bool_)
-        for i, w in enumerate(items):
-            wf[i] = w.data
-            ts[i] = w.raw_seconds
-            if w.adc_timestamp is not None:
-                adc_ts[i] = w.adc_timestamp
-                adc_valid[i] = True
-        _create_dataset(gch, "waveforms", wf)
-        _create_dataset(gch, "timestamps", ts)
-        _create_dataset(gch, "adc_timestamps", adc_ts)
-        _create_dataset(gch, "adc_timestamp_valid", adc_valid)
+def _optional_integer_column(
+    values: Sequence[int | None], dtype
+) -> tuple[np.ndarray, np.ndarray]:
+    valid = np.asarray([value is not None for value in values], dtype=np.bool_)
+    data = np.zeros(len(values), dtype=dtype)
+    for index, value in enumerate(values):
+        if value is not None:
+            data[index] = value
+    return data, valid
 
 
-# ---------------------------------------------------------------------------
-# /housekeeping
-# ---------------------------------------------------------------------------
-
-def _stack_vec(values, n: int, dtype) -> np.ndarray:
-    """Stack a list of (n,) array-like rows into a (len, n) array."""
-    out = np.zeros((len(values), n), dtype=dtype)
-    for i, v in enumerate(values):
-        if v is None:
-            continue
-        arr = np.asarray(v).reshape(-1)
-        m = min(arr.size, n)
-        out[i, :m] = arr[:m]
-    return out
+def _optional_string_column(
+    values: Sequence[str | None],
+) -> tuple[list[str], np.ndarray]:
+    valid = np.asarray([value is not None for value in values], dtype=np.bool_)
+    return ["" if value is None else value for value in values], valid
 
 
-def _stack_bytes(values, n: int) -> np.ndarray:
-    """Stack a list of (n,)-shape S1 byte rows into a (len, n) S1 array."""
-    out = np.full((len(values), n), b"\x00", dtype="S1")
-    for i, v in enumerate(values):
-        if v is None:
-            continue
-        if isinstance(v, np.ndarray) and v.dtype.kind == "S":
-            arr = v.reshape(-1)
+def _write_issues(h5, request: WriteRequest, h5py) -> dict[str, int]:
+    group = h5.create_group("issues")
+    issues = request.issues
+    group.attrs["count"] = np.uint64(len(issues))
+    issue_index = {issue.issue_id: index for index, issue in enumerate(issues)}
+    string_fields = (
+        "issue_id",
+        "code",
+        "stage",
+        "message",
+        "input_identity",
+        "bank",
+        "session",
+    )
+    for name in string_fields:
+        values = [getattr(issue, name) for issue in issues]
+        if name in ("issue_id", "code", "stage", "message"):
+            _write_strings(group, name, values, request, h5py)
         else:
-            arr = np.asarray(v, dtype="S1").reshape(-1)
-        m = min(arr.size, n)
-        out[i, :m] = arr[:m]
-    return out
+            data, valid = _optional_string_column(values)
+            _write_strings(group, name, data, request, h5py)
+            _create_dataset(group, f"{name}_valid", valid, request)
+    _write_strings(
+        group,
+        "severity",
+        [issue.severity.value for issue in issues],
+        request,
+        h5py,
+    )
+    _write_strings(
+        group,
+        "action",
+        [issue.action.value for issue in issues],
+        request,
+        h5py,
+    )
+    integer_fields = (
+        ("byte_offset", np.uint64),
+        ("frame_index", np.uint64),
+        ("packet_index", np.uint64),
+        ("appid", np.uint16),
+        ("sequence_count", np.uint16),
+        ("uid", np.uint32),
+    )
+    for name, dtype in integer_fields:
+        data, valid = _optional_integer_column(
+            [getattr(issue, name) for issue in issues], dtype
+        )
+        _create_dataset(group, name, data, request)
+        _create_dataset(group, f"{name}_valid", valid, request)
+    _write_strings(
+        group,
+        "details_json",
+        [_canonical_json(issue.as_dict()["details"]) for issue in issues],
+        request,
+        h5py,
+    )
+    return issue_index
 
 
-_HK_TYPE_UNITS = {
-    "raw_seconds": "s",
-    "time": "s",
-    "adc_mean": "ADC counts",
-    "adc_rms": "ADC counts",
-}
+def _iter_product_rows(request: WriteRequest):
+    for family, _ in FAMILY_TYPES:
+        for row_index, row in enumerate(getattr(request.products, family)):
+            yield family, row_index, row
 
 
-def _write_one_hk_type(
-    parent: h5py.Group,
-    type_id: int,
-    rows,
+def _write_product_provenance(
+    h5,
+    request: WriteRequest,
+    h5py,
+    issue_index: Mapping[str, int],
+) -> dict[tuple[str, int], int]:
+    root = h5.require_group("provenance")
+    group = root.create_group("product_rows")
+    entries = list(_iter_product_rows(request))
+    provenance_index = {
+        (family, row_index): index
+        for index, (family, row_index, _) in enumerate(entries)
+    }
+    _write_strings(
+        group,
+        "family",
+        [item[0] for item in entries],
+        request,
+        h5py,
+    )
+    _create_dataset(
+        group,
+        "row_index",
+        np.asarray([item[1] for item in entries], dtype=np.uint64),
+        request,
+    )
+    _create_dataset(
+        group,
+        "unique_ids",
+        np.asarray([item[2].unique_packet_id for item in entries], dtype=np.uint32),
+        request,
+    )
+    provenances = [item[2].provenance for item in entries]
+    _write_strings(
+        group,
+        "uid_source",
+        [provenance.uid_source for provenance in provenances],
+        request,
+        h5py,
+    )
+    for name in (
+        "uid_source_role",
+        "time_source",
+        "time_source_role",
+        "clock_source",
+    ):
+        values, valid = _optional_string_column(
+            [getattr(provenance, name) for provenance in provenances]
+        )
+        _write_strings(group, name, values, request, h5py)
+        _create_dataset(group, f"{name}_valid", valid, request)
+    _create_dataset(
+        group,
+        "time_valid",
+        np.asarray([item.time_valid for item in provenances], dtype=np.bool_),
+        request,
+    )
+    _create_dataset(
+        group,
+        "selected_schema_ids",
+        np.asarray(
+            [item.selected_schema_id for item in provenances],
+            dtype=np.uint16,
+        ),
+        request,
+    )
+
+    schema_group = root.create_group("product_schema_refs")
+    schema_rows = [
+        (index, schema_id)
+        for index, provenance in enumerate(provenances)
+        for schema_id in provenance.reported_schema_ids
+    ]
+    _create_dataset(
+        schema_group,
+        "provenance_index",
+        np.asarray([item[0] for item in schema_rows], dtype=np.uint64),
+        request,
+    )
+    _create_dataset(
+        schema_group,
+        "schema_id",
+        np.asarray([item[1] for item in schema_rows], dtype=np.uint16),
+        request,
+    )
+
+    packet_group = root.create_group("source_packets")
+    packet_rows = [
+        (provenance_ndx, order, packet)
+        for provenance_ndx, provenance in enumerate(provenances)
+        for order, packet in enumerate(provenance.source_packets)
+    ]
+    _create_dataset(
+        packet_group,
+        "provenance_index",
+        np.asarray([item[0] for item in packet_rows], dtype=np.uint64),
+        request,
+    )
+    _create_dataset(
+        packet_group,
+        "source_order",
+        np.asarray([item[1] for item in packet_rows], dtype=np.uint16),
+        request,
+    )
+    _write_strings(
+        packet_group,
+        "role",
+        [item[2].role for item in packet_rows],
+        request,
+        h5py,
+    )
+    _create_dataset(
+        packet_group,
+        "original_appid",
+        np.asarray([item[2].original_appid for item in packet_rows], dtype=np.uint16),
+        request,
+    )
+    optional_packet_fields = (
+        ("normalized_appid", np.uint16),
+        ("packet_index", np.uint64),
+        ("frame_start", np.uint64),
+        ("frame_stop", np.uint64),
+        ("byte_offset_start", np.uint64),
+        ("byte_offset_stop", np.uint64),
+    )
+    for name, dtype in optional_packet_fields:
+        data, valid = _optional_integer_column(
+            [getattr(item[2], name) for item in packet_rows], dtype
+        )
+        _create_dataset(packet_group, name, data, request)
+        _create_dataset(packet_group, f"{name}_valid", valid, request)
+    for name in ("filename", "bank"):
+        data, valid = _optional_string_column(
+            [getattr(item[2], name) for item in packet_rows]
+        )
+        _write_strings(packet_group, name, data, request, h5py)
+        _create_dataset(packet_group, f"{name}_valid", valid, request)
+
+    issue_group = root.create_group("product_issue_refs")
+    issue_rows = [
+        (provenance_ndx, issue_index[issue_id])
+        for provenance_ndx, provenance in enumerate(provenances)
+        for issue_id in provenance.decoder_issue_ids
+    ]
+    _create_dataset(
+        issue_group,
+        "provenance_index",
+        np.asarray([item[0] for item in issue_rows], dtype=np.uint64),
+        request,
+    )
+    _create_dataset(
+        issue_group,
+        "issue_index",
+        np.asarray([item[1] for item in issue_rows], dtype=np.uint64),
+        request,
+    )
+    return provenance_index
+
+
+def _write_family_status(
+    h5,
+    request: WriteRequest,
+    h5py,
+    issue_index: Mapping[str, int],
 ) -> None:
-    """Write one /housekeeping/type_<N> subgroup as a per-field table."""
+    group = h5.create_group("status").create_group("families")
+    statuses = request.family_statuses
+    _write_strings(
+        group,
+        "family",
+        [status.family for status in statuses],
+        request,
+        h5py,
+    )
+    _create_dataset(
+        group,
+        "supported",
+        np.asarray([status.supported for status in statuses], dtype=np.bool_),
+        request,
+    )
+    _write_strings(
+        group,
+        "coverage",
+        [status.coverage.value for status in statuses],
+        request,
+        h5py,
+    )
+    _write_strings(
+        group,
+        "quality",
+        [status.quality.value for status in statuses],
+        request,
+        h5py,
+    )
+    _create_dataset(
+        group,
+        "decoded_rows",
+        np.asarray([status.decoded_rows for status in statuses], dtype=np.uint64),
+        request,
+    )
+    _create_dataset(
+        group,
+        "persisted_rows",
+        np.asarray(
+            [
+                status.decoded_rows if status.coverage.value == "persisted" else 0
+                for status in statuses
+            ],
+            dtype=np.uint64,
+        ),
+        request,
+    )
+    reasons, reason_valid = _optional_string_column(
+        [status.reason for status in statuses]
+    )
+    _write_strings(group, "reason", reasons, request, h5py)
+    _create_dataset(group, "reason_valid", reason_valid, request)
+    ref_group = h5["status"].create_group("family_issue_refs")
+    refs = [
+        (family_index, issue_index[issue_id])
+        for family_index, status in enumerate(statuses)
+        for issue_id in status.issue_ids
+    ]
+    _create_dataset(
+        ref_group,
+        "family_index",
+        np.asarray([item[0] for item in refs], dtype=np.uint64),
+        request,
+    )
+    _create_dataset(
+        ref_group,
+        "issue_index",
+        np.asarray([item[1] for item in refs], dtype=np.uint64),
+        request,
+    )
+
+
+def _mjd_values(
+    raw_seconds: np.ndarray,
+    raw_valid: np.ndarray,
+    clock_sources: Sequence[str | None],
+    request: WriteRequest,
+) -> tuple[np.ndarray, np.ndarray]:
+    mjd = np.full(raw_seconds.shape, np.nan, dtype=np.float64)
+    valid = np.zeros(raw_seconds.shape, dtype=np.bool_)
+    reference_set = request.clock_reference_set
+    if reference_set is None:
+        return mjd, valid
+    for source in sorted({item for item in clock_sources if item is not None}):
+        reference = reference_set.reference_for(source)
+        if reference is None:
+            continue
+        select = raw_valid & np.asarray(
+            [item == source for item in clock_sources], dtype=np.bool_
+        )
+        if not np.any(select):
+            continue
+        mjd[select] = reference_set.to_mjd(raw_seconds[select], clock_source=source)
+        valid[select] = True
+    return mjd, valid
+
+
+def _write_common_rows(
+    group,
+    family: str,
+    rows: Sequence[object],
+    request: WriteRequest,
+    provenance_index: Mapping[tuple[str, int], int],
+) -> None:
+    count = len(rows)
+    group.attrs["count"] = np.uint64(count)
+    _create_dataset(
+        group,
+        "unique_ids",
+        np.asarray([row.unique_packet_id for row in rows], dtype=np.uint32),
+        request,
+    )
+    raw_valid = np.asarray(
+        [row.raw_seconds is not None for row in rows], dtype=np.bool_
+    )
+    raw_seconds = np.asarray(
+        [np.nan if row.raw_seconds is None else row.raw_seconds for row in rows],
+        dtype=np.float64,
+    )
+    _create_dataset(group, "raw_seconds", raw_seconds, request)
+    _create_dataset(group, "raw_time_valid", raw_valid, request)
+    clock_sources = [row.provenance.clock_source for row in rows]
+    mjd, mjd_valid = _mjd_values(raw_seconds, raw_valid, clock_sources, request)
+    _create_dataset(group, "mjd_times", mjd, request)
+    _create_dataset(group, "mjd_time_valid", mjd_valid, request)
+    _create_dataset(
+        group,
+        "original_indices",
+        np.arange(count, dtype=np.uint64),
+        request,
+    )
+    _create_dataset(
+        group,
+        "provenance_index",
+        np.asarray(
+            [provenance_index[(family, index)] for index in range(count)],
+            dtype=np.uint64,
+        ),
+        request,
+    )
+
+
+def _field_array(value: object) -> np.ndarray:
+    if isinstance(value, tuple):
+        value = np.asarray(value)
+    array = np.asarray(value)
+    if array.dtype.hasobject:
+        raise TypeError("normalized field values must not produce object arrays")
+    return array
+
+
+def _write_array_variant(
+    group,
+    name: str,
+    arrays: Sequence[np.ndarray],
+    request: WriteRequest,
+    h5py,
+) -> None:
+    stacked = np.stack(arrays)
+    if stacked.dtype.kind == "U":
+        _create_dataset(
+            group,
+            name,
+            stacked.astype(object),
+            request,
+            dtype=h5py.string_dtype(encoding="utf-8"),
+        )
+    else:
+        _create_dataset(group, name, stacked, request)
+
+
+def _write_mapping_union(
+    parent,
+    values: Sequence[Mapping[str, object] | None],
+    present: np.ndarray,
+    request: WriteRequest,
+    h5py,
+) -> None:
+    keys = sorted({key for value in values if value is not None for key in value})
+    fields_group = parent.create_group("fields")
+    presence_group = parent.create_group("field_present")
+    for key in keys:
+        field_values = [None if value is None else value.get(key) for value in values]
+        field_present = np.asarray(
+            [
+                bool(present[index])
+                and values[index] is not None
+                and key in values[index]
+                and field_values[index] is not None
+                for index in range(len(values))
+            ],
+            dtype=np.bool_,
+        )
+        _create_dataset(presence_group, key, field_present, request)
+        _write_one_field(
+            fields_group,
+            key,
+            field_values,
+            field_present,
+            request,
+            h5py,
+        )
+
+
+def _write_one_field(
+    parent,
+    name: str,
+    values: Sequence[object | None],
+    present: np.ndarray,
+    request: WriteRequest,
+    h5py,
+) -> None:
+    group = parent.create_group(name)
+    present_values = [values[index] for index in np.flatnonzero(present)]
+    if not present_values:
+        group.attrs["kind"] = "untyped_absent"
+        return
+    if all(isinstance(value, Mapping) for value in present_values):
+        group.attrs["kind"] = "mapping"
+        _write_mapping_union(
+            group,
+            [value if isinstance(value, Mapping) else None for value in values],
+            present,
+            request,
+            h5py,
+        )
+        return
+    if any(isinstance(value, Mapping) for value in present_values):
+        raise TypeError(f"field {name} mixes mappings and arrays")
+
+    arrays = {index: _field_array(values[index]) for index in np.flatnonzero(present)}
+    variants: dict[tuple[str, tuple[int, ...]], list[int]] = {}
+    for index, array in arrays.items():
+        variants.setdefault((array.dtype.str, array.shape), []).append(index)
+    group.attrs["kind"] = "array_variants"
+    group.attrs["variant_count"] = np.uint32(len(variants))
+    variant_index = np.full(len(values), -1, dtype=np.int32)
+    for number, key in enumerate(sorted(variants, key=lambda item: repr(item))):
+        row_indices = variants[key]
+        variant_index[row_indices] = number
+        variant_group = group.create_group(f"variant_{number:03d}")
+        variant_group.attrs["numpy_dtype"] = key[0]
+        variant_group.attrs["value_shape_json"] = _canonical_json(list(key[1]))
+        _create_dataset(
+            variant_group,
+            "row_indices",
+            np.asarray(row_indices, dtype=np.uint64),
+            request,
+        )
+        _write_array_variant(
+            variant_group,
+            "data",
+            [arrays[index] for index in row_indices],
+            request,
+            h5py,
+        )
+    _create_dataset(group, "variant_index", variant_index, request)
+
+
+def _write_field_union(
+    parent,
+    rows: Sequence[Mapping[str, object]],
+    presence: Sequence[Mapping[str, bool]],
+    request: WriteRequest,
+    h5py,
+) -> None:
+    keys = sorted({key for row in rows for key in row})
+    fields_group = parent.create_group("fields")
+    presence_group = parent.create_group("field_present")
+    for key in keys:
+        values = [row.get(key) for row in rows]
+        present = np.asarray(
+            [bool(mask.get(key, False)) for mask in presence],
+            dtype=np.bool_,
+        )
+        for index, is_present in enumerate(present):
+            if is_present != (values[index] is not None):
+                raise ValueError(
+                    f"field union presence disagrees for {key!r} row {index}"
+                )
+        _create_dataset(presence_group, key, present, request)
+        _write_one_field(fields_group, key, values, present, request, h5py)
+
+
+def _write_metadata_union(parent, rows, request: WriteRequest, h5py) -> None:
+    mappings = []
+    presence = []
+    for row in rows:
+        metadata = row.metadata
+        mapping = {
+            item.name: getattr(metadata, item.name)
+            for item in dataclass_fields(metadata)
+            if item.init
+        }
+        mapping["adc_statistics_valid"] = metadata.adc_statistics_valid
+        mapping["current_fields_present"] = metadata.current_fields_present
+        mappings.append(mapping)
+        presence.append({key: value is not None for key, value in mapping.items()})
+    _write_field_union(
+        parent,
+        mappings,
+        presence,
+        request,
+        h5py,
+    )
+
+
+def _write_frequency_windows(group, rows, request: WriteRequest) -> None:
+    contracts: dict[int, FrequencyWindowContract] = {
+        row.navgf: row.frequency_contract for row in rows
+    }
+    ordered = [contracts[navgf] for navgf in sorted(contracts)]
+    contract_group = group.create_group("frequency_windows")
+    if ordered:
+        first = ordered[0]
+        contract_group.attrs["contract_name"] = first.contract_name
+        contract_group.attrs["contract_version"] = np.uint16(first.contract_version)
+        contract_group.attrs["source_commit"] = first.source_commit
+        contract_group.attrs["frequency_coordinate_status"] = (
+            first.frequency_coordinate_status
+        )
+        contract_group.attrs["integer_arithmetic"] = first.as_record()[
+            "integer_arithmetic"
+        ]
+    _create_dataset(
+        contract_group,
+        "navgf",
+        np.asarray([item.navgf for item in ordered], dtype=np.uint8),
+        request,
+    )
+    for name, dtype in (
+        ("native_count", np.uint16),
+        ("output_count", np.uint16),
+        ("stride", np.uint16),
+        ("divisor", np.uint16),
+    ):
+        _create_dataset(
+            contract_group,
+            name,
+            np.asarray([getattr(item, name) for item in ordered], dtype=dtype),
+            request,
+        )
+    offsets = np.zeros((len(ordered), 4), dtype=np.uint8)
+    offset_valid = np.zeros((len(ordered), 4), dtype=np.bool_)
+    weights = np.full((len(ordered), 4), np.nan, dtype=np.float64)
+    for index, item in enumerate(ordered):
+        count = len(item.included_offsets)
+        offsets[index, :count] = item.included_offsets
+        offset_valid[index, :count] = True
+        weights[index, :count] = item.nominal_response_weights
+    _create_dataset(contract_group, "included_offsets", offsets, request)
+    _create_dataset(contract_group, "included_offset_valid", offset_valid, request)
+    _create_dataset(contract_group, "nominal_response_weights", weights, request)
+    window_index = {item.navgf: index for index, item in enumerate(ordered)}
+    _create_dataset(
+        group,
+        "frequency_window_index",
+        np.asarray([window_index[row.navgf] for row in rows], dtype=np.uint8),
+        request,
+    )
+
+
+def _write_spectra(h5, request, provenance_index, h5py) -> None:
+    rows = request.products.spectra
     if not rows:
         return
-    # Sort rows by raw_seconds for monotonic time axis.
-    rows = sorted(
-        rows,
-        key=lambda row: (
-            row.raw_seconds is None,
-            0.0 if row.raw_seconds is None else row.raw_seconds,
+    group = h5.create_group("spectra")
+    _write_common_rows(group, "spectra", rows, request, provenance_index)
+    data = np.full((len(rows), NPRODUCTS, NCHANNELS), np.nan, dtype=np.float32)
+    for index, row in enumerate(rows):
+        data[index, :, : row.frequency_contract.output_count] = row.data
+    dataset = _create_dataset(group, "data", data, request)
+    dataset.attrs["units"] = rows[0].units
+    dataset.attrs["representation"] = rows[0].representation
+    dataset.attrs["bitslice_restored"] = np.bool_(True)
+    dataset.attrs["bitslice_reference"] = np.uint8(BITSLICE_REFERENCE)
+    dataset.attrs["normalization_version"] = np.uint16(SPECTRA_NORMALIZATION_VERSION)
+    _create_dataset(
+        group,
+        "frequency_counts",
+        np.asarray(
+            [row.frequency_contract.output_count for row in rows],
+            dtype=np.uint16,
         ),
+        request,
     )
-    n = len(rows)
-    g = parent.create_group(f"type_{type_id}")
-    g.attrs["count"] = np.int64(n)
-
-    # Common base columns (always present).
-    upid = np.array([r.unique_packet_id for r in rows], dtype=np.int64)
-    version = np.array([r.version for r in rows], dtype=np.int16)
-    errors = np.array([r.errors for r in rows], dtype=np.int32)
-    raw_seconds = np.array([r.raw_seconds for r in rows], dtype=np.float64)
-    _create_dataset(g, "unique_packet_id", upid)
-    _create_dataset(g, "version", version)
-    _create_dataset(g, "errors", errors)
-    ds = _create_dataset(g, "raw_seconds", raw_seconds)
-    ds.attrs["units"] = "s"
-    ds.attrs["long_name"] = "mission time of HK packet"
-
-    # Per-type fields. Read each row's `fields` dict; missing fields default
-    # to 0 / NaN as appropriate for the dtype below.
-    if type_id == 0:
-        time = np.array(
-            [float(r.fields.get("time", 0.0) or 0.0) for r in rows],
-            dtype=np.float64,
-        )
-        ds = _create_dataset(g, "time", time)
-        ds.attrs["units"] = "s"
-    elif type_id == 1:
-        adc_min = _stack_vec([r.fields.get("adc_min") for r in rows], 4, np.int16)
-        adc_max = _stack_vec([r.fields.get("adc_max") for r in rows], 4, np.int16)
-        adc_mean = _stack_vec([r.fields.get("adc_mean") for r in rows], 4, np.float32)
-        adc_rms = _stack_vec([r.fields.get("adc_rms") for r in rows], 4, np.float32)
-        actual_gain = _stack_bytes([r.fields.get("actual_gain") for r in rows], 4)
-        for name, arr, units in (
-            ("adc_min", adc_min, "ADC counts"),
-            ("adc_max", adc_max, "ADC counts"),
-            ("adc_mean", adc_mean, "ADC counts"),
-            ("adc_rms", adc_rms, "ADC counts"),
-        ):
-            ds = _create_dataset(g, name, arr)
-            ds.attrs["units"] = units
-        ds = _create_dataset(g, "actual_gain", actual_gain)
-        ds.attrs["long_name"] = "per-channel gain code (L/M/H/A)"
-    elif type_id == 2:
-        time = np.array(
-            [float(r.fields.get("time", 0.0) or 0.0) for r in rows],
-            dtype=np.float64,
-        )
-        ds = _create_dataset(g, "time", time)
-        ds.attrs["units"] = "s"
-        ok = np.array(
-            [int(bool(r.fields.get("ok", False))) for r in rows],
-            dtype=np.uint8,
-        )
-        ds = _create_dataset(g, "ok", ok)
-        ds.attrs["long_name"] = "request acknowledged flag"
-        # Auto-discover the union of telemetry_* channels across all rows
-        # in this session, then write one (n,) float32 dataset per channel,
-        # NaN-filling rows that didn't carry that channel.
-        telem_keys: list[str] = []
-        seen: set[str] = set()
-        for r in rows:
-            for k in r.fields:
-                if k.startswith("telemetry") and k not in seen:
-                    telem_keys.append(k)
-                    seen.add(k)
-        for k in telem_keys:
-            arr = np.full(n, np.nan, dtype=np.float32)
-            for i, r in enumerate(rows):
-                v = r.fields.get(k)
-                if v is None:
-                    continue
-                try:
-                    arr[i] = float(v)
-                except (TypeError, ValueError):
-                    pass
-            _create_dataset(g, k, arr)
-    elif type_id == 3:
-        checksum = np.array(
-            [int(r.fields.get("checksum", 0) or 0) for r in rows],
-            dtype=np.int64,
-        )
-        weight_ndx = np.array(
-            [int(r.fields.get("weight_ndx", 0) or 0) for r in rows],
-            dtype=np.int32,
-        )
-        _create_dataset(g, "checksum", checksum)
-        _create_dataset(g, "weight_ndx", weight_ndx)
-    else:
-        # Unknown / deferred subtypes (e.g. 100, 101). Record only base
-        # columns; do not try to interpret fields.
-        log.info("housekeeping type %d not modeled; wrote base columns only", type_id)
+    _create_dataset(
+        group,
+        "navgf",
+        np.asarray([row.navgf for row in rows], dtype=np.uint8),
+        request,
+    )
+    _write_frequency_windows(group, rows, request)
+    _write_metadata_union(group.create_group("metadata"), rows, request, h5py)
 
 
-def _write_housekeeping(h5: h5py.File, products: Products) -> None:
-    if not products.housekeeping:
+def _write_tr_spectra(h5, request, provenance_index, h5py) -> None:
+    rows = request.products.tr_spectra
+    if not rows:
         return
-    g = h5.create_group("housekeeping")
-    g.attrs["count"] = np.int64(len(products.housekeeping))
+    group = h5.create_group("tr_spectra")
+    _write_common_rows(group, "tr_spectra", rows, request, provenance_index)
+    navg2, tr_length = rows[0].navg2, rows[0].tr_length
+    group.attrs["navg2"] = np.uint32(navg2)
+    group.attrs["tr_length"] = np.uint32(tr_length)
+    group.attrs["native_dtype"] = "int32"
+    group.attrs["units"] = rows[0].units
+    group.attrs["representation"] = rows[0].representation
+    data = np.full(
+        (len(rows), NPRODUCTS, navg2, tr_length),
+        np.nan,
+        dtype=np.float64,
+    )
+    for index, row in enumerate(rows):
+        data[index, row.product_present] = row.data[row.product_present]
+    _create_dataset(group, "data", data, request)
+    _create_dataset(
+        group,
+        "navg2_per_sample",
+        np.full(len(rows), navg2, dtype=np.uint32),
+        request,
+    )
+    _create_dataset(
+        group,
+        "tr_length_per_sample",
+        np.full(len(rows), tr_length, dtype=np.uint32),
+        request,
+    )
+    _write_metadata_union(group.create_group("metadata"), rows, request, h5py)
 
-    by_type: Dict[int, list] = {}
-    for hk in products.housekeeping:
-        by_type.setdefault(hk.hk_type, []).append(hk)
-    for type_id in sorted(by_type.keys()):
-        _write_one_hk_type(g, type_id, by_type[type_id])
+
+def _write_zoom(h5, request, provenance_index, h5py) -> None:
+    rows = request.products.zoom_spectra
+    if not rows:
+        return
+    parent = h5.require_group("calibrator")
+    group = parent.create_group("zoom_spectra")
+    _write_common_rows(group, "zoom_spectra", rows, request, provenance_index)
+    data = np.stack([row.data for row in rows]).astype(np.float32, copy=False)
+    dataset = _create_dataset(group, "data", data, request)
+    dataset.attrs["units"] = rows[0].units
+    dataset.attrs["representation"] = rows[0].representation
+    dataset.attrs["component_labels"] = np.asarray(rows[0].component_labels, dtype="S3")
+    _create_dataset(
+        group,
+        "pfb_bins",
+        np.asarray([row.pfb_bin for row in rows], dtype=np.uint16),
+        request,
+    )
 
 
-# ---------------------------------------------------------------------------
-# /DCB_telemetry and /spectra_interpolated_telemetry
-# ---------------------------------------------------------------------------
+def _write_waveforms(h5, request, provenance_index, h5py) -> None:
+    rows = request.products.waveforms
+    if not rows:
+        return
+    group = h5.create_group("waveform")
+    _write_common_rows(group, "waveforms", rows, request, provenance_index)
+    data = np.stack([row.data for row in rows]).astype(np.int16, copy=False)
+    if data.shape != (len(rows), WAVEFORM_SAMPLES):
+        raise ValueError("waveform rows changed after WriteRequest validation")
+    dataset = _create_dataset(group, "data", data, request)
+    dataset.attrs["units"] = rows[0].units
+    dataset.attrs["representation"] = rows[0].representation
+    _create_dataset(
+        group,
+        "channel",
+        np.asarray([row.channel for row in rows], dtype=np.uint8),
+        request,
+    )
+    _create_dataset(
+        group,
+        "adc_timestamps",
+        np.asarray([row.adc_timestamp for row in rows], dtype=np.uint64),
+        request,
+    )
+    _create_dataset(
+        group,
+        "adc_timestamp_valid",
+        np.ones(len(rows), dtype=np.bool_),
+        request,
+    )
+    group.attrs["adc_clock_source"] = ClockSource.ADC.value
 
-def _write_dcb_telemetry(
-    h5: h5py.File,
-    fpga: Optional[Mapping[str, np.ndarray]],
-    encoder: Optional[Mapping[str, np.ndarray]],
+
+def _write_grimm(h5, request, provenance_index, h5py) -> None:
+    rows = request.products.grimm_spectra
+    if not rows:
+        return
+    group = h5.create_group("grimm_spectra")
+    _write_common_rows(group, "grimm_spectra", rows, request, provenance_index)
+    navg2_max = max(row.navg2 for row in rows)
+    data = np.zeros((len(rows), navg2_max, NPRODUCTS, 4), dtype=np.int32)
+    average_valid = np.zeros((len(rows), navg2_max), dtype=np.bool_)
+    for index, row in enumerate(rows):
+        data[index, : row.navg2] = row.data
+        average_valid[index, : row.navg2] = True
+    dataset = _create_dataset(group, "data", data, request)
+    dataset.attrs["units"] = rows[0].units
+    dataset.attrs["representation"] = rows[0].representation
+    dataset.attrs["axis_labels"] = np.asarray(rows[0].axis_labels, dtype="S24")
+    dataset.attrs["value_axis_labels"] = np.asarray(
+        rows[0].value_axis_labels, dtype="S16"
+    )
+    _create_dataset(
+        group,
+        "navg2_per_sample",
+        np.asarray([row.navg2 for row in rows], dtype=np.uint32),
+        request,
+    )
+    _create_dataset(group, "average_valid", average_valid, request)
+
+
+def _write_housekeeping(h5, request, provenance_index, h5py) -> None:
+    rows = request.products.housekeeping
+    if not rows:
+        return
+    group = h5.create_group("housekeeping")
+    _write_common_rows(group, "housekeeping", rows, request, provenance_index)
+    _create_dataset(
+        group,
+        "hk_type",
+        np.asarray([row.hk_type for row in rows], dtype=np.uint16),
+        request,
+    )
+    _create_dataset(
+        group,
+        "version",
+        np.asarray([row.version for row in rows], dtype=np.uint16),
+        request,
+    )
+    _create_dataset(
+        group,
+        "firmware_errors",
+        np.asarray([row.errors for row in rows], dtype=np.uint32),
+        request,
+    )
+    _write_field_union(
+        group,
+        [row.fields for row in rows],
+        [row.field_present for row in rows],
+        request,
+        h5py,
+    )
+
+
+def _page_mjd(
+    page_raw_seconds: np.ndarray,
+    request: WriteRequest,
+) -> tuple[np.ndarray, np.ndarray]:
+    shape = page_raw_seconds.shape
+    flattened = page_raw_seconds.reshape(-1)
+    raw_valid = np.ones(flattened.shape, dtype=np.bool_)
+    sources = [ClockSource.SPECTROMETER.value] * flattened.size
+    mjd, valid = _mjd_values(flattened, raw_valid, sources, request)
+    return mjd.reshape(shape), valid.reshape(shape)
+
+
+def _write_calibrator_metadata(h5, request, provenance_index, h5py) -> None:
+    rows = request.products.calibrator_metadata
+    if not rows:
+        return
+    group = h5.require_group("calibrator").create_group("metadata")
+    _write_common_rows(group, "calibrator_metadata", rows, request, provenance_index)
+    _create_dataset(
+        group,
+        "from_debug",
+        np.asarray([row.from_debug for row in rows], dtype=np.bool_),
+        request,
+    )
+    _write_field_union(
+        group,
+        [row.fields for row in rows],
+        [row.field_present for row in rows],
+        request,
+        h5py,
+    )
+
+
+def _write_calibrator_data(h5, request, provenance_index, h5py) -> None:
+    rows = request.products.calibrator_data
+    if not rows:
+        return
+    group = h5.require_group("calibrator").create_group("data")
+    _write_common_rows(group, "calibrator_data", rows, request, provenance_index)
+    group.attrs["units"] = rows[0].units
+    group.attrs["representation"] = rows[0].representation
+    group.attrs["page_count"] = np.uint8(rows[0].page_count)
+    group.attrs["page_clock_source"] = ClockSource.SPECTROMETER.value
+    group.attrs["channel_labels"] = np.asarray(rows[0].channel_labels, dtype=np.uint8)
+    data = np.stack([row.data for row in rows])
+    _create_dataset(group, "data_real", data.real.astype(np.float64), request)
+    _create_dataset(group, "data_imag", data.imag.astype(np.float64), request)
+    _create_dataset(
+        group,
+        "g_nacc",
+        np.asarray([row.g_nacc for row in rows], dtype=np.int32),
+        request,
+    )
+    _create_dataset(
+        group,
+        "gphase",
+        np.stack([row.gphase for row in rows]).astype(np.int32, copy=False),
+        request,
+    )
+    page_raw = np.stack([row.page_raw_seconds for row in rows])
+    _create_dataset(group, "page_raw_seconds", page_raw, request)
+    page_mjd, page_valid = _page_mjd(page_raw, request)
+    _create_dataset(group, "page_mjd_times", page_mjd, request)
+    _create_dataset(group, "page_mjd_time_valid", page_valid, request)
+
+
+def _write_calibrator_raw_pfb(h5, request, provenance_index, h5py) -> None:
+    rows = request.products.calibrator_raw_pfb
+    if not rows:
+        return
+    group = h5.require_group("calibrator").create_group("raw_pfb")
+    _write_common_rows(group, "calibrator_raw_pfb", rows, request, provenance_index)
+    group.attrs["units"] = rows[0].units
+    group.attrs["representation"] = rows[0].representation
+    group.attrs["page_count"] = np.uint8(rows[0].page_count)
+    group.attrs["page_clock_source"] = ClockSource.SPECTROMETER.value
+    group.attrs["channel_labels"] = np.asarray(rows[0].channel_labels, dtype=np.uint8)
+    data = np.stack([row.data for row in rows])
+    _create_dataset(group, "data_real", data.real.astype(np.float64), request)
+    _create_dataset(group, "data_imag", data.imag.astype(np.float64), request)
+    page_raw = np.stack([row.page_raw_seconds for row in rows])
+    _create_dataset(group, "page_raw_seconds", page_raw, request)
+    page_mjd, page_valid = _page_mjd(page_raw, request)
+    _create_dataset(group, "page_mjd_times", page_mjd, request)
+    _create_dataset(group, "page_mjd_time_valid", page_valid, request)
+
+
+def _write_calibrator_debug(h5, request, provenance_index, h5py) -> None:
+    rows = request.products.calibrator_debug
+    if not rows:
+        return
+    group = h5.require_group("calibrator").create_group("debug")
+    _write_common_rows(group, "calibrator_debug", rows, request, provenance_index)
+    group.attrs["page_count"] = np.uint8(rows[0].page_count)
+    group.attrs["page_clock_source"] = ClockSource.SPECTROMETER.value
+    page_raw = np.stack([row.page_raw_seconds for row in rows])
+    _create_dataset(group, "page_raw_seconds", page_raw, request)
+    page_mjd, page_valid = _page_mjd(page_raw, request)
+    _create_dataset(group, "page_mjd_times", page_mjd, request)
+    _create_dataset(group, "page_mjd_time_valid", page_valid, request)
+    pages = group.create_group("pages")
+    for page_index in range(rows[0].page_count):
+        page_group = pages.create_group(f"page_{page_index}")
+        page_group.attrs["page_index"] = np.uint8(page_index)
+        _write_field_union(
+            page_group,
+            [row.pages[page_index].fields for row in rows],
+            [row.pages[page_index].field_present for row in rows],
+            request,
+            h5py,
+        )
+
+
+def _write_root_attrs(h5, request: WriteRequest) -> None:
+    products = request.products
+    h5.attrs["layout_version"] = np.uint16(HDF5_LAYOUT_VERSION)
+    h5.attrs["quality_status"] = products.quality_status.value
+    h5.attrs["execution_mode"] = products.execution_mode.value
+    h5.attrs["issue_count"] = np.uint64(len(request.issues))
+    severity_counts = Counter(issue.severity.value for issue in request.issues)
+    for severity in ("info", "warning", "error"):
+        h5.attrs[f"{severity}_issue_count"] = np.uint64(
+            severity_counts.get(severity, 0)
+        )
+    h5.attrs["input_packet_count"] = np.uint64(products.validated_counts.input_packets)
+    h5.attrs["valid_packet_count"] = np.uint64(products.validated_counts.valid_packets)
+    for status in request.family_statuses:
+        h5.attrs[f"decoded_{status.family}_rows"] = np.uint64(status.decoded_rows)
+        h5.attrs[f"persisted_{status.family}_rows"] = np.uint64(
+            status.decoded_rows if status.coverage.value == "persisted" else 0
+        )
+
+
+def _write_layout_v4(
+    path: Path,
+    request: WriteRequest,
+    h5py,
+    *,
+    destination_preexisted: bool,
 ) -> None:
-    if not fpga and not encoder:
+    with h5py.File(path, "w") as h5:
+        _write_root_attrs(h5, request)
+        _write_session_invariants(h5, request)
+        _write_constants(h5, request)
+        _write_clock_reference(h5, request, h5py)
+        _write_run_provenance(
+            h5,
+            request,
+            destination_preexisted=destination_preexisted,
+        )
+        _write_decoder_provenance(h5, request, h5py)
+        issue_index = _write_issues(h5, request, h5py)
+        provenance_index = _write_product_provenance(h5, request, h5py, issue_index)
+        _write_family_status(h5, request, h5py, issue_index)
+        _write_spectra(h5, request, provenance_index, h5py)
+        _write_tr_spectra(h5, request, provenance_index, h5py)
+        _write_zoom(h5, request, provenance_index, h5py)
+        _write_waveforms(h5, request, provenance_index, h5py)
+        _write_grimm(h5, request, provenance_index, h5py)
+        _write_housekeeping(h5, request, provenance_index, h5py)
+        _write_calibrator_metadata(h5, request, provenance_index, h5py)
+        _write_calibrator_data(h5, request, provenance_index, h5py)
+        _write_calibrator_raw_pfb(h5, request, provenance_index, h5py)
+        _write_calibrator_debug(h5, request, provenance_index, h5py)
+        h5.flush()
+
+
+def _verify_layout_v4(
+    path: Path,
+    request: WriteRequest,
+    h5py,
+    *,
+    destination_preexisted: bool,
+) -> None:
+    def group_at(h5, path_name: str):
+        if path_name not in h5 or not isinstance(h5[path_name], h5py.Group):
+            raise ValueError(f"temporary HDF5 is missing /{path_name}")
+        return h5[path_name]
+
+    def check_dataset(group, name: str, shape: tuple[int, ...], dtype):
+        path_name = f"{group.name}/{name}"
+        if name not in group or not isinstance(group[name], h5py.Dataset):
+            raise ValueError(f"temporary HDF5 is missing {path_name}")
+        dataset = group[name]
+        string_dtype = dtype is None and h5py.check_string_dtype(dataset.dtype)
+        if dataset.shape != shape or (
+            dtype is None and string_dtype is None
+        ) or (dtype is not None and dataset.dtype != np.dtype(dtype)):
+            raise ValueError(f"temporary HDF5 contract failed for {path_name}")
+        return dataset
+
+    def check_attrs(obj, expected: Mapping[str, object]) -> None:
+        for name, value in expected.items():
+            if name not in obj.attrs:
+                raise ValueError(
+                    f"temporary HDF5 attribute {obj.name}@{name} disagrees"
+                )
+            observed = np.asarray(obj.attrs[name])
+            expected_array = np.asarray(value)
+            if (
+                observed.shape != expected_array.shape
+                or observed.dtype != expected_array.dtype
+                or not np.array_equal(observed, expected_array)
+            ):
+                raise ValueError(
+                    f"temporary HDF5 attribute {obj.name}@{name} disagrees"
+                )
+
+    def check_values(group, name: str, expected: object) -> None:
+        dataset = group[name]
+        observed = (
+            dataset.asstr()[:]
+            if h5py.check_string_dtype(dataset.dtype) is not None
+            else dataset[:]
+        )
+        if not np.array_equal(observed, np.asarray(expected)):
+            raise ValueError(
+                f"temporary HDF5 values disagree in {dataset.name}"
+            )
+
+    def optional_attrs(values: Mapping[str, object | None]) -> dict[str, object]:
+        expected: dict[str, object] = {}
+        for name, value in values.items():
+            expected[f"{name}_valid"] = np.bool_(value is not None)
+            if value is not None:
+                expected[name] = value
+        return expected
+
+    def check_field_union(parent, count: int) -> None:
+        fields = group_at(parent, "fields")
+        presence = group_at(parent, "field_present")
+        if set(fields) != set(presence):
+            raise ValueError(
+                f"temporary HDF5 field union disagrees in {parent.name}"
+            )
+        for name in fields:
+            present = check_dataset(presence, name, (count,), np.bool_)
+            field = group_at(fields, name)
+            kind = field.attrs.get("kind")
+            if kind == "untyped_absent":
+                check_attrs(field, {"kind": "untyped_absent"})
+                if np.any(presence[name][:]):
+                    raise ValueError(
+                        f"temporary HDF5 absent field is present in {field.name}"
+                    )
+            elif kind == "mapping":
+                check_attrs(field, {"kind": "mapping"})
+                check_field_union(field, count)
+            elif kind == "array_variants":
+                check_dataset(field, "variant_index", (count,), np.int32)
+                variant_index = field["variant_index"][:]
+                if (
+                    "variant_count" not in field.attrs
+                    or np.asarray(field.attrs["variant_count"]).dtype
+                    != np.dtype(np.uint32)
+                ):
+                    raise ValueError(
+                        f"temporary HDF5 variant count disagrees in {field.name}"
+                    )
+                variant_count = int(field.attrs["variant_count"])
+                check_attrs(
+                    field,
+                    {
+                        "kind": "array_variants",
+                        "variant_count": np.uint32(variant_count),
+                    },
+                )
+                if not np.array_equal(
+                    variant_index >= 0,
+                    present[:],
+                ) or np.any(variant_index[present[:]] >= variant_count):
+                    raise ValueError(
+                        f"temporary HDF5 variant presence disagrees in {field.name}"
+                    )
+                names = {f"variant_{index:03d}" for index in range(variant_count)}
+                observed = {
+                    item for item in field if item.startswith("variant_")
+                } - {"variant_index"}
+                if variant_count < 0 or observed != names:
+                    raise ValueError(
+                        f"temporary HDF5 variants disagree in {field.name}"
+                    )
+                for variant_number in range(variant_count):
+                    variant_name = f"variant_{variant_number:03d}"
+                    variant = group_at(field, variant_name)
+                    expected_rows = np.flatnonzero(
+                        variant_index == variant_number
+                    )
+                    check_dataset(
+                        variant,
+                        "row_indices",
+                        (len(expected_rows),),
+                        np.uint64,
+                    )
+                    rows = variant["row_indices"]
+                    data = variant.get("data")
+                    if not np.array_equal(rows[:], expected_rows):
+                        raise ValueError(
+                            f"temporary HDF5 variant rows disagree in {variant.name}"
+                        )
+                    try:
+                        value_shape = tuple(
+                            json.loads(variant.attrs["value_shape_json"])
+                        )
+                        numpy_dtype = np.dtype(variant.attrs["numpy_dtype"])
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise ValueError(
+                            f"temporary HDF5 variant is incomplete in {variant.name}"
+                        ) from exc
+                    string_dtype = (
+                        numpy_dtype.kind == "U"
+                        and isinstance(data, h5py.Dataset)
+                        and h5py.check_string_dtype(data.dtype) is not None
+                    )
+                    if not isinstance(data, h5py.Dataset) or data.shape != (
+                        len(rows),
+                        *value_shape,
+                    ) or (numpy_dtype.kind == "U" and not string_dtype) or (
+                        numpy_dtype.kind != "U" and data.dtype != numpy_dtype
+                    ):
+                        raise ValueError(
+                            f"temporary HDF5 variant data disagrees in {variant.name}"
+                        )
+            else:
+                raise ValueError(
+                    f"temporary HDF5 field kind is invalid in {field.name}"
+                )
+
+    products = request.products
+    entries = list(_iter_product_rows(request))
+    provenances = [row.provenance for _, _, row in entries]
+    schema_rows = [
+        (index, schema_id)
+        for index, provenance in enumerate(provenances)
+        for schema_id in provenance.reported_schema_ids
+    ]
+    packet_rows = [
+        (provenance_index, source_order, packet)
+        for provenance_index, provenance in enumerate(provenances)
+        for source_order, packet in enumerate(provenance.source_packets)
+    ]
+    issue_id_to_index = {
+        issue.issue_id: index for index, issue in enumerate(request.issues)
+    }
+    product_issue_rows = [
+        (provenance_index, issue_id_to_index[issue_id])
+        for provenance_index, provenance in enumerate(provenances)
+        for issue_id in provenance.decoder_issue_ids
+    ]
+    family_issue_rows = [
+        (family_index, issue_id_to_index[issue_id])
+        for family_index, status in enumerate(request.family_statuses)
+        for issue_id in status.issue_ids
+    ]
+    family_paths = {
+        "spectra": "spectra",
+        "tr_spectra": "tr_spectra",
+        "zoom_spectra": "calibrator/zoom_spectra",
+        "waveforms": "waveform",
+        "housekeeping": "housekeeping",
+        "grimm_spectra": "grimm_spectra",
+        "calibrator_metadata": "calibrator/metadata",
+        "calibrator_data": "calibrator/data",
+        "calibrator_raw_pfb": "calibrator/raw_pfb",
+        "calibrator_debug": "calibrator/debug",
+    }
+    total_rows = len(entries)
+    issue_count = len(request.issues)
+    decoder = products.decode_provenance
+    source_count = len(packet_rows)
+    schema_ref_count = len(schema_rows)
+    product_issue_count = len(product_issue_rows)
+    status_count = len(request.family_statuses)
+    family_issue_count = len(family_issue_rows)
+
+    specs = {
+        "provenance/decoder": {
+            "reported_schema_ids": (
+                (len(decoder.reported_schema_ids),),
+                np.uint16,
+            ),
+            "appids": ((len(decoder.appid_counts),), np.uint16),
+            "appid_counts": ((len(decoder.appid_counts),), np.uint64),
+            "issue_codes": ((len(decoder.issue_counts),), None),
+            "issue_code_counts": ((len(decoder.issue_counts),), np.uint64),
+        },
+        "issues": {
+            **{
+                name: ((issue_count,), None)
+                for name in (
+                    "issue_id",
+                    "code",
+                    "stage",
+                    "message",
+                    "input_identity",
+                    "bank",
+                    "session",
+                    "severity",
+                    "action",
+                    "details_json",
+                )
+            },
+            **{
+                name: ((issue_count,), dtype)
+                for name, dtype in (
+                    ("input_identity_valid", np.bool_),
+                    ("bank_valid", np.bool_),
+                    ("session_valid", np.bool_),
+                    ("byte_offset", np.uint64),
+                    ("byte_offset_valid", np.bool_),
+                    ("frame_index", np.uint64),
+                    ("frame_index_valid", np.bool_),
+                    ("packet_index", np.uint64),
+                    ("packet_index_valid", np.bool_),
+                    ("appid", np.uint16),
+                    ("appid_valid", np.bool_),
+                    ("sequence_count", np.uint16),
+                    ("sequence_count_valid", np.bool_),
+                    ("uid", np.uint32),
+                    ("uid_valid", np.bool_),
+                )
+            },
+        },
+        "provenance/product_rows": {
+            **{
+                name: ((total_rows,), None)
+                for name in (
+                    "family",
+                    "uid_source",
+                    "uid_source_role",
+                    "time_source",
+                    "time_source_role",
+                    "clock_source",
+                )
+            },
+            **{
+                name: ((total_rows,), dtype)
+                for name, dtype in (
+                    ("row_index", np.uint64),
+                    ("unique_ids", np.uint32),
+                    ("uid_source_role_valid", np.bool_),
+                    ("time_source_valid", np.bool_),
+                    ("time_source_role_valid", np.bool_),
+                    ("clock_source_valid", np.bool_),
+                    ("time_valid", np.bool_),
+                    ("selected_schema_ids", np.uint16),
+                )
+            },
+        },
+        "provenance/product_schema_refs": {
+            "provenance_index": ((schema_ref_count,), np.uint64),
+            "schema_id": ((schema_ref_count,), np.uint16),
+        },
+        "provenance/source_packets": {
+            **{
+                name: ((source_count,), dtype)
+                for name, dtype in (
+                    ("provenance_index", np.uint64),
+                    ("source_order", np.uint16),
+                    ("original_appid", np.uint16),
+                    ("normalized_appid", np.uint16),
+                    ("normalized_appid_valid", np.bool_),
+                    ("packet_index", np.uint64),
+                    ("packet_index_valid", np.bool_),
+                    ("frame_start", np.uint64),
+                    ("frame_start_valid", np.bool_),
+                    ("frame_stop", np.uint64),
+                    ("frame_stop_valid", np.bool_),
+                    ("byte_offset_start", np.uint64),
+                    ("byte_offset_start_valid", np.bool_),
+                    ("byte_offset_stop", np.uint64),
+                    ("byte_offset_stop_valid", np.bool_),
+                    ("filename_valid", np.bool_),
+                    ("bank_valid", np.bool_),
+                )
+            },
+            "role": ((source_count,), None),
+            "filename": ((source_count,), None),
+            "bank": ((source_count,), None),
+        },
+        "provenance/product_issue_refs": {
+            "provenance_index": ((product_issue_count,), np.uint64),
+            "issue_index": ((product_issue_count,), np.uint64),
+        },
+        "status/families": {
+            "family": ((status_count,), None),
+            "supported": ((status_count,), np.bool_),
+            "coverage": ((status_count,), None),
+            "quality": ((status_count,), None),
+            "decoded_rows": ((status_count,), np.uint64),
+            "persisted_rows": ((status_count,), np.uint64),
+            "reason": ((status_count,), None),
+            "reason_valid": ((status_count,), np.bool_),
+        },
+        "status/family_issue_refs": {
+            "family_index": ((family_issue_count,), np.uint64),
+            "issue_index": ((family_issue_count,), np.uint64),
+        },
+    }
+    session_fields = {
+        "software_version": (
+            None if products.sw_version is None else np.uint32(products.sw_version)
+        ),
+        "firmware_version": (
+            None if products.fw_version is None else np.uint32(products.fw_version)
+        ),
+        "firmware_id": (
+            None if products.fw_id is None else np.uint32(products.fw_id)
+        ),
+        "firmware_date": (
+            None if products.fw_date is None else np.uint32(products.fw_date)
+        ),
+        "firmware_time": (
+            None if products.fw_time is None else np.uint32(products.fw_time)
+        ),
+        "start_unique_packet_id": (
+            None
+            if products.start_unique_packet_id is None
+            else np.uint32(products.start_unique_packet_id)
+        ),
+        "start_time_32": (
+            None
+            if products.start_time_32 is None
+            else np.uint32(products.start_time_32)
+        ),
+        "start_time_16": (
+            None
+            if products.start_time_16 is None
+            else np.uint16(products.start_time_16)
+        ),
+        "start_raw_seconds": (
+            None
+            if products.start_raw_seconds is None
+            else np.float64(products.start_raw_seconds)
+        ),
+    }
+    run_attrs = optional_attrs(request.run_provenance.as_record())
+    run_attrs.update(
+        {
+            "interpolation_mode": request.interpolation_policy.mode,
+            "interpolation_extrapolate": np.bool_(
+                request.interpolation_policy.extrapolate
+            ),
+            **optional_attrs(
+                {
+                    "interpolation_maximum_gap_seconds": (
+                        request.interpolation_policy.maximum_gap_seconds
+                    )
+                }
+            ),
+            "overwrite_requested": np.bool_(request.overwrite),
+            "destination_preexisted": np.bool_(destination_preexisted),
+            **optional_attrs(
+                {
+                    "hdf5_compression": request.hdf5_compression,
+                    "hdf5_compression_level": request.hdf5_compression_level,
+                }
+            ),
+        }
+    )
+    decoder_optional_names = (
+        "decoder_name",
+        "distribution_version",
+        "decoder_source_commit",
+        "binding_key",
+        "schema_variant",
+        "binding_source_release",
+        "binding_source_commit",
+        "abi_fingerprint",
+        "canonical_report_json",
+    )
+    decoder_attrs = optional_attrs(
+        {name: getattr(decoder, name) for name in decoder_optional_names}
+    )
+    decoder_attrs.update(
+        {
+            "selected_schema_id": np.uint16(decoder.selected_schema_id),
+            "schema_assumed": np.bool_(decoder.schema_assumed),
+            "execution_mode": decoder.execution_mode.value,
+            "input_packet_count": np.uint64(decoder.input_packet_count),
+            "valid_packet_count": np.uint64(decoder.valid_packet_count),
+        }
+    )
+    attrs: dict[str, dict[str, object]] = {
+        "session_invariants": optional_attrs(session_fields),
+        "constants": {
+            "lun_lat_deg": np.float64(request.location.latitude_deg),
+            "lun_long_deg": np.float64(request.location.longitude_deg),
+            "lun_height_m": np.float64(request.location.height_m),
+        },
+        "clock_reference": {
+            "available": np.bool_(request.clock_reference_set is not None)
+        },
+        "run_provenance": run_attrs,
+        "provenance/decoder": decoder_attrs,
+        "issues": {"count": np.uint64(issue_count)},
+    }
+    severity_counts = Counter(issue.severity.value for issue in request.issues)
+    attrs[""] = {
+        f"{severity}_issue_count": np.uint64(severity_counts.get(severity, 0))
+        for severity in ("info", "warning", "error")
+    }
+    for status in request.family_statuses:
+        attrs[""].update(
+            {
+                f"decoded_{status.family}_rows": np.uint64(status.decoded_rows),
+                f"persisted_{status.family}_rows": np.uint64(
+                    status.decoded_rows
+                    if status.coverage.value == "persisted"
+                    else 0
+                ),
+            }
+        )
+    reference_set = request.clock_reference_set
+    if reference_set is None:
+        attrs["clock_reference"]["unavailable_reason"] = (
+            request.clock_reference_unavailable_reason
+        )
+    else:
+        attrs["clock_reference"].update(
+            {
+                "format_version": np.uint16(reference_set.format_version),
+                "reference_event": reference_set.reference_event,
+                "clock_reference_isot": reference_set.clock_reference_isot,
+                "time_scale": reference_set.time_scale,
+                "source": reference_set.source,
+                "assumed": np.bool_(reference_set.assumed),
+                "source_sha256": reference_set.source_sha256,
+                "canonical_record_json": _canonical_json(
+                    reference_set.as_record()
+                ),
+            }
+        )
+        specs["clock_reference"] = {
+            "clock_sources": ((len(reference_set.clocks),), None),
+            "clock_reference_raw_seconds": (
+                (len(reference_set.clocks),),
+                np.float64,
+            ),
+        }
+
+    values: dict[str, dict[str, object]] = {
+        "provenance/decoder": {
+            "reported_schema_ids": np.asarray(
+                decoder.reported_schema_ids, dtype=np.uint16
+            ),
+            "appids": np.asarray(
+                [item[0] for item in decoder.appid_counts], dtype=np.uint16
+            ),
+            "appid_counts": np.asarray(
+                [item[1] for item in decoder.appid_counts], dtype=np.uint64
+            ),
+            "issue_codes": [item[0] for item in decoder.issue_counts],
+            "issue_code_counts": np.asarray(
+                [item[1] for item in decoder.issue_counts], dtype=np.uint64
+            ),
+        },
+        "issues": {
+            "issue_id": [issue.issue_id for issue in request.issues],
+            "code": [issue.code for issue in request.issues],
+            "stage": [issue.stage for issue in request.issues],
+            "message": [issue.message for issue in request.issues],
+            "severity": [issue.severity.value for issue in request.issues],
+            "action": [issue.action.value for issue in request.issues],
+            "details_json": [
+                _canonical_json(issue.as_dict()["details"])
+                for issue in request.issues
+            ],
+        },
+        "provenance/product_rows": {
+            "family": [family for family, _, _ in entries],
+            "row_index": np.asarray(
+                [row_index for _, row_index, _ in entries], dtype=np.uint64
+            ),
+            "unique_ids": np.asarray(
+                [row.unique_packet_id for _, _, row in entries], dtype=np.uint32
+            ),
+            "uid_source": [item.uid_source for item in provenances],
+            "time_valid": np.asarray(
+                [item.time_valid for item in provenances], dtype=np.bool_
+            ),
+            "selected_schema_ids": np.asarray(
+                [item.selected_schema_id for item in provenances], dtype=np.uint16
+            ),
+        },
+        "provenance/product_schema_refs": {
+            "provenance_index": np.asarray(
+                [item[0] for item in schema_rows], dtype=np.uint64
+            ),
+            "schema_id": np.asarray(
+                [item[1] for item in schema_rows], dtype=np.uint16
+            ),
+        },
+        "provenance/source_packets": {
+            "provenance_index": np.asarray(
+                [item[0] for item in packet_rows], dtype=np.uint64
+            ),
+            "source_order": np.asarray(
+                [item[1] for item in packet_rows], dtype=np.uint16
+            ),
+            "role": [item[2].role for item in packet_rows],
+            "original_appid": np.asarray(
+                [item[2].original_appid for item in packet_rows], dtype=np.uint16
+            ),
+        },
+        "provenance/product_issue_refs": {
+            "provenance_index": np.asarray(
+                [item[0] for item in product_issue_rows], dtype=np.uint64
+            ),
+            "issue_index": np.asarray(
+                [item[1] for item in product_issue_rows], dtype=np.uint64
+            ),
+        },
+        "status/families": {
+            "family": [status.family for status in request.family_statuses],
+            "supported": np.asarray(
+                [status.supported for status in request.family_statuses],
+                dtype=np.bool_,
+            ),
+            "coverage": [
+                status.coverage.value for status in request.family_statuses
+            ],
+            "quality": [status.quality.value for status in request.family_statuses],
+            "decoded_rows": np.asarray(
+                [status.decoded_rows for status in request.family_statuses],
+                dtype=np.uint64,
+            ),
+            "persisted_rows": np.asarray(
+                [
+                    status.decoded_rows
+                    if status.coverage.value == "persisted"
+                    else 0
+                    for status in request.family_statuses
+                ],
+                dtype=np.uint64,
+            ),
+        },
+        "status/family_issue_refs": {
+            "family_index": np.asarray(
+                [item[0] for item in family_issue_rows], dtype=np.uint64
+            ),
+            "issue_index": np.asarray(
+                [item[1] for item in family_issue_rows], dtype=np.uint64
+            ),
+        },
+    }
+    if reference_set is not None:
+        values["clock_reference"] = {
+            "clock_sources": [
+                item.clock_source.value for item in reference_set.clocks
+            ],
+            "clock_reference_raw_seconds": np.asarray(
+                [item.clock_reference_raw_seconds for item in reference_set.clocks],
+                dtype=np.float64,
+            ),
+        }
+    for name in ("input_identity", "bank", "session"):
+        data, valid = _optional_string_column(
+            [getattr(issue, name) for issue in request.issues]
+        )
+        values["issues"][name] = data
+        values["issues"][f"{name}_valid"] = valid
+    for name, dtype in (
+        ("byte_offset", np.uint64),
+        ("frame_index", np.uint64),
+        ("packet_index", np.uint64),
+        ("appid", np.uint16),
+        ("sequence_count", np.uint16),
+        ("uid", np.uint32),
+    ):
+        data, valid = _optional_integer_column(
+            [getattr(issue, name) for issue in request.issues], dtype
+        )
+        values["issues"][name] = data
+        values["issues"][f"{name}_valid"] = valid
+    for name in (
+        "uid_source_role",
+        "time_source",
+        "time_source_role",
+        "clock_source",
+    ):
+        data, valid = _optional_string_column(
+            [getattr(item, name) for item in provenances]
+        )
+        values["provenance/product_rows"][name] = data
+        values["provenance/product_rows"][f"{name}_valid"] = valid
+    for name, dtype in (
+        ("normalized_appid", np.uint16),
+        ("packet_index", np.uint64),
+        ("frame_start", np.uint64),
+        ("frame_stop", np.uint64),
+        ("byte_offset_start", np.uint64),
+        ("byte_offset_stop", np.uint64),
+    ):
+        data, valid = _optional_integer_column(
+            [getattr(item[2], name) for item in packet_rows], dtype
+        )
+        values["provenance/source_packets"][name] = data
+        values["provenance/source_packets"][f"{name}_valid"] = valid
+    for name in ("filename", "bank"):
+        data, valid = _optional_string_column(
+            [getattr(item[2], name) for item in packet_rows]
+        )
+        values["provenance/source_packets"][name] = data
+        values["provenance/source_packets"][f"{name}_valid"] = valid
+    reasons, reason_valid = _optional_string_column(
+        [status.reason for status in request.family_statuses]
+    )
+    values["status/families"]["reason"] = reasons
+    values["status/families"]["reason_valid"] = reason_valid
+    field_unions: list[tuple[str, int]] = []
+    forbidden_paths: list[str] = []
+
+    common = {
+        "unique_ids": (None, np.uint32),
+        "raw_seconds": (None, np.float64),
+        "raw_time_valid": (None, np.bool_),
+        "mjd_times": (None, np.float64),
+        "mjd_time_valid": (None, np.bool_),
+        "original_indices": (None, np.uint64),
+        "provenance_index": (None, np.uint64),
+    }
+    for family, _ in FAMILY_TYPES:
+        rows = getattr(products, family)
+        path_name = family_paths[family]
+        if rows:
+            count = len(rows)
+            specs[path_name] = {
+                name: ((count,), dtype) for name, (_, dtype) in common.items()
+            }
+            attrs[path_name] = {"count": np.uint64(count)}
+        status = next(
+            item for item in request.family_statuses if item.family == family
+        )
+
+    if products.spectra:
+        rows = products.spectra
+        count = len(rows)
+        specs["spectra"].update(
+            {
+                "data": ((count, NPRODUCTS, NCHANNELS), np.float32),
+                "frequency_counts": ((count,), np.uint16),
+                "navgf": ((count,), np.uint8),
+                "frequency_window_index": ((count,), np.uint8),
+            }
+        )
+        contracts = {row.navgf: row.frequency_contract for row in rows}
+        contract_count = len(contracts)
+        specs["spectra/frequency_windows"] = {
+            "navgf": ((contract_count,), np.uint8),
+            "native_count": ((contract_count,), np.uint16),
+            "output_count": ((contract_count,), np.uint16),
+            "stride": ((contract_count,), np.uint16),
+            "divisor": ((contract_count,), np.uint16),
+            "included_offsets": ((contract_count, 4), np.uint8),
+            "included_offset_valid": ((contract_count, 4), np.bool_),
+            "nominal_response_weights": ((contract_count, 4), np.float64),
+        }
+        first_contract = contracts[min(contracts)]
+        attrs["spectra/data"] = {
+            "units": rows[0].units,
+            "representation": rows[0].representation,
+            "bitslice_restored": np.bool_(True),
+            "bitslice_reference": np.uint8(BITSLICE_REFERENCE),
+            "normalization_version": np.uint16(
+                SPECTRA_NORMALIZATION_VERSION
+            ),
+        }
+        attrs["spectra/frequency_windows"] = {
+            "contract_name": first_contract.contract_name,
+            "contract_version": np.uint16(first_contract.contract_version),
+            "source_commit": first_contract.source_commit,
+            "frequency_coordinate_status": (
+                first_contract.frequency_coordinate_status
+            ),
+            "integer_arithmetic": first_contract.as_record()[
+                "integer_arithmetic"
+            ],
+        }
+        field_unions.append(("spectra/metadata", count))
+        forbidden_paths.extend(
+            ("spectra/product_present", "spectra/data_valid")
+        )
+
+    if products.tr_spectra:
+        rows = products.tr_spectra
+        count = len(rows)
+        first = rows[0]
+        specs["tr_spectra"].update(
+            {
+                "data": (
+                    (count, NPRODUCTS, first.navg2, first.tr_length),
+                    np.float64,
+                ),
+                "navg2_per_sample": ((count,), np.uint32),
+                "tr_length_per_sample": ((count,), np.uint32),
+            }
+        )
+        attrs["tr_spectra"].update(
+            {
+                "navg2": np.uint32(first.navg2),
+                "tr_length": np.uint32(first.tr_length),
+                "native_dtype": "int32",
+                "units": first.units,
+                "representation": first.representation,
+            }
+        )
+        field_unions.append(("tr_spectra/metadata", count))
+        forbidden_paths.extend(
+            ("tr_spectra/product_present", "tr_spectra/data_valid")
+        )
+
+    if products.zoom_spectra:
+        rows = products.zoom_spectra
+        count = len(rows)
+        specs["calibrator/zoom_spectra"].update(
+            {
+                "data": ((count, *rows[0].data.shape), np.float32),
+                "pfb_bins": ((count,), np.uint16),
+            }
+        )
+        attrs["calibrator/zoom_spectra/data"] = {
+            "units": rows[0].units,
+            "representation": rows[0].representation,
+            "component_labels": np.asarray(
+                rows[0].component_labels,
+                dtype="S3",
+            ),
+        }
+
+    if products.waveforms:
+        rows = products.waveforms
+        count = len(rows)
+        specs["waveform"].update(
+            {
+                "data": ((count, WAVEFORM_SAMPLES), np.int16),
+                "channel": ((count,), np.uint8),
+                "adc_timestamps": ((count,), np.uint64),
+                "adc_timestamp_valid": ((count,), np.bool_),
+            }
+        )
+        attrs["waveform"].update(
+            {"adc_clock_source": ClockSource.ADC.value}
+        )
+        attrs["waveform/data"] = {
+            "units": rows[0].units,
+            "representation": rows[0].representation,
+        }
+
+    if products.grimm_spectra:
+        rows = products.grimm_spectra
+        count = len(rows)
+        navg2_max = max(row.navg2 for row in rows)
+        specs["grimm_spectra"].update(
+            {
+                "data": (
+                    (count, navg2_max, NPRODUCTS, 4),
+                    np.int32,
+                ),
+                "navg2_per_sample": ((count,), np.uint32),
+                "average_valid": ((count, navg2_max), np.bool_),
+            }
+        )
+        attrs["grimm_spectra/data"] = {
+            "units": rows[0].units,
+            "representation": rows[0].representation,
+            "axis_labels": np.asarray(rows[0].axis_labels, dtype="S24"),
+            "value_axis_labels": np.asarray(
+                rows[0].value_axis_labels,
+                dtype="S16",
+            ),
+        }
+
+    if products.housekeeping:
+        count = len(products.housekeeping)
+        specs["housekeeping"].update(
+            {
+                "hk_type": ((count,), np.uint16),
+                "version": ((count,), np.uint16),
+                "firmware_errors": ((count,), np.uint32),
+            }
+        )
+        field_unions.append(("housekeeping", count))
+
+    if products.calibrator_metadata:
+        count = len(products.calibrator_metadata)
+        specs["calibrator/metadata"].update(
+            {"from_debug": ((count,), np.bool_)}
+        )
+        field_unions.append(("calibrator/metadata", count))
+
+    for family, path_name, include_gain in (
+        ("calibrator_data", "calibrator/data", True),
+        ("calibrator_raw_pfb", "calibrator/raw_pfb", False),
+    ):
+        rows = getattr(products, family)
+        if not rows:
+            continue
+        count = len(rows)
+        first = rows[0]
+        specs[path_name].update(
+            {
+                "data_real": ((count, *first.data.shape), np.float64),
+                "data_imag": ((count, *first.data.shape), np.float64),
+                "page_raw_seconds": (
+                    (count, first.page_count),
+                    np.float64,
+                ),
+                "page_mjd_times": (
+                    (count, first.page_count),
+                    np.float64,
+                ),
+                "page_mjd_time_valid": (
+                    (count, first.page_count),
+                    np.bool_,
+                ),
+            }
+        )
+        if include_gain:
+            specs[path_name].update(
+                {
+                    "g_nacc": ((count,), np.int32),
+                    "gphase": ((count, *first.gphase.shape), np.int32),
+                }
+            )
+        attrs[path_name].update(
+            {
+                "units": first.units,
+                "representation": first.representation,
+                "page_count": np.uint8(first.page_count),
+                "page_clock_source": ClockSource.SPECTROMETER.value,
+                "channel_labels": np.asarray(
+                    first.channel_labels,
+                    dtype=np.uint8,
+                ),
+            }
+        )
+
+    if products.calibrator_debug:
+        rows = products.calibrator_debug
+        count = len(rows)
+        first = rows[0]
+        page_shape = (count, first.page_count)
+        specs["calibrator/debug"].update(
+            {
+                "page_raw_seconds": (page_shape, np.float64),
+                "page_mjd_times": (page_shape, np.float64),
+                "page_mjd_time_valid": (page_shape, np.bool_),
+            }
+        )
+        attrs["calibrator/debug"].update(
+            {
+                "page_count": np.uint8(first.page_count),
+                "page_clock_source": ClockSource.SPECTROMETER.value,
+            }
+        )
+        pages = {
+            f"calibrator/debug/pages/page_{index}": index
+            for index in range(first.page_count)
+        }
+        attrs.update(
+            {
+                path_name: {"page_index": np.uint8(index)}
+                for path_name, index in pages.items()
+            }
+        )
+        field_unions.extend((path_name, count) for path_name in pages)
+
+    with h5py.File(path, "r") as h5:
+        check_attrs(
+            h5,
+            {
+                "layout_version": np.uint16(HDF5_LAYOUT_VERSION),
+                "quality_status": products.quality_status.value,
+                "execution_mode": products.execution_mode.value,
+                "issue_count": np.uint64(issue_count),
+                "input_packet_count": np.uint64(
+                    products.validated_counts.input_packets
+                ),
+                "valid_packet_count": np.uint64(
+                    products.validated_counts.valid_packets
+                ),
+            },
+        )
+        for family, _ in FAMILY_TYPES:
+            rows = getattr(products, family)
+            path_name = family_paths[family]
+            if not rows and path_name in h5:
+                raise ValueError(
+                    f"temporary HDF5 unexpectedly contains /{path_name}"
+                )
+        for path_name, datasets in specs.items():
+            group = group_at(h5, path_name)
+            for name, (shape, dtype) in datasets.items():
+                check_dataset(group, name, shape, dtype)
+        for path_name, expected in attrs.items():
+            if path_name and path_name not in h5:
+                raise ValueError(f"temporary HDF5 is missing /{path_name}")
+            obj = h5 if path_name == "" else h5[path_name]
+            check_attrs(obj, expected)
+        for path_name, datasets in values.items():
+            group = group_at(h5, path_name)
+            for name, expected in datasets.items():
+                check_values(group, name, expected)
+        for path_name, count in field_unions:
+            check_field_union(group_at(h5, path_name), count)
+        for path_name in forbidden_paths:
+            if path_name in h5:
+                raise ValueError(
+                    f"temporary HDF5 persisted forbidden mask /{path_name}"
+                )
+
+
+def _install_atomic(temp_path: Path, dest: Path, *, overwrite: bool) -> None:
+    if overwrite:
+        os.replace(temp_path, dest)
         return
-    g = h5.create_group("DCB_telemetry")
-    if fpga:
-        ms = fpga.get("mission_seconds")
-        ss = fpga.get("lusee_subsecs")
-        if ms is not None:
-            _create_dataset(g, "fpga_mission_seconds", np.asarray(ms, dtype=np.float64))
-        if ss is not None:
-            _create_dataset(g, "fpga_lusee_subsecs", np.asarray(ss, dtype=np.float64))
-        for fname, arr in fpga.items():
-            if fname in ("mission_seconds", "lusee_subsecs"):
-                continue
-            _create_dataset(g, f"fpga_{fname}", np.asarray(arr, dtype=np.float64))
-    if encoder:
-        for k in ("mission_seconds", "lusee_subsecs"):
-            arr = encoder.get(k)
-            if arr is not None:
-                _create_dataset(g, f"encoder_{k}", np.asarray(arr, dtype=np.float64))
-        if encoder.get("enc_pos") is not None:
-            _create_dataset(g, "enc_pos", np.asarray(encoder["enc_pos"], dtype=np.int64))
-        if encoder.get("enc_status") is not None:
-            _create_dataset(g, "enc_status", np.asarray(encoder["enc_status"], dtype=np.int64))
+    os.link(temp_path, dest)
+    temp_path.unlink()
+
+
+def write_hdf5(request: WriteRequest, dest: Path | str) -> Path:
+    """Validate, write, verify, and atomically install one layout-v4 file."""
+    if not isinstance(request, WriteRequest):
+        raise TypeError("write_hdf5 requires a validated WriteRequest")
+    request.validate()
+    destination = Path(dest)
+    if destination.exists() and not request.overwrite:
+        raise FileExistsError(destination)
+    destination_preexisted = destination.exists()
+    h5py = import_optional_dependency("h5py", "HDF5 ingest output")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        dir=destination.parent,
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        _write_layout_v4(
+            temporary,
+            request,
+            h5py,
+            destination_preexisted=destination_preexisted,
+        )
+        _verify_layout_v4(
+            temporary,
+            request,
+            h5py,
+            destination_preexisted=destination_preexisted,
+        )
+        _install_atomic(
+            temporary,
+            destination,
+            overwrite=request.overwrite,
+        )
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    log.info("wrote layout-v4 HDF5 %s", destination)
+    return destination
+
+
+def _to_mjd(
+    raw_seconds: np.ndarray,
+    raw_subtract: float,
+    mjd_offset: float,
+) -> np.ndarray:
+    """Retain layout-v3 time arithmetic for the legacy FITS writer."""
+    return (raw_seconds - raw_subtract) / 86400.0 + mjd_offset
 
 
 def _interpolate_telemetry(
@@ -612,188 +2223,74 @@ def _interpolate_telemetry(
     spectra_raw_times: np.ndarray,
     *,
     mode: str = "normalized",
-) -> Dict[str, np.ndarray]:
-    """Resample FPGA telemetry onto ``spectra_raw_times``. See spec section 8.10."""
-    out: Dict[str, np.ndarray] = {}
-    n_target = spectra_raw_times.size
-    if n_target == 0:
-        return out
+) -> dict[str, np.ndarray]:
+    """Retain the layout-v3 normalized interpolation as a legacy diagnostic."""
+    output: dict[str, np.ndarray] = {}
+    target_count = spectra_raw_times.size
+    if target_count == 0:
+        return output
     finite_target = np.isfinite(spectra_raw_times)
     finite_times = spectra_raw_times[finite_target]
-
-    ms = np.asarray(fpga.get("mission_seconds", np.empty(0)), dtype=np.float64)
-    ss = np.asarray(fpga.get("lusee_subsecs", np.empty(0)), dtype=np.float64)
-    if ms.size == 0:
-        return out
-    tele_t = ms + ss * (1.0 / 65536.0)
-
-    # Average duplicates.
-    order = np.argsort(tele_t, kind="stable")
-    tele_t = tele_t[order]
-    uniq, inv = np.unique(tele_t, return_inverse=True)
-
+    mission_seconds = np.asarray(
+        fpga.get("mission_seconds", np.empty(0)), dtype=np.float64
+    )
+    subseconds = np.asarray(fpga.get("lusee_subsecs", np.empty(0)), dtype=np.float64)
+    if mission_seconds.size == 0:
+        return output
+    telemetry_time = mission_seconds + subseconds / 65536.0
+    order = np.argsort(telemetry_time, kind="stable")
+    telemetry_time = telemetry_time[order]
+    unique_time, inverse = np.unique(telemetry_time, return_inverse=True)
     if mode == "normalized":
-        if tele_t.size > 1:
-            tt_min, tt_max = tele_t.min(), tele_t.max()
+        if telemetry_time.size > 1:
+            telemetry_min, telemetry_max = (telemetry_time.min(), telemetry_time.max())
             if finite_times.size:
-                sp_min, sp_max = finite_times.min(), finite_times.max()
+                spectra_min, spectra_max = finite_times.min(), finite_times.max()
             else:
-                sp_min = sp_max = 0.0
+                spectra_min = spectra_max = 0.0
         else:
-            tt_min = tt_max = tele_t[0]
+            telemetry_min = telemetry_max = telemetry_time[0]
             if finite_times.size:
-                sp_min = sp_max = finite_times[0]
+                spectra_min = spectra_max = finite_times[0]
             else:
-                sp_min = sp_max = 0.0
-        if tt_max > tt_min:
-            xt = (uniq - tt_min) / (tt_max - tt_min)
-        else:
-            xt = np.zeros_like(uniq)
-        if sp_max > sp_min:
-            xs = (finite_times - sp_min) / (sp_max - sp_min)
-        else:
-            xs = np.zeros_like(finite_times)
+                spectra_min = spectra_max = 0.0
+        telemetry_axis = (
+            (unique_time - telemetry_min) / (telemetry_max - telemetry_min)
+            if telemetry_max > telemetry_min
+            else np.zeros_like(unique_time)
+        )
+        spectra_axis = (
+            (finite_times - spectra_min) / (spectra_max - spectra_min)
+            if spectra_max > spectra_min
+            else np.zeros_like(finite_times)
+        )
     else:
-        xt = uniq
-        xs = finite_times
-
-    for fname, vals in fpga.items():
-        if fname in ("mission_seconds", "lusee_subsecs"):
+        telemetry_axis = unique_time
+        spectra_axis = finite_times
+    for name, values in fpga.items():
+        if name in ("mission_seconds", "lusee_subsecs"):
             continue
-        v = np.asarray(vals, dtype=np.float64)[order]
-        avg = np.zeros_like(uniq)
-        cnt = np.zeros_like(uniq)
-        for i, j in enumerate(inv):
-            avg[j] += v[i]
-            cnt[j] += 1
-        with np.errstate(divide="ignore", invalid="ignore"):
-            avg = np.where(cnt > 0, avg / np.maximum(cnt, 1), 0.0)
-        interpolated = np.full(n_target, np.nan, dtype=np.float64)
-        if uniq.size == 1:
-            interpolated[finite_target] = avg[0]
+        ordered = np.asarray(values, dtype=np.float64)[order]
+        averaged = np.zeros_like(unique_time)
+        counts = np.zeros_like(unique_time)
+        for index, target in enumerate(inverse):
+            averaged[target] += ordered[index]
+            counts[target] += 1
+        averaged = np.divide(
+            averaged,
+            counts,
+            out=np.zeros_like(averaged),
+            where=counts > 0,
+        )
+        interpolated = np.full(target_count, np.nan, dtype=np.float64)
+        if unique_time.size == 1:
+            interpolated[finite_target] = averaged[0]
         else:
-            interpolated[finite_target] = np.interp(xs, xt, avg)
-        out[fname] = interpolated
-    return out
-
-
-def _write_interpolated_telemetry(
-    h5: h5py.File,
-    fpga: Optional[Mapping[str, np.ndarray]],
-    products: Products,
-    *,
-    raw_subtract: float,
-    mjd_offset: float,
-    mode: str = "normalized",
-) -> None:
-    if not fpga or not products.spectra:
-        return
-    spec_raw = np.array([s.raw_seconds for s in products.spectra], dtype=np.float64)
-    finite_mask = np.array([
-        np.any(np.isfinite(s.data)) for s in products.spectra
-    ])
-    spec_raw = spec_raw[finite_mask]
-    if spec_raw.size == 0:
-        return
-    interp = _interpolate_telemetry(fpga, spec_raw, mode=mode)
-    if not interp:
-        return
-    g = h5.create_group("spectra_interpolated_telemetry")
-    _create_dataset(g, "time", spec_raw)
-    if raw_subtract or mjd_offset:
-        _create_dataset(g, "mjd_time",
-                        _to_mjd(spec_raw, raw_subtract, mjd_offset))
-    for fname, arr in interp.items():
-        _create_dataset(g, fname, arr)
-
-
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-
-def write_hdf5(
-    products: Products,
-    dest: Path | str,
-    *,
-    cdi_directory: Optional[Path | str] = None,
-    fpga_telemetry: Optional[Mapping[str, np.ndarray]] = None,
-    encoder_telemetry: Optional[Mapping[str, np.ndarray]] = None,
-    interpolate_telemetry: bool = False,
-    interpolation_mode: str = "normalized",
-    lun_lat_deg: float = DEFAULT_LUN_LAT_DEG,
-    lun_long_deg: float = DEFAULT_LUN_LONG_DEG,
-    lun_height_m: float = DEFAULT_LUN_HEIGHT_M,
-    raw_time_subtract_seconds: float = DEFAULT_RAW_TIME_SUBTRACT_SECONDS,
-    mjd_epoch_offset_days: float = DEFAULT_MJD_EPOCH_OFFSET_DAYS,
-    time_scale: str = DEFAULT_TIME_SCALE,
-    clock_source: str = DEFAULT_CLOCK_SOURCE,
-    clock_epoch_isot: Optional[str] = None,
-) -> Path:
-    """Write a ``Products`` instance + optional telemetry to ``dest`` (HDF5).
-
-    Normal spectra are restored to bit-31 SDU before the file is opened.
-    Missing or malformed ``actual_bitslice`` metadata is therefore a hard
-    ingestion error and cannot leave behind a partially-written product.
-
-    ``time_scale``, ``clock_source`` and ``clock_epoch_isot`` record the
-    provenance of the raw/MJD time axes in /constants; the default
-    "unknown" makes readers require an explicit ``assume_scale``.
-    """
-    h5py = import_optional_dependency("h5py", "HDF5 ingest output")
-    if time_scale not in KNOWN_TIME_SCALES:
-        raise ValueError(
-            f"time_scale must be one of {KNOWN_TIME_SCALES}; got {time_scale!r}"
-        )
-    products.restore_spectra_bitslices()
-    dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(dest, "w") as h5:
-        h5.attrs["cdi_directory"] = str(cdi_directory) if cdi_directory else ""
-        h5.attrs["layout_version"] = np.int64(HDF5_LAYOUT_VERSION)
-        h5.attrs["n_items"] = np.int64(0)
-
-        _write_session_invariants(h5, products)
-        _write_constants(
-            h5,
-            lun_lat_deg=lun_lat_deg,
-            lun_long_deg=lun_long_deg,
-            lun_height_m=lun_height_m,
-            raw_time_subtract_seconds=raw_time_subtract_seconds,
-            mjd_epoch_offset_days=mjd_epoch_offset_days,
-            time_scale=time_scale,
-            clock_source=clock_source,
-            clock_epoch_isot=clock_epoch_isot,
-        )
-        _write_spectra(
-            h5, products,
-            raw_subtract=raw_time_subtract_seconds,
-            mjd_offset=mjd_epoch_offset_days,
-        )
-        _write_tr_spectra(
-            h5, products,
-            raw_subtract=raw_time_subtract_seconds,
-            mjd_offset=mjd_epoch_offset_days,
-        )
-        _write_zoom_spectra(
-            h5, products,
-            raw_subtract=raw_time_subtract_seconds,
-            mjd_offset=mjd_epoch_offset_days,
-        )
-        _write_cal_data(h5, products)
-        _write_grimm_spectra(
-            h5, products,
-            raw_subtract=raw_time_subtract_seconds,
-            mjd_offset=mjd_epoch_offset_days,
-        )
-        _write_waveform(h5, products)
-        _write_housekeeping(h5, products)
-        _write_dcb_telemetry(h5, fpga_telemetry, encoder_telemetry)
-        if interpolate_telemetry and fpga_telemetry:
-            _write_interpolated_telemetry(
-                h5, fpga_telemetry, products,
-                raw_subtract=raw_time_subtract_seconds,
-                mjd_offset=mjd_epoch_offset_days,
-                mode=interpolation_mode,
+            interpolated[finite_target] = np.interp(
+                spectra_axis, telemetry_axis, averaged
             )
-    log.info("wrote HDF5 %s", dest)
-    return dest
+        output[name] = interpolated
+    return output
+
+
+__all__ = ["write_hdf5"]

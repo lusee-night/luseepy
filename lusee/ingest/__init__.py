@@ -18,7 +18,7 @@ Public API:
     split_sessions                       -- Stage 4
     write_uncrater_session               -- Stage 5 (writes a session dir)
     read_uncrater_session                -- Stage 6
-    write_hdf5                           -- Stage 7
+    write_hdf5                           -- validated WriteRequest -> layout-v4 HDF5
 
   Manifest
     SessionResult, write_manifest
@@ -126,6 +126,16 @@ _LAZY_EXPORTS = {
     "spectrometer_frequency_window": (
         "frequency_contract", "spectrometer_frequency_window"
     ),
+    # Validated layout-v4 writer request
+    "FamilyCoverage": ("write_request", "FamilyCoverage"),
+    "FamilyStatus": ("write_request", "FamilyStatus"),
+    "InterpolationPolicy": ("write_request", "InterpolationPolicy"),
+    "LunarLocation": ("write_request", "LunarLocation"),
+    "RunProvenance": ("write_request", "RunProvenance"),
+    "WriteRequest": ("write_request", "WriteRequest"),
+    "family_statuses_for_products": (
+        "write_request", "family_statuses_for_products"
+    ),
     # Writers and orchestration
     "write_hdf5": ("hdf5_writer", "write_hdf5"),
     "write_fits": ("fits_writer", "write_fits"),
@@ -204,6 +214,10 @@ __all__ = [
     "UnsupportedClockSourceError", "load_clock_reference_set",
     "FrequencyWindowContract", "UnresolvedFrequencyCoordinateError",
     "spectrometer_frequency_window",
+    # layout-v4 writer request
+    "FamilyCoverage", "FamilyStatus", "InterpolationPolicy",
+    "LunarLocation", "RunProvenance", "WriteRequest",
+    "family_statuses_for_products",
     # hdf5
     "write_hdf5",
     # fits

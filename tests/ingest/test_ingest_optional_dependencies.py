@@ -94,8 +94,59 @@ def test_light_imports_and_stage2_work_without_ingest_extras():
         else:
             raise AssertionError("missing uncrater was not reported")
 
+        from lusee.ingest.products import (
+            DataQuality,
+            DecodeProvenance,
+            ValidatedCounts,
+        )
+
+        decode_provenance = DecodeProvenance.from_report(
+            distribution_version="test",
+            decoder_source_commit=None,
+            reported_schema_ids=(0x307,),
+            selected_schema_id=0x307,
+            binding_key="307",
+            schema_variant=None,
+            schema_assumed=False,
+            binding_source_release="test",
+            binding_source_commit="a" * 40,
+            abi_fingerprint="b" * 64,
+            execution_mode="collect",
+            input_packet_count=0,
+            valid_packet_count=0,
+            appid_counts=(),
+            issue_counts=(),
+            canonical_report={"fixture": "missing-h5py"},
+        )
+        strict_products = products(
+            decode_provenance=decode_provenance,
+            quality_status=DataQuality.CLEAN,
+            validated_counts=ValidatedCounts(
+                input_packets=0,
+                valid_packets=0,
+                product_rows=(),
+            ),
+            issues=(),
+        )
+        request = ingest.WriteRequest(
+            products=strict_products,
+            clock_reference_set=None,
+            clock_reference_unavailable_reason="fixture has no clock anchor",
+            location=ingest.LunarLocation(-23.814, 182.258, 0.0),
+            run_provenance=ingest.RunProvenance(
+                input_identity="fixture",
+                input_identity_kind="test_id",
+                input_identity_unavailable_reason=None,
+                source_kind="synthetic_fixture",
+            ),
+            issues=(),
+            family_statuses=ingest.family_statuses_for_products(
+                strict_products,
+                family_issue_ids={},
+            ),
+        )
         try:
-            ingest.write_hdf5(products(), "unused.h5")
+            ingest.write_hdf5(request, "unused.h5")
         except ingest.MissingIngestExtraError as exc:
             assert exc.name == "h5py"
             assert exc.dependency == "h5py"

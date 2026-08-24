@@ -87,6 +87,24 @@ reference ``raw_seconds`` without requiring later page clocks to be equal.
 FW-direct spectra remain unsupported until their payload contract is
 established.
 
+Dense spectrum storage
+----------------------
+
+Layout 4 defines the same rectangular HDF5 and FITS storage convention. Normal
+spectra are ``(time, 16, 2048)`` in restored-SDU ``float32``. A row's native
+values occupy the decoded prefix; its ``Navgf`` and native frequency count
+identify that prefix. The unproduced tail and every absent or rejected product
+plane are NaN.
+
+TR storage is ``(time, 16, Navg2, Ntr)`` using the session's validated TR
+geometry. It is ``float64`` on disk so every native ``int32`` value is exact
+while absent or rejected products remain NaN. Mixed TR geometries in one
+session are rejected. The strict in-memory record keeps its integer payload
+and internal product-presence mask. No separate persisted bad-frame,
+element-valid, or product-presence flag array is added at this stage.
+
+The full on-disk contract is documented in :doc:`ingest_layout_v4`.
+
 Waveform clocks in layout v3
 ----------------------------
 

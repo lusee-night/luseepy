@@ -37,7 +37,7 @@ from .constants import (
     DEFAULT_RAW_TIME_SUBTRACT_SECONDS,
     DEFAULT_TIME_SCALE,
     KNOWN_TIME_SCALES,
-    HDF5_LAYOUT_VERSION,
+    LEGACY_FITS_LAYOUT_VERSION,
     NCHANNELS,
     NPRODUCTS,
     SPECTRA_NORMALIZATION_VERSION,
@@ -562,7 +562,7 @@ def write_fits(
 
     # Primary HDU: file-level provenance + the HDF5-equivalent root attrs.
     primary = fits.PrimaryHDU()
-    primary.header["LAYOUTV"] = HDF5_LAYOUT_VERSION
+    primary.header["LAYOUTV"] = LEGACY_FITS_LAYOUT_VERSION
     primary.header["ORIGIN"] = "lusee.ingest.fits_writer"
     if cdi_directory is not None:
         primary.header["CDI_DIR"] = str(cdi_directory)[:68]
