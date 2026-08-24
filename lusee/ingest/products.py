@@ -23,6 +23,8 @@ from .constants import (
     SPECTRA_NORMALIZATION_VERSION,
     SPECTRA_REPRESENTATION,
     SPECTRA_UNITS,
+    WAVEFORM_SAMPLES,
+    ZOOM_BINS,
 )
 from .frequency_contract import FrequencyWindowContract
 
@@ -363,6 +365,91 @@ def _readonly_array(
     return np.frombuffer(immutable_bytes, dtype=expected_dtype).reshape(shape)
 
 
+def _required_int32(value: int, name: str) -> int:
+    if type(value) is not int:
+        raise TypeError(f"{name} must be an integer")
+    if not -(1 << 31) <= value < 1 << 31:
+        raise ValueError(f"{name} must fit in a signed 32-bit integer")
+    return value
+
+
+def _immutable_field_value(value: object, name: str) -> object:
+    """Copy one normalized field value into a deeply immutable form."""
+    if value is None or type(value) in (bool, int, str, bytes):
+        return value
+    if type(value) in (float, complex):
+        if not np.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+        return value
+    if isinstance(value, np.generic):
+        if np.issubdtype(value.dtype, np.inexact) and not np.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+        return value
+    if type(value) is np.ndarray:
+        if value.dtype.hasobject:
+            raise TypeError(f"{name} must not have object dtype")
+        if np.issubdtype(value.dtype, np.inexact) and not np.all(
+            np.isfinite(value)
+        ):
+            raise ValueError(f"{name} must contain only finite values")
+        immutable_bytes = value.tobytes(order="C")
+        return np.frombuffer(immutable_bytes, dtype=value.dtype).reshape(value.shape)
+    if type(value) is tuple:
+        return tuple(
+            _immutable_field_value(item, f"{name}[{index}]")
+            for index, item in enumerate(value)
+        )
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) or not key for key in value):
+            raise TypeError(f"{name} nested mapping keys must be nonempty strings")
+        normalized = {}
+        for key, item in sorted(value.items()):
+            normalized[key] = _immutable_field_value(item, f"{name}.{key}")
+        return MappingProxyType(normalized)
+    raise TypeError(
+        f"{name} must be a normalized scalar, ndarray, tuple, or mapping"
+    )
+
+
+def _normalized_fields(
+    values: Mapping[str, object | None],
+    presence: Mapping[str, bool],
+    *,
+    name: str,
+) -> tuple[Mapping[str, object | None], Mapping[str, bool]]:
+    if not isinstance(values, Mapping):
+        raise TypeError(f"{name} fields must be a mapping")
+    if not isinstance(presence, Mapping):
+        raise TypeError(f"{name} field_present must be a mapping")
+    value_keys = set(values)
+    presence_keys = set(presence)
+    if value_keys != presence_keys:
+        raise ValueError(f"{name} fields and field_present must have identical keys")
+    if any(
+        not isinstance(key, str)
+        or re.fullmatch(r"[a-z][a-z0-9_]*", key) is None
+        for key in value_keys
+    ):
+        raise ValueError(f"{name} field names must be lowercase identifiers")
+
+    normalized_values = {}
+    normalized_presence = {}
+    for key in sorted(value_keys):
+        is_present = presence[key]
+        if type(is_present) is not bool:
+            raise TypeError(f"{name} field presence values must be booleans")
+        value = values[key]
+        if is_present == (value is None):
+            raise ValueError(
+                f"{name} field {key!r} presence disagrees with its value"
+            )
+        normalized_values[key] = _immutable_field_value(
+            value, f"{name}.{key}"
+        )
+        normalized_presence[key] = is_present
+    return MappingProxyType(normalized_values), MappingProxyType(normalized_presence)
+
+
 @dataclass(frozen=True, slots=True)
 class SpectrumMetadata(Mapping[str, object]):
     """Normalized science metadata shared by normal and TR spectrum rows."""
@@ -647,6 +734,51 @@ def _validate_concrete_product_provenance(
     )
 
 
+def _validate_auxiliary_product_provenance(
+    provenance: ProductProvenance,
+    *,
+    unique_packet_id: int,
+    raw_seconds: float | None,
+    product_name: str,
+) -> None:
+    if not isinstance(provenance, ProductProvenance):
+        raise TypeError("provenance must be a ProductProvenance record")
+    if provenance.unavailable_reason is not None:
+        raise ValueError(f"strict {product_name} records require concrete provenance")
+    if provenance.selected_schema_id is None:
+        raise ValueError(f"strict {product_name} provenance requires a selected schema")
+    provenance.validate_product_identity(
+        unique_packet_id=unique_packet_id,
+        raw_seconds=raw_seconds,
+    )
+    if (
+        raw_seconds is not None
+        and provenance.clock_source != ClockSource.SPECTROMETER.value
+    ):
+        raise ValueError(
+            f"{product_name} mission time must use the spectrometer clock"
+        )
+
+
+def _auxiliary_identity(
+    unique_packet_id: int,
+    raw_seconds: float | None,
+    provenance: ProductProvenance,
+    product_name: str,
+) -> tuple[int, float | None]:
+    uid = _optional_uid(unique_packet_id, "unique_packet_id")
+    if uid is None:
+        raise ValueError("unique_packet_id must be present")
+    time = _optional_finite_float(raw_seconds, "raw_seconds")
+    _validate_auxiliary_product_provenance(
+        provenance,
+        unique_packet_id=uid,
+        raw_seconds=time,
+        product_name=product_name,
+    )
+    return uid, time
+
+
 @dataclass(frozen=True, slots=True)
 class SpectrumSample:
     """One exact restored-SDU normal-spectrum row."""
@@ -830,6 +962,415 @@ class TRSpectrumSample:
         object.__setattr__(self, "raw_seconds", raw_seconds)
         object.__setattr__(self, "navg2", navg2)
         object.__setattr__(self, "tr_length", tr_length)
+
+
+@dataclass(frozen=True, slots=True)
+class ZoomSample:
+    """One exact repaired-uncrater zoom-spectrum row."""
+
+    data: np.ndarray
+    unique_packet_id: int
+    pfb_bin: int
+    raw_seconds: float | None
+    provenance: ProductProvenance
+    component_labels: tuple[str, ...] = field(
+        init=False, default=("AA", "BB", "ABR", "ABI")
+    )
+    units: str = field(init=False, default="unit_unestablished")
+    representation: str = field(init=False, default="native_float32")
+
+    def __post_init__(self) -> None:
+        data = _readonly_array(
+            self.data,
+            dtype=np.float32,
+            shape=(len(self.component_labels), ZOOM_BINS),
+            name="zoom data",
+        )
+        if not np.all(np.isfinite(data)):
+            raise ValueError("zoom data must contain only finite values")
+        pfb_bin = _required_uint(self.pfb_bin, 16, "pfb_bin")
+        uid, raw_seconds = _auxiliary_identity(
+            self.unique_packet_id,
+            self.raw_seconds,
+            self.provenance,
+            "zoom",
+        )
+        object.__setattr__(self, "data", data)
+        object.__setattr__(self, "unique_packet_id", uid)
+        object.__setattr__(self, "pfb_bin", pfb_bin)
+        object.__setattr__(self, "raw_seconds", raw_seconds)
+
+
+@dataclass(frozen=True, slots=True)
+class WaveformSample:
+    """One exact signed waveform with mission and ADC time kept distinct."""
+
+    data: np.ndarray
+    channel: int
+    unique_packet_id: int
+    raw_seconds: float | None
+    adc_timestamp: np.uint64
+    provenance: ProductProvenance
+    units: str = field(init=False, default="raw_count")
+    representation: str = field(init=False, default="native_int16")
+
+    def __post_init__(self) -> None:
+        data = _readonly_array(
+            self.data,
+            dtype=np.int16,
+            shape=(WAVEFORM_SAMPLES,),
+            name="waveform data",
+        )
+        channel = _required_uint(self.channel, 2, "channel")
+        if type(self.adc_timestamp) is not np.uint64:
+            raise TypeError("adc_timestamp must be a numpy.uint64")
+        uid, raw_seconds = _auxiliary_identity(
+            self.unique_packet_id,
+            self.raw_seconds,
+            self.provenance,
+            "waveform",
+        )
+        if len(self.provenance.source_packets) != 2:
+            raise ValueError(
+                "waveform provenance must link one waveform and one metadata packet"
+            )
+        expected_roles = (
+            f"waveform_channel_{channel}",
+            "waveform_metadata",
+        )
+        source_roles = tuple(
+            packet.role for packet in self.provenance.source_packets
+        )
+        if source_roles != expected_roles:
+            raise ValueError(
+                "waveform provenance must identify its channel packet followed "
+                "by waveform metadata"
+            )
+        if self.provenance.uid_source_role != "waveform_metadata":
+            raise ValueError("waveform UID must come from waveform metadata")
+        if raw_seconds is None:
+            raise ValueError("waveform mission time must come from waveform metadata")
+        if self.provenance.time_source_role != "waveform_metadata":
+            raise ValueError("waveform mission time must come from waveform metadata")
+        object.__setattr__(self, "data", data)
+        object.__setattr__(self, "channel", channel)
+        object.__setattr__(self, "unique_packet_id", uid)
+        object.__setattr__(self, "raw_seconds", raw_seconds)
+
+
+@dataclass(frozen=True, slots=True)
+class GrimmSample:
+    """One exact native-integer Grimm product with honest index axes."""
+
+    data: np.ndarray
+    unique_packet_id: int
+    raw_seconds: float | None
+    navg2: int
+    provenance: ProductProvenance
+    axis_labels: tuple[str, ...] = field(
+        init=False,
+        default=("average_index", "product_index", "grimm_value_index"),
+    )
+    value_axis_labels: tuple[str, ...] = field(
+        init=False,
+        default=("value_0", "value_1", "value_2", "value_3"),
+    )
+    units: str = field(init=False, default="unit_unestablished")
+    representation: str = field(init=False, default="native_int32")
+
+    def __post_init__(self) -> None:
+        navg2 = _required_nonnegative(self.navg2, "navg2")
+        if navg2 == 0:
+            raise ValueError("navg2 must be positive")
+        data = _readonly_array(
+            self.data,
+            dtype=np.int32,
+            shape=(navg2, NPRODUCTS, len(self.value_axis_labels)),
+            name="Grimm data",
+        )
+        uid, raw_seconds = _auxiliary_identity(
+            self.unique_packet_id,
+            self.raw_seconds,
+            self.provenance,
+            "Grimm",
+        )
+        object.__setattr__(self, "data", data)
+        object.__setattr__(self, "unique_packet_id", uid)
+        object.__setattr__(self, "raw_seconds", raw_seconds)
+        object.__setattr__(self, "navg2", navg2)
+
+
+@dataclass(frozen=True, slots=True)
+class HKSample:
+    """One type-aware housekeeping row with explicit field presence."""
+
+    hk_type: int
+    version: int
+    unique_packet_id: int
+    errors: int
+    raw_seconds: float | None
+    fields: Mapping[str, object | None]
+    field_present: Mapping[str, bool]
+    provenance: ProductProvenance
+
+    def __post_init__(self) -> None:
+        hk_type = _required_uint(self.hk_type, 16, "hk_type")
+        if hk_type not in (0, 1, 2, 3, 100, 101):
+            raise ValueError("hk_type must be one of 0, 1, 2, 3, 100, or 101")
+        version = _required_uint(self.version, 16, "version")
+        errors = _required_uint(self.errors, 32, "errors")
+        fields, field_present = _normalized_fields(
+            self.fields,
+            self.field_present,
+            name="housekeeping",
+        )
+        uid, raw_seconds = _auxiliary_identity(
+            self.unique_packet_id,
+            self.raw_seconds,
+            self.provenance,
+            "housekeeping",
+        )
+        if hk_type not in (0, 2):
+            if raw_seconds is not None:
+                raise ValueError(
+                    f"housekeeping type {hk_type} does not carry mission time"
+                )
+            if any(
+                field_present.get(name, False)
+                for name in ("time_32", "time_16")
+            ):
+                raise ValueError(
+                    f"housekeeping type {hk_type} does not carry split time"
+                )
+        if len(self.provenance.source_packets) != 1:
+            raise ValueError("housekeeping provenance must identify one packet")
+        object.__setattr__(self, "hk_type", hk_type)
+        object.__setattr__(self, "version", version)
+        object.__setattr__(self, "unique_packet_id", uid)
+        object.__setattr__(self, "errors", errors)
+        object.__setattr__(self, "raw_seconds", raw_seconds)
+        object.__setattr__(self, "fields", fields)
+        object.__setattr__(self, "field_present", field_present)
+
+
+@dataclass(frozen=True, slots=True)
+class CalibratorMetadataSample:
+    """Normalized public calibrator metadata without decoder-owned objects."""
+
+    unique_packet_id: int
+    raw_seconds: float | None
+    from_debug: bool
+    fields: Mapping[str, object | None]
+    field_present: Mapping[str, bool]
+    provenance: ProductProvenance
+
+    def __post_init__(self) -> None:
+        from_debug = _required_bool(self.from_debug, "from_debug")
+        fields, field_present = _normalized_fields(
+            self.fields,
+            self.field_present,
+            name="calibrator metadata",
+        )
+        uid, raw_seconds = _auxiliary_identity(
+            self.unique_packet_id,
+            self.raw_seconds,
+            self.provenance,
+            "calibrator metadata",
+        )
+        expected_packets = 8 if from_debug else 1
+        if len(self.provenance.source_packets) != expected_packets:
+            raise ValueError(
+                "calibrator metadata provenance has the wrong packet count"
+            )
+        object.__setattr__(self, "unique_packet_id", uid)
+        object.__setattr__(self, "raw_seconds", raw_seconds)
+        object.__setattr__(self, "from_debug", from_debug)
+        object.__setattr__(self, "fields", fields)
+        object.__setattr__(self, "field_present", field_present)
+
+
+@dataclass(frozen=True, slots=True)
+class CalibratorDataSample:
+    """One complete three-page calibrator data group."""
+
+    data: np.ndarray
+    g_nacc: int
+    gphase: np.ndarray
+    unique_packet_id: int
+    raw_seconds: float | None
+    page_raw_seconds: np.ndarray
+    provenance: ProductProvenance
+    channel_labels: tuple[int, ...] = field(init=False, default=(0, 1, 2, 3))
+    page_count: int = field(init=False, default=3)
+    units: str = field(init=False, default="unit_unestablished")
+    representation: str = field(init=False, default="native_complex128")
+
+    def __post_init__(self) -> None:
+        data = _readonly_array(
+            self.data,
+            dtype=np.complex128,
+            shape=(len(self.channel_labels), 512),
+            name="calibrator data",
+        )
+        if not np.all(np.isfinite(data)):
+            raise ValueError("calibrator data must contain only finite values")
+        g_nacc = _required_int32(self.g_nacc, "g_nacc")
+        gphase = _readonly_array(
+            self.gphase,
+            dtype=np.int32,
+            shape=(1024,),
+            name="calibrator gphase",
+        )
+        uid, raw_seconds = _auxiliary_identity(
+            self.unique_packet_id,
+            self.raw_seconds,
+            self.provenance,
+            "calibrator data",
+        )
+        page_raw_seconds = _readonly_array(
+            self.page_raw_seconds,
+            dtype=np.float64,
+            shape=(self.page_count,),
+            name="calibrator data page_raw_seconds",
+        )
+        if not np.all(np.isfinite(page_raw_seconds)):
+            raise ValueError(
+                "calibrator data page_raw_seconds must be finite"
+            )
+        if raw_seconds != float(page_raw_seconds[0]):
+            raise ValueError(
+                "calibrator data raw_seconds must identify page zero"
+            )
+        if len(self.provenance.source_packets) != self.page_count:
+            raise ValueError("calibrator data provenance must identify three pages")
+        object.__setattr__(self, "data", data)
+        object.__setattr__(self, "g_nacc", g_nacc)
+        object.__setattr__(self, "gphase", gphase)
+        object.__setattr__(self, "unique_packet_id", uid)
+        object.__setattr__(self, "raw_seconds", raw_seconds)
+        object.__setattr__(self, "page_raw_seconds", page_raw_seconds)
+
+
+@dataclass(frozen=True, slots=True)
+class CalibratorRawPFBSample:
+    """One complete eight-page complex raw-PFB calibrator group."""
+
+    data: np.ndarray
+    unique_packet_id: int
+    raw_seconds: float | None
+    page_raw_seconds: np.ndarray
+    provenance: ProductProvenance
+    channel_labels: tuple[int, ...] = field(init=False, default=(0, 1, 2, 3))
+    page_count: int = field(init=False, default=8)
+    units: str = field(init=False, default="unit_unestablished")
+    representation: str = field(init=False, default="native_complex128")
+
+    def __post_init__(self) -> None:
+        data = _readonly_array(
+            self.data,
+            dtype=np.complex128,
+            shape=(len(self.channel_labels), NCHANNELS),
+            name="calibrator raw PFB data",
+        )
+        if not np.all(np.isfinite(data)):
+            raise ValueError("calibrator raw PFB data must contain only finite values")
+        uid, raw_seconds = _auxiliary_identity(
+            self.unique_packet_id,
+            self.raw_seconds,
+            self.provenance,
+            "calibrator raw PFB",
+        )
+        page_raw_seconds = _readonly_array(
+            self.page_raw_seconds,
+            dtype=np.float64,
+            shape=(self.page_count,),
+            name="calibrator raw PFB page_raw_seconds",
+        )
+        if not np.all(np.isfinite(page_raw_seconds)):
+            raise ValueError(
+                "calibrator raw PFB page_raw_seconds must be finite"
+            )
+        if raw_seconds != float(page_raw_seconds[0]):
+            raise ValueError(
+                "calibrator raw PFB raw_seconds must identify page zero"
+            )
+        if len(self.provenance.source_packets) != self.page_count:
+            raise ValueError(
+                "calibrator raw PFB provenance must identify eight pages"
+            )
+        object.__setattr__(self, "data", data)
+        object.__setattr__(self, "unique_packet_id", uid)
+        object.__setattr__(self, "raw_seconds", raw_seconds)
+        object.__setattr__(self, "page_raw_seconds", page_raw_seconds)
+
+
+@dataclass(frozen=True, slots=True)
+class CalibratorDebugPage:
+    """One normalized public page in a calibrator debug group."""
+
+    page: int
+    fields: Mapping[str, object | None]
+    field_present: Mapping[str, bool]
+
+    def __post_init__(self) -> None:
+        page = _required_uint(self.page, 3, "calibrator debug page")
+        fields, field_present = _normalized_fields(
+            self.fields,
+            self.field_present,
+            name=f"calibrator debug page {page}",
+        )
+        object.__setattr__(self, "page", page)
+        object.__setattr__(self, "fields", fields)
+        object.__setattr__(self, "field_present", field_present)
+
+
+@dataclass(frozen=True, slots=True)
+class CalibratorDebugSample:
+    """One complete eight-page calibrator debug group."""
+
+    pages: tuple[CalibratorDebugPage, ...]
+    unique_packet_id: int
+    raw_seconds: float | None
+    page_raw_seconds: np.ndarray
+    provenance: ProductProvenance
+    page_count: int = field(init=False, default=8)
+
+    def __post_init__(self) -> None:
+        if type(self.pages) is not tuple or any(
+            not isinstance(page, CalibratorDebugPage) for page in self.pages
+        ):
+            raise TypeError("pages must be a tuple of CalibratorDebugPage records")
+        if len(self.pages) != self.page_count:
+            raise ValueError("calibrator debug group must contain eight pages")
+        if tuple(page.page for page in self.pages) != tuple(range(self.page_count)):
+            raise ValueError("calibrator debug pages must be ordered 0 through 7")
+        uid, raw_seconds = _auxiliary_identity(
+            self.unique_packet_id,
+            self.raw_seconds,
+            self.provenance,
+            "calibrator debug",
+        )
+        page_raw_seconds = _readonly_array(
+            self.page_raw_seconds,
+            dtype=np.float64,
+            shape=(self.page_count,),
+            name="calibrator debug page_raw_seconds",
+        )
+        if not np.all(np.isfinite(page_raw_seconds)):
+            raise ValueError(
+                "calibrator debug page_raw_seconds must be finite"
+            )
+        if raw_seconds != float(page_raw_seconds[0]):
+            raise ValueError(
+                "calibrator debug raw_seconds must identify page zero"
+            )
+        if len(self.provenance.source_packets) != self.page_count:
+            raise ValueError(
+                "calibrator debug provenance must identify eight pages"
+            )
+        object.__setattr__(self, "unique_packet_id", uid)
+        object.__setattr__(self, "raw_seconds", raw_seconds)
+        object.__setattr__(self, "page_raw_seconds", page_raw_seconds)
 
 
 @dataclass(frozen=True, slots=True)

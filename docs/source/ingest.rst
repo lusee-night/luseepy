@@ -47,6 +47,46 @@ The mutable rows still defined inside ``lusee.ingest.decode`` exist only for
 layout-v2/v3 caller-built compatibility and are excluded from validated
 product counts pending the layout-v4 cutover.
 
+Repaired-decoder auxiliary boundary
+-----------------------------------
+
+Auxiliary products are adopted only from repaired uncrater's typed packets
+and complete public groups. Exact native shapes and dtypes are validated
+before an immutable luseepy row is created. A malformed or orphaned packet is
+reported and omitted; it never becomes a plausible all-zero row.
+
+Zoom rows are native ``float32 (4, 64)`` arrays in ``AA, BB, ABR, ABI`` order
+and retain ``pfb_bin``. Grimm rows remain native ``int32
+(Navg2, 16, 4)``; they are not normal spectra and receive no normal-spectrum
+scaling. Either family receives mission time only from one exact-UID science
+metadata match. Missing or ambiguous association never borrows a preceding
+row's time.
+
+Waveforms are consumed from metadata-associated groups as signed ``int16
+(16384,)`` rows. Channel, UID, split mission time, and the independent
+``uint64`` ADC timestamp are validated without truthiness defaults. Provenance
+links the waveform and metadata packet. Orphans, duplicate channels, and
+groups rejected upstream create no waveform row.
+
+Housekeeping types ``0``, ``1``, ``2``, ``3``, ``100``, and ``101`` use one
+normalized field union with explicit per-field presence. ADC statistics retain
+all valid, invalid, and total counts plus a per-channel statistics-valid mask;
+telemetry is flattened through its reviewed four-field mapping. Firmware
+``errors`` remain separate from decoder issues. Only types 0 and 2 carry a
+real mission time; uncrater's zero initialization for the other types is not a
+timestamp.
+
+Direct calibrator metadata and complete data, raw-PFB, and debug groups retain
+their UID, native arrays, all contributing page packet references, and raw
+mission time. Multipart rows are accepted only when every required page is
+valid, ordered, binding-consistent, and has the same UID.
+Compatibility aggregates such as ``calib_data``, ``calib_pfb``, ``cd_*``, and
+stacked Grimm arrays are not product inputs because they discard packet/page
+identity. Every multipart page clock is retained; page zero supplies the row's
+reference ``raw_seconds`` without requiring later page clocks to be equal.
+FW-direct spectra remain unsupported until their payload contract is
+established.
+
 Waveform clocks in layout v3
 ----------------------------
 

@@ -34,6 +34,10 @@ class FakeTRSpectrum(FakePacketBase):
     pass
 
 
+class FakeAuxPacket(FakePacketBase):
+    pass
+
+
 @dataclass(frozen=True)
 class FakeDecodeIssue:
     code: str
@@ -99,6 +103,9 @@ def fake_decoder(monkeypatch):
     package.Packet_Metadata = FakeMetadata
     package.Packet_Spectrum = FakeSpectrum
     package.Packet_TR_Spectrum = FakeTRSpectrum
+    for name in adapter._REQUIRED_PACKET_CLASSES:
+        if not hasattr(package, name):
+            setattr(package, name, FakeAuxPacket)
     package.NPRODUCTS = 16
     package.NCHANNELS = 2048
     package.normalize_dcb_appid = lambda appid: (
@@ -217,7 +224,7 @@ def test_public_only_decoder_and_collection_policy_forwarding(fake_decoder):
     ]
 
 
-def test_required_spectrum_classes_and_dimensions_fail_closed(fake_decoder):
+def test_required_packet_classes_and_dimensions_fail_closed(fake_decoder):
     fake_decoder.NPRODUCTS = 15
     adapter.load_uncrater.cache_clear()
     with pytest.raises(adapter.IncompatibleUncraterError, match="NPRODUCTS"):
@@ -227,6 +234,12 @@ def test_required_spectrum_classes_and_dimensions_fail_closed(fake_decoder):
     fake_decoder.Packet_Metadata = object()
     adapter.load_uncrater.cache_clear()
     with pytest.raises(adapter.IncompatibleUncraterError, match="Packet_Metadata"):
+        adapter.load_uncrater()
+
+    fake_decoder.Packet_Metadata = FakeMetadata
+    fake_decoder.Packet_Grimm = object()
+    adapter.load_uncrater.cache_clear()
+    with pytest.raises(adapter.IncompatibleUncraterError, match="Packet_Grimm"):
         adapter.load_uncrater()
 
 

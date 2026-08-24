@@ -617,6 +617,16 @@ def capture_call(
 def products_summary(
     products: object, telemetry_state: str = "absent"
 ) -> dict[str, int]:
+    calibrator_count = sum(
+        len(getattr(products, name, ()))
+        for name in (
+            "cal_data",
+            "calibrator_metadata",
+            "calibrator_data",
+            "calibrator_raw_pfb",
+            "calibrator_debug",
+        )
+    )
     return {
         "normal": len(getattr(products, "spectra", ())),
         "tr": len(getattr(products, "tr_spectra", ())),
@@ -625,7 +635,7 @@ def products_summary(
         "grimm": len(getattr(products, "grimm_spectra", ())),
         "telemetry": int(telemetry_state == "decoded"),
         "housekeeping": len(getattr(products, "housekeeping", ())),
-        "calibrator": len(getattr(products, "cal_data", ())),
+        "calibrator": calibrator_count,
     }
 
 

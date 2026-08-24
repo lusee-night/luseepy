@@ -37,6 +37,17 @@ def family_metadata(counts: dict[str, int]) -> dict[str, dict[str, str]]:
     }
 
 
+def test_products_summary_counts_strict_calibrator_families():
+    products = SimpleNamespace(
+        calibrator_metadata=[object()],
+        calibrator_data=[object(), object()],
+        calibrator_raw_pfb=[object()],
+        calibrator_debug=[object(), object(), object()],
+    )
+
+    assert report.products_summary(products)["calibrator"] == 7
+
+
 def make_direct_config(
     tmp_path: Path,
     target_ids: tuple[str, ...],
