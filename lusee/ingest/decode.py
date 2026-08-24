@@ -10,6 +10,7 @@ Lazy-imports uncrater so that ``lusee.ingest`` is importable without it.
 from __future__ import annotations
 
 import logging
+import math
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,8 +26,20 @@ from .constants import (
     ZOOM_BINS,
     ZOOM_COMPONENTS,
 )
+from .products import (
+    DataQuality,
+    DecodeProvenance,
+    ExecutionMode,
+    ProductProvenance,
+    ValidatedCounts,
+)
 from .session import raw_seconds_from_split_time
-from .uncrater_adapter import binding_info, make_collection, read_packet
+from .uncrater_adapter import (
+    binding_info,
+    collection_provenance,
+    make_collection,
+    read_packet,
+)
 
 log = logging.getLogger(__name__)
 
@@ -35,15 +48,65 @@ log = logging.getLogger(__name__)
 # Data classes
 # ---------------------------------------------------------------------------
 
+def _legacy_product_provenance() -> ProductProvenance:
+    """Mark rows whose exact packet provenance awaits the repaired adapter."""
+    return ProductProvenance.unavailable("legacy_adapter_provenance_pending")
+
+
+def _decode_quality(
+    provenance: DecodeProvenance,
+    *,
+    usable_product_count: int,
+) -> DataQuality:
+    """Classify aggregate quality after product adaptation is complete."""
+    if type(usable_product_count) is not int or usable_product_count < 0:
+        raise ValueError("usable_product_count must be a nonnegative integer")
+    if usable_product_count == 0:
+        return DataQuality.FAILED
+    if (
+        provenance.input_packet_count > 0
+        and provenance.valid_packet_count == 0
+    ):
+        return DataQuality.FAILED
+    if provenance.issue_counts:
+        return DataQuality.PARTIAL
+    if (
+        provenance.valid_packet_count is not None
+        and provenance.valid_packet_count < provenance.input_packet_count
+    ):
+        return DataQuality.PARTIAL
+    return DataQuality.CLEAN
+
+
+def _usable_product_count(products: "Products") -> int:
+    """Count rows with a real payload after compatibility adaptation."""
+    array_rows = (
+        *products.spectra,
+        *products.tr_spectra,
+        *products.zoom_spectra,
+        *products.waveforms,
+        *products.cal_data,
+        *products.grimm_spectra,
+    )
+    return len(products.housekeeping) + sum(
+        np.asarray(row.data).size > 0
+        and bool(np.any(np.isfinite(row.data)))
+        for row in array_rows
+    )
+
+
 @dataclass
 class SpectrumSample:
     data: np.ndarray              # shape (NPRODUCTS, NCHANNELS), float32, NaN where missing
     unique_packet_id: int
-    raw_seconds: float
+    raw_seconds: float | None
     metadata: Dict[str, Any] = field(default_factory=dict)
     # True means ``data`` has already been restored with actual_bitslice to
     # the bit-31 accumulator convention used by the gain-model artifacts.
     bitslice_restored: bool = False
+    provenance: ProductProvenance = field(
+        default_factory=_legacy_product_provenance
+    )
 
     def restore_bitslice(self) -> None:
         """Restore normal-spectrum data to gain-model input SDU exactly once."""
@@ -89,10 +152,13 @@ class SpectrumSample:
 class TRSpectrumSample:
     data: np.ndarray              # shape (NPRODUCTS, navg2, tr_length), float32
     unique_packet_id: int
-    raw_seconds: float
+    raw_seconds: float | None
     navg2: int
     tr_length: int
     metadata: Dict[str, Any] = field(default_factory=dict)
+    provenance: ProductProvenance = field(
+        default_factory=_legacy_product_provenance
+    )
 
 
 @dataclass
@@ -100,7 +166,10 @@ class ZoomSample:
     data: np.ndarray              # shape (4, ZOOM_BINS), float32
     unique_packet_id: int
     pfb_index: int
-    raw_seconds: float            # inherited from preceding spectrum metadata
+    raw_seconds: float | None     # inherited from preceding spectrum metadata
+    provenance: ProductProvenance = field(
+        default_factory=_legacy_product_provenance
+    )
 
 
 @dataclass
@@ -108,7 +177,11 @@ class WaveformSample:
     data: np.ndarray              # shape (WAVEFORM_SAMPLES,) int16
     channel: int
     unique_packet_id: int
-    raw_seconds: float
+    raw_seconds: float | None
+    adc_timestamp: np.uint64 | None = None
+    provenance: ProductProvenance = field(
+        default_factory=_legacy_product_provenance
+    )
 
 
 @dataclass
@@ -117,8 +190,11 @@ class HKSample:
     version: int
     unique_packet_id: int
     errors: int
-    raw_seconds: float = 0.0
+    raw_seconds: float | None = None
     fields: Dict[str, Any] = field(default_factory=dict)
+    provenance: ProductProvenance = field(
+        default_factory=_legacy_product_provenance
+    )
 
 
 @dataclass
@@ -126,6 +202,9 @@ class CalDataSample:
     packet_idx: int
     channel_idx: int
     data: np.ndarray              # variable-length float32
+    provenance: ProductProvenance = field(
+        default_factory=_legacy_product_provenance
+    )
 
 
 @dataclass
@@ -148,6 +227,24 @@ class Products:
     start_time_32: Optional[int] = None
     start_time_16: Optional[int] = None
     start_raw_seconds: Optional[float] = None
+    decode_provenance: DecodeProvenance = field(
+        default_factory=DecodeProvenance.unavailable
+    )
+    quality_status: DataQuality | None = None
+    validated_counts: ValidatedCounts = field(default_factory=ValidatedCounts)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.decode_provenance, DecodeProvenance):
+            raise TypeError("decode_provenance must be a DecodeProvenance record")
+        if self.quality_status is not None:
+            self.quality_status = DataQuality(self.quality_status)
+        if not isinstance(self.validated_counts, ValidatedCounts):
+            raise TypeError("validated_counts must be a ValidatedCounts record")
+
+    @property
+    def execution_mode(self) -> ExecutionMode | None:
+        """Decoder strictness, intentionally separate from data quality."""
+        return self.decode_provenance.execution_mode
 
     def restore_spectra_bitslices(self) -> None:
         """Enforce the normal-spectrum SDU invariant for every sample.
@@ -306,7 +403,7 @@ def extract_metadata(meta_pkt) -> Dict[str, Any]:
     return out
 
 
-def _meta_raw_seconds(meta_pkt) -> float:
+def _meta_raw_seconds(meta_pkt) -> float | None:
     """Mission-time seconds for a metadata packet.
 
     Modern uncrater (SW 0x307+) exposes a pre-decoded ``time`` attribute
@@ -316,15 +413,45 @@ def _meta_raw_seconds(meta_pkt) -> float:
     """
     t = getattr(meta_pkt, "time", None)
     if t is not None:
-        try:
-            return float(t)
-        except (TypeError, ValueError):
-            pass
-    t32 = getattr(meta_pkt, "_time_32", None) or getattr(meta_pkt, "time_32", None)
-    t16 = getattr(meta_pkt, "_time_16", None) or getattr(meta_pkt, "time_16", None)
+        result = _finite_seconds_or_none(t)
+        if result is not None:
+            return result
+    t32 = getattr(meta_pkt, "_time_32", None)
+    if t32 is None:
+        t32 = getattr(meta_pkt, "time_32", None)
+    t16 = getattr(meta_pkt, "_time_16", None)
+    if t16 is None:
+        t16 = getattr(meta_pkt, "time_16", None)
     if t32 is None or t16 is None:
-        return 0.0
+        return None
     return raw_seconds_from_split_time(int(t32), int(t16))
+
+
+def _finite_seconds_or_none(value: object) -> float | None:
+    """Return a finite seconds value, or None for missing/invalid input."""
+    if value is None or isinstance(value, (bool, np.bool_)):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _waveform_adc_timestamp(packet: object) -> np.uint64 | None:
+    """Return an ADC timestamp only when waveform metadata was attached."""
+    if getattr(packet, "meta", None) is None:
+        return None
+    value = getattr(packet, "timestamp", None)
+    if (
+        isinstance(value, (bool, np.bool_))
+        or not isinstance(value, (int, np.integer))
+    ):
+        return None
+    integer = int(value)
+    if not 0 <= integer <= np.iinfo(np.uint64).max:
+        return None
+    return np.uint64(integer)
 
 
 def _spectrum_dict_to_array(spec_dict: dict) -> np.ndarray:
@@ -403,7 +530,10 @@ def read_uncrater_session(
         selected_binding.selected_schema_id,
         selected_binding.schema_assumed,
     )
-    products = Products()
+    decode_provenance = collection_provenance(coll, strict=strict)
+    products = Products(
+        decode_provenance=decode_provenance,
+    )
 
     # ---- Hello / session-invariants ----
     for pkt in coll.cont:
@@ -476,7 +606,7 @@ def read_uncrater_session(
         ))
 
     # ---- Zoom spectra ----
-    last_meta_seconds = 0.0
+    last_meta_seconds = None
     spec_iter = iter(products.spectra)
     next_spec = next(spec_iter, None)
     for zpkt in getattr(coll, "zoom_spectra_packets", []):
@@ -518,12 +648,12 @@ def read_uncrater_session(
             n = min(data.size, WAVEFORM_SAMPLES)
             tmp[:n] = data[:n]
             data = tmp
-        ts = float(getattr(wpkt, "timestamp", 0.0) or 0.0)
         products.waveforms.append(WaveformSample(
             data=data,
             channel=int(getattr(wpkt, "channel", 0)),
             unique_packet_id=int(getattr(wpkt, "unique_packet_id", 0)),
-            raw_seconds=ts,
+            raw_seconds=None,
+            adc_timestamp=_waveform_adc_timestamp(wpkt),
         ))
 
     # ---- Housekeeping ----
@@ -536,14 +666,8 @@ def read_uncrater_session(
         hk_type = int(getattr(hk, "hk_type", 0))
         # Surface raw_seconds for HK rows. uncrater exposes a "time" field
         # for hk_type 0/2 derived from the heartbeat / core_state mission
-        # time; fall back to 0.0 for types that do not carry a time field.
-        raw_seconds = 0.0
-        t = getattr(hk, "time", None)
-        if t is not None:
-            try:
-                raw_seconds = float(t)
-            except (TypeError, ValueError):
-                raw_seconds = 0.0
+        # time; types without a time field remain explicitly missing.
+        raw_seconds = _finite_seconds_or_none(getattr(hk, "time", None))
         sample = HKSample(
             hk_type=hk_type,
             version=int(getattr(hk, "version", 0)),
@@ -634,7 +758,7 @@ def read_uncrater_session(
         products.grimm_spectra.append(SpectrumSample(
             data=arr,
             unique_packet_id=int(getattr(pkt, "unique_packet_id", 0)),
-            raw_seconds=0.0,
+            raw_seconds=None,
             metadata={},
         ))
 
@@ -646,5 +770,13 @@ def read_uncrater_session(
         len(products.zoom_spectra),
         len(products.waveforms),
         len(products.housekeeping),
+    )
+    products.validated_counts = ValidatedCounts(
+        input_packets=products.decode_provenance.input_packet_count,
+        valid_packets=products.decode_provenance.valid_packet_count,
+    )
+    products.quality_status = _decode_quality(
+        products.decode_provenance,
+        usable_product_count=_usable_product_count(products),
     )
     return products

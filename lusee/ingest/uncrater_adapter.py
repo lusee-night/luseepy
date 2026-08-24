@@ -13,6 +13,7 @@ from types import ModuleType
 from typing import Any
 
 from .dependencies import import_optional_dependency
+from .products import DecodeProvenance, ExecutionMode
 
 
 class IncompatibleUncraterError(RuntimeError):
@@ -229,4 +230,78 @@ def binding_info(collection: Any) -> UncraterBindingInfo:
         issue_counts=tuple(
             sorted((str(code), int(count)) for code, count in counts.items())
         ),
+    )
+
+
+def collection_provenance(
+    collection: Any,
+    *,
+    strict: bool,
+) -> DecodeProvenance:
+    """Build immutable provenance from one Collection's public report APIs."""
+    decoder = decoder_info()
+    binding = binding_info(collection)
+    packets = tuple(getattr(collection, "cont", ()))
+    input_packet_count = sum(count for _, count in binding.appid_counts)
+    if len(packets) != input_packet_count:
+        raise IncompatibleUncraterError(
+            "uncrater packet list and AppID counts disagree"
+        )
+    valid_packet_count = 0
+    for packet in packets:
+        status = getattr(packet, "decode_status", None)
+        if status is None or not hasattr(status, "issues"):
+            raise IncompatibleUncraterError(
+                "uncrater packet has no public decode_status.issues"
+            )
+        issues = tuple(status.issues)
+        for issue in issues:
+            if type(getattr(issue, "fatal", None)) is not bool:
+                raise IncompatibleUncraterError(
+                    "uncrater decode issue has no boolean fatal field"
+                )
+        valid_packet_count += not any(issue.fatal for issue in issues)
+    report = collection.canonical_report()
+    if not isinstance(report, dict):
+        raise IncompatibleUncraterError(
+            "uncrater Collection canonical_report() must return a dictionary"
+        )
+    expected_report_fields = {
+        "report_schema_version": 1,
+        "reported_schema_ids": [
+            f"0x{value:03X}" for value in binding.reported_schema_ids
+        ],
+        "selected_schema_ids": [f"0x{binding.selected_schema_id:03X}"],
+        "selected_schema_bindings": [binding.binding_key],
+        "schema_assumed": binding.schema_assumed,
+        "packet_count": input_packet_count,
+        "packet_counts_by_appid": {
+            f"0x{appid:03X}": count for appid, count in binding.appid_counts
+        },
+        "invalid_counts_by_issue": dict(binding.issue_counts),
+    }
+    for name, expected in expected_report_fields.items():
+        if report.get(name) != expected:
+            raise IncompatibleUncraterError(
+                f"uncrater canonical report disagrees on {name}"
+            )
+    return DecodeProvenance.from_report(
+        distribution_version=decoder.distribution_version,
+        decoder_source_commit=decoder.source_commit,
+        reported_schema_ids=binding.reported_schema_ids,
+        selected_schema_id=binding.selected_schema_id,
+        binding_key=binding.binding_key,
+        schema_variant=binding.variant,
+        schema_assumed=binding.schema_assumed,
+        binding_source_release=binding.source_release,
+        binding_source_commit=binding.source_commit,
+        abi_fingerprint=binding.abi_fingerprint,
+        execution_mode=(
+            ExecutionMode.STRICT if strict else ExecutionMode.COLLECT
+        ),
+        input_packet_count=input_packet_count,
+        valid_packet_count=valid_packet_count,
+        appid_counts=binding.appid_counts,
+        issue_counts=binding.issue_counts,
+        canonical_report=report,
     )

@@ -342,9 +342,23 @@ def _build_waveform_hdus(products) -> List:
         items = by_channel[ch]
         wf = np.stack([w.data for w in items]).astype(np.int16)
         ts = np.array([w.raw_seconds for w in items], dtype=np.float64)
+        adc_ts = np.array([
+            0 if w.adc_timestamp is None else w.adc_timestamp
+            for w in items
+        ], dtype=np.uint64)
+        adc_valid = np.array([
+            w.adc_timestamp is not None for w in items
+        ], dtype=np.uint8)
         cols = [
             _column("WAVEFORM", wf),
             _column("TIMESTAMP", ts, unit="s"),
+            fits.Column(
+                name="ADC_TIME",
+                format="K",
+                array=adc_ts,
+                bzero=2**63,
+            ),
+            _column("ADC_VALID", adc_valid),
         ]
         hdu = _bintable_from_columns(
             [c for c in cols if c is not None],
@@ -365,7 +379,13 @@ def _build_housekeeping_hdus(products) -> List:
         by_type.setdefault(hk.hk_type, []).append(hk)
     hdus = []
     for type_id in sorted(by_type.keys()):
-        rows = sorted(by_type[type_id], key=lambda r: r.raw_seconds)
+        rows = sorted(
+            by_type[type_id],
+            key=lambda row: (
+                row.raw_seconds is None,
+                0.0 if row.raw_seconds is None else row.raw_seconds,
+            ),
+        )
         n = len(rows)
         cols: List[fits.Column] = []
         cols.append(_column("UPID", np.array([r.unique_packet_id for r in rows], dtype=np.int64)))

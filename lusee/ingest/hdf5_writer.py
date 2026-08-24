@@ -399,11 +399,18 @@ def _write_waveform(h5: h5py.File, products: Products) -> None:
         gch.attrs["channel"] = np.int64(ch)
         wf = np.zeros((len(items), WAVEFORM_SAMPLES), dtype=np.int16)
         ts = np.zeros(len(items), dtype=np.float64)
+        adc_ts = np.zeros(len(items), dtype=np.uint64)
+        adc_valid = np.zeros(len(items), dtype=np.bool_)
         for i, w in enumerate(items):
             wf[i] = w.data
             ts[i] = w.raw_seconds
+            if w.adc_timestamp is not None:
+                adc_ts[i] = w.adc_timestamp
+                adc_valid[i] = True
         _create_dataset(gch, "waveforms", wf)
         _create_dataset(gch, "timestamps", ts)
+        _create_dataset(gch, "adc_timestamps", adc_ts)
+        _create_dataset(gch, "adc_timestamp_valid", adc_valid)
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +461,13 @@ def _write_one_hk_type(
     if not rows:
         return
     # Sort rows by raw_seconds for monotonic time axis.
-    rows = sorted(rows, key=lambda r: r.raw_seconds)
+    rows = sorted(
+        rows,
+        key=lambda row: (
+            row.raw_seconds is None,
+            0.0 if row.raw_seconds is None else row.raw_seconds,
+        ),
+    )
     n = len(rows)
     g = parent.create_group(f"type_{type_id}")
     g.attrs["count"] = np.int64(n)
@@ -605,6 +618,8 @@ def _interpolate_telemetry(
     n_target = spectra_raw_times.size
     if n_target == 0:
         return out
+    finite_target = np.isfinite(spectra_raw_times)
+    finite_times = spectra_raw_times[finite_target]
 
     ms = np.asarray(fpga.get("mission_seconds", np.empty(0)), dtype=np.float64)
     ss = np.asarray(fpga.get("lusee_subsecs", np.empty(0)), dtype=np.float64)
@@ -620,21 +635,27 @@ def _interpolate_telemetry(
     if mode == "normalized":
         if tele_t.size > 1:
             tt_min, tt_max = tele_t.min(), tele_t.max()
-            sp_min, sp_max = spectra_raw_times.min(), spectra_raw_times.max()
+            if finite_times.size:
+                sp_min, sp_max = finite_times.min(), finite_times.max()
+            else:
+                sp_min = sp_max = 0.0
         else:
             tt_min = tt_max = tele_t[0]
-            sp_min = sp_max = spectra_raw_times[0]
+            if finite_times.size:
+                sp_min = sp_max = finite_times[0]
+            else:
+                sp_min = sp_max = 0.0
         if tt_max > tt_min:
             xt = (uniq - tt_min) / (tt_max - tt_min)
         else:
             xt = np.zeros_like(uniq)
         if sp_max > sp_min:
-            xs = (spectra_raw_times - sp_min) / (sp_max - sp_min)
+            xs = (finite_times - sp_min) / (sp_max - sp_min)
         else:
-            xs = np.zeros_like(spectra_raw_times)
+            xs = np.zeros_like(finite_times)
     else:
         xt = uniq
-        xs = spectra_raw_times
+        xs = finite_times
 
     for fname, vals in fpga.items():
         if fname in ("mission_seconds", "lusee_subsecs"):
@@ -647,10 +668,12 @@ def _interpolate_telemetry(
             cnt[j] += 1
         with np.errstate(divide="ignore", invalid="ignore"):
             avg = np.where(cnt > 0, avg / np.maximum(cnt, 1), 0.0)
+        interpolated = np.full(n_target, np.nan, dtype=np.float64)
         if uniq.size == 1:
-            out[fname] = np.full(n_target, avg[0], dtype=np.float64)
+            interpolated[finite_target] = avg[0]
         else:
-            out[fname] = np.interp(xs, xt, avg)
+            interpolated[finite_target] = np.interp(xs, xt, avg)
+        out[fname] = interpolated
     return out
 
 

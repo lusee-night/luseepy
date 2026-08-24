@@ -87,6 +87,38 @@ _LAZY_EXPORTS = {
     "WaveformSample": ("decode", "WaveformSample"),
     "ZoomSample": ("decode", "ZoomSample"),
     "read_uncrater_session": ("decode", "read_uncrater_session"),
+    # Validated product/decode provenance
+    "DataQuality": ("products", "DataQuality"),
+    "DecodeProvenance": ("products", "DecodeProvenance"),
+    "ExecutionMode": ("products", "ExecutionMode"),
+    "ProductProvenance": ("products", "ProductProvenance"),
+    "SourcePacketProvenance": ("products", "SourcePacketProvenance"),
+    "ValidatedCounts": ("products", "ValidatedCounts"),
+    # Versioned frequency-window and clock-reference contracts
+    "ClockReference": ("clock_reference", "ClockReference"),
+    "ClockReferenceFormatError": (
+        "clock_reference", "ClockReferenceFormatError"
+    ),
+    "ClockReferenceSet": ("clock_reference", "ClockReferenceSet"),
+    "ClockReferenceUnavailableError": (
+        "clock_reference", "ClockReferenceUnavailableError"
+    ),
+    "ClockSource": ("clock_reference", "ClockSource"),
+    "UnsupportedClockSourceError": (
+        "clock_reference", "UnsupportedClockSourceError"
+    ),
+    "load_clock_reference_set": (
+        "clock_reference", "load_clock_reference_set"
+    ),
+    "FrequencyWindowContract": (
+        "frequency_contract", "FrequencyWindowContract"
+    ),
+    "UnresolvedFrequencyCoordinateError": (
+        "frequency_contract", "UnresolvedFrequencyCoordinateError"
+    ),
+    "spectrometer_frequency_window": (
+        "frequency_contract", "spectrometer_frequency_window"
+    ),
     # Writers and orchestration
     "write_hdf5": ("hdf5_writer", "write_hdf5"),
     "write_fits": ("fits_writer", "write_fits"),
@@ -154,6 +186,15 @@ __all__ = [
     "CalDataSample", "HKSample", "Products", "SpectrumSample",
     "TRSpectrumSample", "WaveformSample", "ZoomSample",
     "read_uncrater_session",
+    # product/decode provenance
+    "DataQuality", "DecodeProvenance", "ExecutionMode",
+    "ProductProvenance", "SourcePacketProvenance", "ValidatedCounts",
+    # v4 clock and frequency contracts
+    "ClockReference", "ClockReferenceFormatError", "ClockReferenceSet",
+    "ClockReferenceUnavailableError", "ClockSource",
+    "UnsupportedClockSourceError", "load_clock_reference_set",
+    "FrequencyWindowContract", "UnresolvedFrequencyCoordinateError",
+    "spectrometer_frequency_window",
     # hdf5
     "write_hdf5",
     # fits
