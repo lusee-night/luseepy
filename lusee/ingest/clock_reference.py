@@ -225,6 +225,150 @@ class ClockReferenceSet:
         return record
 
 
+@dataclass(frozen=True, slots=True)
+class LegacyClockReferenceSet:
+    """Explicit v2/v3 subtract-plus-MJD mapping, never a landing claim."""
+
+    clock_reference_raw_seconds: float
+    mjd_epoch_offset_days: float
+    time_scale: str
+    source: str
+    assumed: bool
+    mapping_sha256: str
+    reference_event: str = "legacy_mjd_offset"
+    verified_landing: bool = False
+
+    def __post_init__(self) -> None:
+        raw = _finite_number(
+            self.clock_reference_raw_seconds,
+            "clock_reference_raw_seconds",
+        )
+        mjd = _finite_number(
+            self.mjd_epoch_offset_days,
+            "mjd_epoch_offset_days",
+        )
+        if not isinstance(self.time_scale, str) or (
+            self.time_scale.lower() not in _ABSOLUTE_TIME_SCALES
+        ):
+            raise ValueError("legacy time_scale is not an absolute time scale")
+        if not isinstance(self.source, str) or not self.source.strip():
+            raise ValueError("legacy clock source must be nonempty")
+        if type(self.assumed) is not bool:
+            raise TypeError("legacy clock assumed must be a boolean")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.mapping_sha256):
+            raise ValueError("mapping_sha256 must be a lowercase SHA-256 digest")
+        if self.reference_event != "legacy_mjd_offset":
+            raise ValueError("legacy reference_event must be 'legacy_mjd_offset'")
+        if self.verified_landing is not False:
+            raise ValueError("legacy clock mappings cannot verify landing")
+        from astropy.time import Time, TimeDelta
+
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                anchor = Time(
+                    mjd,
+                    format="mjd",
+                    scale=self.time_scale.lower(),
+                ) + TimeDelta(0.0, format="sec")
+        except Exception as exc:
+            raise ValueError(
+                "legacy MJD anchor is not representable"
+            ) from exc
+        if not (
+            np.all(np.isfinite(anchor.jd1))
+            and np.all(np.isfinite(anchor.jd2))
+        ):
+            raise ValueError("legacy MJD anchor is not representable")
+        object.__setattr__(self, "clock_reference_raw_seconds", raw)
+        object.__setattr__(self, "mjd_epoch_offset_days", mjd)
+        object.__setattr__(self, "time_scale", self.time_scale.lower())
+
+    @property
+    def clocks(self) -> tuple[ClockReference, ...]:
+        """Expose the sole legacy spectrometer anchor without cross-clock reuse."""
+        return (
+            ClockReference(
+                clock_source=ClockSource.SPECTROMETER,
+                clock_reference_raw_seconds=self.clock_reference_raw_seconds,
+            ),
+        )
+
+    def reference_for(
+        self,
+        clock_source: ClockSource | str,
+    ) -> ClockReference | None:
+        """Return the legacy spectrometer anchor and no other clock anchor."""
+        source = _normalize_clock_source(clock_source)
+        return self.clocks[0] if source is ClockSource.SPECTROMETER else None
+
+    def require_reference(
+        self,
+        clock_source: ClockSource | str,
+    ) -> ClockReference:
+        """Require the sole legacy spectrometer mapping."""
+        reference = self.reference_for(clock_source)
+        if reference is None:
+            source = _normalize_clock_source(clock_source)
+            raise ClockReferenceUnavailableError(
+                f"legacy clock reference does not cover {source.value!r}"
+            )
+        return reference
+
+    def to_time(
+        self,
+        raw_seconds: float | np.ndarray,
+        *,
+        clock_source: ClockSource | str,
+    ):
+        """Apply the recorded legacy subtract-plus-MJD equation exactly."""
+        from astropy.time import Time, TimeDelta
+
+        self.require_reference(clock_source)
+        raw = _finite_array(raw_seconds)
+        with np.errstate(over="ignore", invalid="ignore"):
+            delta = raw - self.clock_reference_raw_seconds
+        if not np.all(np.isfinite(delta)):
+            raise ValueError("raw_seconds produces an unrepresentable time delta")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = Time(
+                self.mjd_epoch_offset_days,
+                format="mjd",
+                scale=self.time_scale,
+            ) + TimeDelta(delta, format="sec")
+        if not (
+            np.all(np.isfinite(result.jd1))
+            and np.all(np.isfinite(result.jd2))
+        ):
+            raise ValueError("raw_seconds produces an unrepresentable absolute time")
+        return result
+
+    def to_mjd(
+        self,
+        raw_seconds: float | np.ndarray,
+        *,
+        clock_source: ClockSource | str,
+    ) -> float | np.ndarray:
+        """Return MJD from the explicit legacy equation."""
+        return self.to_time(raw_seconds, clock_source=clock_source).mjd
+
+    def as_record(self) -> dict[str, object]:
+        """Return explicit legacy provenance without production-v4 labels."""
+        return {
+            "format": "layout_v2_v3_legacy_clock_mapping",
+            "reference_event": self.reference_event,
+            "verified_landing": self.verified_landing,
+            "clock_source": ClockSource.SPECTROMETER.value,
+            "clock_reference_raw_seconds": self.clock_reference_raw_seconds,
+            "mjd_epoch_offset_days": self.mjd_epoch_offset_days,
+            "time_scale": self.time_scale,
+            "source": self.source,
+            "assumed": self.assumed,
+            "mapping_sha256": self.mapping_sha256,
+        }
+
+
 def load_clock_reference_set(path: Path | str) -> ClockReferenceSet:
     """Read and validate one explicit version-1 clock-reference JSON file."""
     source_path = Path(path)

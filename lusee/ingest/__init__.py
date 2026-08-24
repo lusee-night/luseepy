@@ -57,7 +57,6 @@ from .issues import (
 )
 from .reassembly import LogicalPacket, reassemble_logical_packets
 
-
 _LAZY_EXPORTS = {
     # Stage 3 identity assignment
     "assign_identities": ("collation", "assign_identities"),
@@ -107,6 +106,9 @@ _LAZY_EXPORTS = {
         "clock_reference", "ClockReferenceFormatError"
     ),
     "ClockReferenceSet": ("clock_reference", "ClockReferenceSet"),
+    "LegacyClockReferenceSet": (
+        "clock_reference", "LegacyClockReferenceSet"
+    ),
     "ClockReferenceUnavailableError": (
         "clock_reference", "ClockReferenceUnavailableError"
     ),
@@ -152,8 +154,14 @@ _LAZY_EXPORTS = {
     "plot_spectra_waterfall": ("viz", "plot_spectra_waterfall"),
     # Reader/factory
     "IngestData": ("obs_factory", "IngestData"),
+    "LegacyIngestWarning": ("obs_factory", "LegacyIngestWarning"),
+    "MixedFrequencyGridError": ("obs_factory", "MixedFrequencyGridError"),
     "load": ("obs_factory", "load"),
+    "load_bundle": ("obs_factory", "load_bundle"),
     "SessionBundle": ("obs_factory", "SessionBundle"),
+    "LayoutV4ValidationError": (
+        "layout_v4_reader", "LayoutV4ValidationError"
+    ),
     # Decoder boundary provenance
     "DecoderInfo": ("uncrater_adapter", "DecoderInfo"),
     "IncompatibleUncraterError": (
@@ -210,6 +218,7 @@ __all__ = [
     "WaveformSample", "ZoomSample",
     # v4 clock and frequency contracts
     "ClockReference", "ClockReferenceFormatError", "ClockReferenceSet",
+    "LegacyClockReferenceSet",
     "ClockReferenceUnavailableError", "ClockSource",
     "UnsupportedClockSourceError", "load_clock_reference_set",
     "FrequencyWindowContract", "UnresolvedFrequencyCoordinateError",
@@ -229,7 +238,8 @@ __all__ = [
     "plot_session", "plot_spectra_waterfall", "plot_spectra_mean",
     "plot_adc_stats", "plot_dcb_telemetry",
     # obs_factory (lazy)
-    "IngestData", "load", "SessionBundle",
+    "IngestData", "LegacyIngestWarning", "LayoutV4ValidationError",
+    "MixedFrequencyGridError", "SessionBundle", "load", "load_bundle",
     # uncrater adapter provenance (lazy)
     "DecoderInfo", "IncompatibleUncraterError", "UncraterBindingInfo",
     "binding_info", "decoder_info",

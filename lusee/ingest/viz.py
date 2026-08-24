@@ -1,6 +1,6 @@
 """Per-session sanity-check plots.
 
-Each plotting function takes either an open ``h5py.File`` or a path,
+Each plotting function takes a validated ingest bundle or HDF5/FITS path,
 plus an output PNG path. They render quickly and are designed for
 end-of-pipeline visual sanity checks; they are not publication graphics.
 
@@ -13,16 +13,13 @@ Standalone use::
 from __future__ import annotations
 
 import logging
-from contextlib import contextmanager
+import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, List, Optional, Sequence, Union
+from typing import List, Optional, Sequence
 
 import numpy as np
 
-from .dependencies import import_optional_dependency
-
-if TYPE_CHECKING:
-    import h5py
+from .obs_factory import LegacyIngestWarning, SessionBundle, load_bundle
 
 log = logging.getLogger(__name__)
 
@@ -39,18 +36,56 @@ _AVAILABLE_PLOTS = (
 # helpers
 # ---------------------------------------------------------------------------
 
-@contextmanager
-def _open_h5(h5: Union[h5py.File, Path, str]):
-    h5py = import_optional_dependency("h5py", "ingest visualization")
-    if isinstance(h5, h5py.File):
-        yield h5
-        return
-    p = Path(h5)
-    f = h5py.File(p, "r")
-    try:
-        yield f
-    finally:
-        f.close()
+def _as_bundle(source) -> SessionBundle:
+    if isinstance(source, SessionBundle):
+        return source
+    filename = getattr(source, "filename", None)
+    return load_bundle(filename if filename is not None else source)
+
+
+def _normal_groups(source) -> tuple[SessionBundle, ...]:
+    bundle = _as_bundle(source)
+    if bundle.spectra is None:
+        raise FileNotFoundError("normal spectra are absent")
+    if bundle.layout_version in (2, 3):
+        warnings.warn(
+            "layout-v2/v3 plots use legacy_unverified frequency-bin metadata",
+            LegacyIngestWarning,
+            stacklevel=3,
+        )
+    groups = bundle.split_by_frequency_grid()
+    return groups or (bundle,)
+
+
+def _normal_cube(bundle: SessionBundle) -> np.ndarray:
+    spectra = np.asarray(bundle.spectra)
+    if spectra.shape[0] == 0:
+        return spectra
+    if bundle.spectra_frequency_counts is None:
+        if bundle.layout_version not in (2, 3):
+            raise ValueError("normal-spectrum frequency counts are absent")
+        meaningful_count = bundle.frequency_window_for_row(0).output_count
+        if spectra.shape[2] < meaningful_count:
+            raise ValueError(
+                "legacy spectrum backing width is smaller than its Navgf window"
+            )
+        counts = np.full(
+            spectra.shape[0],
+            meaningful_count,
+            dtype=np.int64,
+        )
+    else:
+        counts = np.asarray(bundle.spectra_frequency_counts)
+    if counts.size == 0 or np.unique(counts).size != 1:
+        raise ValueError("plotting requires one homogeneous frequency window")
+    return spectra[:, :, : int(counts[0])]
+
+
+def _grid_tag(bundle: SessionBundle, include: bool) -> str:
+    if not include:
+        return ""
+    navgf = bundle.frequency_window_for_row(0).navgf
+    return f"_navgf{navgf}"
 
 
 def _require_matplotlib():
@@ -148,7 +183,7 @@ def _plot_one_waterfall(plt, spectra: np.ndarray, product: int, out_path: Path,
 
 
 def plot_spectra_waterfall(
-    h5: Union[h5py.File, Path, str],
+    source,
     out_path: Path | str,
     *,
     products: Optional[Sequence[int]] = None,
@@ -165,25 +200,38 @@ def plot_spectra_waterfall(
     """
     plt = _require_matplotlib()
     out_path = Path(out_path)
-    with _open_h5(h5) as f:
-        if "spectra" not in f or "data" not in f["spectra"]:
-            raise FileNotFoundError("/spectra/data not present in HDF5")
-        spectra = f["spectra"]["data"][...]
-    n_time, n_products, _ = spectra.shape
-    if n_time == 0:
-        log.warning("/spectra/data has zero rows; not plotting waterfall")
-        return []
-    targets = list(products) if products is not None else list(range(n_products))
-
+    groups = _normal_groups(source)
     written: List[Path] = []
-    if out_path.suffix.lower() == ".png" and len(targets) == 1:
-        written.append(_plot_one_waterfall(plt, spectra, targets[0], out_path))
-        return written
-
-    out_path.mkdir(parents=True, exist_ok=True)
-    for p in targets:
-        png = out_path / f"spectra_waterfall_p{p:02d}.png"
-        written.append(_plot_one_waterfall(plt, spectra, p, png))
+    for group in groups:
+        spectra = _normal_cube(group)
+        n_time, n_products, _ = spectra.shape
+        if n_time == 0:
+            continue
+        targets = (
+            list(products) if products is not None else list(range(n_products))
+        )
+        if (
+            out_path.suffix.lower() == ".png"
+            and len(targets) == 1
+            and len(groups) == 1
+        ):
+            written.append(
+                _plot_one_waterfall(plt, spectra, targets[0], out_path)
+            )
+            continue
+        out_path.mkdir(parents=True, exist_ok=True)
+        tag = _grid_tag(group, len(groups) > 1)
+        for product in targets:
+            png = out_path / f"spectra_waterfall{tag}_p{product:02d}.png"
+            written.append(
+                _plot_one_waterfall(
+                    plt,
+                    spectra,
+                    product,
+                    png,
+                    title_suffix=tag.replace("_", " "),
+                )
+            )
     return written
 
 
@@ -236,7 +284,7 @@ def _plot_one_mean(plt, spectra: np.ndarray, product: int, out_path: Path,
 
 
 def plot_spectra_mean(
-    h5: Union[h5py.File, Path, str],
+    source,
     out_path: Path | str,
     *,
     products: Optional[Sequence[int]] = None,
@@ -247,25 +295,36 @@ def plot_spectra_mean(
     """
     plt = _require_matplotlib()
     out_path = Path(out_path)
-    with _open_h5(h5) as f:
-        if "spectra" not in f or "data" not in f["spectra"]:
-            raise FileNotFoundError("/spectra/data not present in HDF5")
-        spectra = f["spectra"]["data"][...]
-    n_time, n_products, _ = spectra.shape
-    if n_time == 0:
-        log.warning("/spectra/data has zero rows; not plotting mean")
-        return []
-    targets = list(products) if products is not None else list(range(n_products))
-
+    groups = _normal_groups(source)
     written: List[Path] = []
-    if out_path.suffix.lower() == ".png" and len(targets) == 1:
-        written.append(_plot_one_mean(plt, spectra, targets[0], out_path))
-        return written
-
-    out_path.mkdir(parents=True, exist_ok=True)
-    for p in targets:
-        png = out_path / f"spectra_mean_p{p:02d}.png"
-        written.append(_plot_one_mean(plt, spectra, p, png))
+    for group in groups:
+        spectra = _normal_cube(group)
+        n_time, n_products, _ = spectra.shape
+        if n_time == 0:
+            continue
+        targets = (
+            list(products) if products is not None else list(range(n_products))
+        )
+        if (
+            out_path.suffix.lower() == ".png"
+            and len(targets) == 1
+            and len(groups) == 1
+        ):
+            written.append(_plot_one_mean(plt, spectra, targets[0], out_path))
+            continue
+        out_path.mkdir(parents=True, exist_ok=True)
+        tag = _grid_tag(group, len(groups) > 1)
+        for product in targets:
+            png = out_path / f"spectra_mean{tag}_p{product:02d}.png"
+            written.append(
+                _plot_one_mean(
+                    plt,
+                    spectra,
+                    product,
+                    png,
+                    title_suffix=tag.replace("_", " "),
+                )
+            )
     return written
 
 
@@ -273,26 +332,40 @@ def plot_spectra_mean(
 # Plot: ADC stats over time
 # ---------------------------------------------------------------------------
 
-def plot_adc_stats(h5: Union[h5py.File, Path, str], out_path: Path | str) -> Path:
+def plot_adc_stats(source, out_path: Path | str) -> Path:
     """Min / max / mean / rms ADC stats over time, per channel (4 panels)."""
     plt = _require_matplotlib()
     out_path = Path(out_path)
-    with _open_h5(h5) as f:
-        if "spectra" not in f or "metadata" not in f["spectra"]:
-            raise FileNotFoundError("/spectra/metadata not present in HDF5")
-        md = f["spectra"]["metadata"]
-        if not all(k in md for k in ("adc_min", "adc_max", "adc_mean", "adc_rms")):
-            raise FileNotFoundError("ADC stat fields missing in /spectra/metadata")
-        adc_min = md["adc_min"][...]
-        adc_max = md["adc_max"][...]
-        adc_mean = md["adc_mean"][...]
-        adc_rms = md["adc_rms"][...]
-        raw_times = f["spectra"]["raw_times"][...]
+    bundle = _as_bundle(source)
+    names = ("adc_min", "adc_max", "adc_mean", "adc_rms")
+    if not all(name in bundle.spectra_metadata for name in names):
+        raise FileNotFoundError("ADC statistic fields are absent")
+    arrays = [
+        np.asarray(bundle.spectra_metadata[name], dtype=np.float64).copy()
+        for name in names
+    ]
+    statistic_valid = bundle.spectra_metadata.get("adc_statistics_valid")
+    if statistic_valid is None:
+        statistic_valid = np.ones(arrays[0].shape, dtype=np.bool_)
+    else:
+        statistic_valid = np.asarray(statistic_valid, dtype=np.bool_)
+    for name, array in zip(names, arrays):
+        field_present = bundle.spectra_metadata_present.get(name)
+        if field_present is not None:
+            array[~np.asarray(field_present, dtype=np.bool_)] = np.nan
+        array[~statistic_valid] = np.nan
+    adc_min, adc_max, adc_mean, adc_rms = arrays
+    raw_times = np.asarray(bundle.spectra_raw_times)
+    raw_valid = bundle.spectra_raw_time_valid
     n = raw_times.size
     if n == 0:
         return out_path
-
-    x = raw_times - raw_times[0] if raw_times[0] != 0 else raw_times
+    if raw_valid is not None and not np.all(raw_valid):
+        x = np.arange(n)
+        x_label = "spectrum row"
+    else:
+        x = raw_times - raw_times[0]
+        x_label = "seconds since session start"
 
     fig, axes = plt.subplots(2, 2, figsize=(11, 7), sharex=True)
     titles = ("ADC min", "ADC max", "ADC mean", "ADC rms")
@@ -300,7 +373,7 @@ def plot_adc_stats(h5: Union[h5py.File, Path, str], out_path: Path | str) -> Pat
         for ch in range(arr.shape[1]):
             ax.plot(x, arr[:, ch], lw=0.8, label=f"ch{ch}")
         ax.set_title(title)
-        ax.set_xlabel("seconds since session start")
+        ax.set_xlabel(x_label)
         ax.legend(fontsize=8, loc="best")
     fig.tight_layout()
     fig.savefig(out_path, dpi=110, bbox_inches="tight")
@@ -312,7 +385,7 @@ def plot_adc_stats(h5: Union[h5py.File, Path, str], out_path: Path | str) -> Pat
 # Plot: DCB telemetry summary
 # ---------------------------------------------------------------------------
 
-def plot_dcb_telemetry(h5: Union[h5py.File, Path, str], out_path: Path | str) -> Path:
+def plot_dcb_telemetry(source, out_path: Path | str) -> Path:
     """Summary plot of representative DCB telemetry channels.
 
     Channel names and panel grouping come from the private
@@ -326,38 +399,34 @@ def plot_dcb_telemetry(h5: Union[h5py.File, Path, str], out_path: Path | str) ->
     out_path = Path(out_path)
     from . import telemetry as _telemetry_mod
     panel_groups = _telemetry_mod.field_groups()    # may be empty
-
-    with _open_h5(h5) as f:
-        if "DCB_telemetry" not in f:
-            raise FileNotFoundError("/DCB_telemetry not present in HDF5")
-        g = f["DCB_telemetry"]
-        if "fpga_mission_seconds" not in g or "fpga_lusee_subsecs" not in g:
-            raise FileNotFoundError("FPGA telemetry time axis missing")
-        ms = g["fpga_mission_seconds"][...]
-        ss = g["fpga_lusee_subsecs"][...]
-        t = ms + ss * (1.0 / 65536.0)
-        if t.size == 0:
-            log.warning("FPGA telemetry has zero samples; not plotting")
-            return out_path
-        t = t - t[0]
-        if panel_groups:
-            groups = []
-            for title, fields in panel_groups.items():
-                present: List[tuple] = []
-                for fname in fields:
-                    key = f"fpga_{fname}"
-                    if key in g:
-                        present.append((fname, g[key][...]))
-                if present:
-                    groups.append((title, present))
-        else:
-            present = [
-                (k[len("fpga_"):], g[k][...])
-                for k in sorted(g)
-                if k.startswith("fpga_") and k not in ("fpga_mission_seconds",
-                                                       "fpga_lusee_subsecs")
-            ]
-            groups = [("FPGA telemetry", present)] if present else []
+    telemetry = _as_bundle(source).dcb_fpga
+    if not telemetry:
+        raise FileNotFoundError("DCB telemetry is absent")
+    if "mission_seconds" not in telemetry or "lusee_subsecs" not in telemetry:
+        raise FileNotFoundError("FPGA telemetry time axis is absent")
+    ms = np.asarray(telemetry["mission_seconds"])
+    ss = np.asarray(telemetry["lusee_subsecs"])
+    t = ms + ss * (1.0 / 65536.0)
+    if t.size == 0:
+        log.warning("FPGA telemetry has zero samples; not plotting")
+        return out_path
+    t = t - t[0]
+    if panel_groups:
+        groups = []
+        for title, fields in panel_groups.items():
+            present: List[tuple] = []
+            for name in fields:
+                if name in telemetry:
+                    present.append((name, np.asarray(telemetry[name])))
+            if present:
+                groups.append((title, present))
+    else:
+        present = [
+            (name, np.asarray(telemetry[name]))
+            for name in sorted(telemetry)
+            if name not in ("mission_seconds", "lusee_subsecs")
+        ]
+        groups = [("FPGA telemetry", present)] if present else []
 
     if not groups:
         log.warning("no DCB telemetry channels found; not plotting")
@@ -394,7 +463,7 @@ _DISPATCH = {
 
 
 def plot_session(
-    h5_path: Path | str,
+    source,
     plots_out_dir: Path | str,
     *,
     plots: Optional[Sequence[str]] = None,
@@ -411,22 +480,22 @@ def plot_session(
     plots_out_dir = Path(plots_out_dir)
     plots_out_dir.mkdir(parents=True, exist_ok=True)
     written: List[Path] = []
-    with _open_h5(h5_path) as f:
-        for name in plots:
-            fn = _DISPATCH.get(name)
-            if fn is None:
-                log.warning("unknown plot '%s'; skipping", name)
-                continue
-            try:
-                if name in _PER_PRODUCT_PLOTS:
-                    paths = fn(f, plots_out_dir)
-                    written.extend(paths)
-                else:
-                    out_path = plots_out_dir / f"{name}.png"
-                    fn(f, out_path)
-                    written.append(out_path)
-            except FileNotFoundError as exc:
-                log.info("skipping plot '%s': %s", name, exc)
-            except Exception as exc:    # noqa: BLE001
-                log.warning("plot '%s' failed: %s", name, exc)
+    bundle = _as_bundle(source)
+    for name in plots:
+        fn = _DISPATCH.get(name)
+        if fn is None:
+            log.warning("unknown plot '%s'; skipping", name)
+            continue
+        try:
+            if name in _PER_PRODUCT_PLOTS:
+                paths = fn(bundle, plots_out_dir)
+                written.extend(paths)
+            else:
+                out_path = plots_out_dir / f"{name}.png"
+                fn(bundle, out_path)
+                written.append(out_path)
+        except FileNotFoundError as exc:
+            log.info("skipping plot '%s': %s", name, exc)
+        except Exception as exc:    # noqa: BLE001
+            log.warning("plot '%s' failed: %s", name, exc)
     return written

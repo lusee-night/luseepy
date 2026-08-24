@@ -14,7 +14,6 @@ import pytest
 
 from scripts import ingest_qualification_report as report
 
-
 SYNTHETIC_REFERENCE_ISOT = "2024-03-04T05:06:07"
 SYNTHETIC_SPECTROMETER_ANCHOR = 1234.5
 SYNTHETIC_DCB_ANCHOR = 6789.25
@@ -447,51 +446,16 @@ def test_bundle_semantic_comparator_reports_every_mismatch_class():
 
 def test_public_writer_reader_parity_for_supported_fields(tmp_path: Path):
     pytest.importorskip("h5py")
-    try:
-        from lusee.ingest.constants import NCHANNELS, NPRODUCTS
-        from lusee.ingest.decode import CalDataSample, Products, SpectrumSample
-        from lusee.ingest.fits_writer import write_fits
-        from lusee.ingest.hdf5_writer import write_hdf5
-    except ImportError as exc:
-        pytest.skip(f"current baseline ingest dependency boundary is unavailable: {exc}")
+    from test_layout_v4_hdf5 import make_all_family_request
 
-    products = Products(
-        spectra=[
-            SpectrumSample(
-                data=np.full((NPRODUCTS, NCHANNELS), row + 1, dtype=np.float32),
-                unique_packet_id=100 + row,
-                raw_seconds=SYNTHETIC_SPECTROMETER_ANCHOR + 10.0 + row,
-                metadata={
-                    "actual_bitslice": np.full(NPRODUCTS, 31, dtype=np.int16),
-                    "actual_gain": np.full(4, 1, dtype=np.int16),
-                    "Navgf": 1,
-                },
-            )
-            for row in range(2)
-        ],
-        cal_data=[
-            CalDataSample(
-                packet_idx=0,
-                channel_idx=0,
-                data=np.array([1.0, 2.0], dtype=np.float32),
-            )
-        ],
-    )
+    from lusee.ingest.fits_writer import write_fits
+    from lusee.ingest.hdf5_writer import write_hdf5
+
+    request = make_all_family_request()
     h5_path = tmp_path / "session.h5"
     fits_path = tmp_path / "session.fits"
-    from astropy.time import Time
-
-    writer_kwargs = {
-        "raw_time_subtract_seconds": SYNTHETIC_SPECTROMETER_ANCHOR,
-        "mjd_epoch_offset_days": float(
-            Time(SYNTHETIC_REFERENCE_ISOT, format="isot", scale="utc").mjd
-        ),
-        "time_scale": "utc",
-        "clock_source": "spectrometer_mission_counter",
-        "clock_epoch_isot": SYNTHETIC_REFERENCE_ISOT,
-    }
-    write_hdf5(products, h5_path, **writer_kwargs)
-    write_fits(products, fits_path, **writer_kwargs)
+    write_hdf5(request, h5_path)
+    write_fits(request, fits_path)
 
     hdf5 = report.read_public_bundle(h5_path, "h5")
     fits = report.read_public_bundle(fits_path, "fits")

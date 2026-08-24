@@ -1,209 +1,280 @@
-"""Focused tests for the layout-v3 normal-spectrum SDU invariant."""
+"""Restored-SDU contracts for layout v4 and legacy normalization readers."""
 
 from __future__ import annotations
 
 import shutil
+from dataclasses import fields, replace
 from pathlib import Path
 
 import numpy as np
 import pytest
+from test_layout_v4_hdf5 import make_all_family_request
+from test_layout_v4_hdf5_products import make_metadata
+
+from lusee.ingest.constants import (
+    BITSLICE_REFERENCE,
+    NCHANNELS,
+    NPRODUCTS,
+    SPECTRA_NORMALIZATION_VERSION,
+    SPECTRA_REPRESENTATION,
+    SPECTRA_UNITS,
+)
+from lusee.ingest.hdf5_writer import write_hdf5
+from lusee.ingest.layout_v4_reader import LayoutV4ValidationError
+from lusee.ingest.obs_factory import (
+    IngestData,
+    _concat_dict_arrays,
+    _load_h5,
+    load_bundle,
+)
+from lusee.ingest.products import SpectrumMetadata
+from lusee.LabeledArray import label
 
 h5py = pytest.importorskip("h5py")
 
-from lusee.ingest.constants import NCHANNELS, NPRODUCTS
-from lusee.ingest.decode import Products, SpectrumSample
-from lusee.ingest.hdf5_writer import write_hdf5
-from lusee.ingest.obs_factory import IngestData, _concat_dict_arrays, _load_h5
-from lusee.LabeledArray import label
+
+def normalized_request():
+    """Return one strict request with product-varying realized bit slices."""
+    request = make_all_family_request()
+    original = request.products.spectra[0]
+    bitslices = np.arange(
+        BITSLICE_REFERENCE,
+        BITSLICE_REFERENCE - NPRODUCTS,
+        -1,
+        dtype=np.uint8,
+    )
+    gains = np.array([2, 2, 1, 1], dtype=np.uint8)
+    decoded = np.empty_like(original.data)
+    for product in range(NPRODUCTS):
+        decoded[product] = np.float32(4.0 * (product + 1))
+    expected = np.ldexp(
+        decoded,
+        bitslices.astype(np.int16)[:, None] - BITSLICE_REFERENCE,
+    )
+    metadata = replace(
+        original.metadata,
+        actual_bitslice=bitslices,
+        actual_gain=gains,
+    )
+    row = replace(
+        original,
+        data=expected,
+        product_present=np.ones(NPRODUCTS, dtype=np.bool_),
+        metadata=metadata,
+    )
+    request.products.spectra[0] = row
+    request.validate()
+    return request, decoded, bitslices, gains, expected
 
 
-def _products_with_varying_bitslices():
-    # A product-constant cube makes a wrong row/product broadcast immediately
-    # visible while keeping the fixture compact and exactly representable.
+def spectrum_metadata_values() -> dict[str, object]:
+    metadata = make_metadata(101, 100.0)
+    return {
+        item.name: getattr(metadata, item.name)
+        for item in fields(metadata)
+        if item.init
+    }
+
+
+def legacy_spectra_arrays():
     decoded = np.empty((2, NPRODUCTS, NCHANNELS), dtype=np.float32)
     for row in range(decoded.shape[0]):
         for product in range(NPRODUCTS):
-            decoded[row, product] = 4.0 * (1 + row + product)
-
-    bitslices = np.array([
-        np.arange(31, 15, -1),
-        np.arange(16, 32),
-    ], dtype=np.int16)
-    gains = np.array([[2, 2, 2, 2], [1, 2, 1, 2]], dtype=np.int16)
-
-    products = Products()
-    for row in range(decoded.shape[0]):
-        products.spectra.append(SpectrumSample(
-            data=decoded[row].copy(),
-            unique_packet_id=100 + row,
-            raw_seconds=1000.0 + row,
-            metadata={
-                "actual_bitslice": bitslices[row].copy(),
-                "bitslice": np.full(NPRODUCTS, 15, dtype=np.int16),
-                "actual_gain": gains[row].copy(),
-                "Navgf": 1,
-            },
-        ))
-    expected = np.ldexp(decoded, bitslices[:, :, None] - 31)
-    return products, decoded, bitslices, gains, expected
+            decoded[row, product] = np.float32(4.0 * (1 + row + product))
+    bitslices = np.array(
+        [
+            np.arange(31, 15, -1),
+            np.arange(16, 32),
+        ],
+        dtype=np.uint8,
+    )
+    gains = np.array([[2, 2, 2, 2], [1, 2, 1, 2]], dtype=np.uint8)
+    expected = np.ldexp(
+        decoded,
+        bitslices.astype(np.int16)[:, :, None] - BITSLICE_REFERENCE,
+    )
+    return decoded, bitslices, gains, expected
 
 
-def test_v3_writer_normalizes_once_and_records_unambiguous_attrs(tmp_path: Path):
-    products, _, bitslices, gains, expected = _products_with_varying_bitslices()
+def write_legacy_spectra(
+    path: Path,
+    layout_version: int,
+    decoded: np.ndarray,
+    bitslices: np.ndarray,
+    gains: np.ndarray,
+    expected: np.ndarray,
+) -> None:
+    """Write a direct layout-v2/v3 fixture without a production writer."""
+    with h5py.File(path, "w") as handle:
+        handle.attrs["layout_version"] = np.uint16(layout_version)
+        spectra = handle.create_group("spectra")
+        data = spectra.create_dataset(
+            "data",
+            data=(decoded if layout_version == 2 else expected),
+        )
+        if layout_version == 3:
+            data.attrs["units"] = SPECTRA_UNITS
+            data.attrs["representation"] = SPECTRA_REPRESENTATION
+            data.attrs["bitslice_restored"] = np.uint8(1)
+            data.attrs["bitslice_reference"] = np.uint8(BITSLICE_REFERENCE)
+            data.attrs["normalization_version"] = np.uint16(
+                SPECTRA_NORMALIZATION_VERSION
+            )
+        metadata = spectra.create_group("metadata")
+        metadata.create_dataset(
+            "actual_bitslice",
+            data=(bitslices[:, None, :] if layout_version == 2 else bitslices),
+        )
+        metadata.create_dataset(
+            "actual_gain",
+            data=(gains[:, None, :] if layout_version == 2 else gains),
+        )
+
+
+def test_v4_writer_persists_restored_sdu_exactly_once(tmp_path: Path):
+    request, _, bitslices, gains, expected = normalized_request()
     first = tmp_path / "first.h5"
     second = tmp_path / "second.h5"
 
-    write_hdf5(products, first)
-    # Reusing an in-memory Products object must not apply the power of two a
-    # second time. This is the easiest regression path for double scaling.
-    write_hdf5(products, second)
+    request.products.spectra[0].restore_bitslice()
+    write_hdf5(request, first)
+    write_hdf5(request, second)
 
     for path in (first, second):
         with h5py.File(path, "r") as handle:
-            assert int(handle.attrs["layout_version"]) == 3
+            assert int(handle.attrs["layout_version"]) == 4
             data = handle["spectra/data"]
-            np.testing.assert_array_equal(data[...], expected)
-            assert data.attrs["units"] == "SDU"
-            assert data.attrs["representation"] == "gain_model_input_sdu"
-            assert int(data.attrs["bitslice_restored"]) == 1
-            assert int(data.attrs["bitslice_reference"]) == 31
-            assert int(data.attrs["normalization_version"]) == 1
+            np.testing.assert_array_equal(data[0, :, : expected.shape[1]], expected)
+            assert np.isnan(data[0, :, expected.shape[1] :]).all()
+            assert data.attrs["units"] == SPECTRA_UNITS
+            assert data.attrs["representation"] == SPECTRA_REPRESENTATION
+            assert data.attrs["bitslice_restored"] == np.bool_(True)
+            assert int(data.attrs["bitslice_reference"]) == BITSLICE_REFERENCE
+            assert (
+                int(data.attrs["normalization_version"])
+                == SPECTRA_NORMALIZATION_VERSION
+            )
 
-            actual_bitslice = handle["spectra/metadata/actual_bitslice"]
-            assert actual_bitslice.shape == (2, NPRODUCTS)
-            np.testing.assert_array_equal(actual_bitslice[...], bitslices)
-            assert int(actual_bitslice.attrs["applied_to_spectra"]) == 1
-            assert int(actual_bitslice.attrs["reference_bit"]) == 31
+            metadata = handle["spectra/metadata/fields"]
+            np.testing.assert_array_equal(
+                metadata["actual_bitslice/variant_000/data"][0],
+                bitslices,
+            )
+            np.testing.assert_array_equal(
+                metadata["actual_gain/variant_000/data"][0],
+                gains,
+            )
 
-            actual_gain = handle["spectra/metadata/actual_gain"]
-            assert actual_gain.shape == (2, 4)
-            np.testing.assert_array_equal(actual_gain[...], gains)
+    np.testing.assert_array_equal(request.products.spectra[0].data, expected)
+    request.products.spectra[0].restore_bitslice()
 
 
-def test_missing_actual_bitslice_fails_before_creating_a_file(tmp_path: Path):
-    products = Products(spectra=[SpectrumSample(
-        data=np.ones((NPRODUCTS, NCHANNELS), dtype=np.float32),
-        unique_packet_id=1,
-        raw_seconds=1.0,
-        # A requested bitslice is intentionally not an acceptable substitute
-        # for the realized value.
-        metadata={"bitslice": np.full(NPRODUCTS, 16, dtype=np.int16)},
-    )])
-    destination = tmp_path / "must-not-exist.h5"
+@pytest.mark.parametrize("missing", ("actual_bitslice", "actual_gain"))
+def test_missing_realized_metadata_fails_at_strict_record_boundary(missing: str):
+    values = spectrum_metadata_values()
+    del values[missing]
 
-    with pytest.raises(ValueError, match="no actual_bitslice"):
-        write_hdf5(products, destination)
-    assert not destination.exists()
+    with pytest.raises(TypeError, match=missing):
+        SpectrumMetadata(**values)
 
 
 @pytest.mark.parametrize(
-    "bad_bitslice, message",
-    [
-        (np.full(NPRODUCTS, 31.5), "integral"),
-        (np.full(NPRODUCTS, 32), r"\[0, 31\]"),
-        (np.full(NPRODUCTS - 1, 16), "16 values"),
-    ],
+    ("field", "bad_value", "error", "message"),
+    (
+        (
+            "actual_bitslice",
+            np.full(NPRODUCTS, 31.5),
+            TypeError,
+            "dtype uint8",
+        ),
+        (
+            "actual_bitslice",
+            np.full(NPRODUCTS, 32, dtype=np.uint8),
+            ValueError,
+            "actual_bitslice values",
+        ),
+        (
+            "actual_bitslice",
+            np.full(NPRODUCTS - 1, 16, dtype=np.uint8),
+            ValueError,
+            "shape",
+        ),
+        ("actual_gain", None, TypeError, "numpy.ndarray"),
+        (
+            "actual_gain",
+            np.array([0, 1, 2], dtype=np.uint8),
+            ValueError,
+            "shape",
+        ),
+    ),
 )
-def test_malformed_actual_bitslice_is_a_hard_error(
-    tmp_path: Path, bad_bitslice, message
+def test_malformed_realized_metadata_fails_at_strict_record_boundary(
+    field: str,
+    bad_value,
+    error,
+    message: str,
 ):
-    products = Products(spectra=[SpectrumSample(
-        data=np.ones((NPRODUCTS, NCHANNELS), dtype=np.float32),
-        unique_packet_id=1,
-        raw_seconds=1.0,
-        metadata={"actual_bitslice": bad_bitslice},
-    )])
-    destination = tmp_path / "bad.h5"
+    values = spectrum_metadata_values()
+    values[field] = bad_value
 
-    with pytest.raises(ValueError, match=message):
-        write_hdf5(products, destination)
-    assert not destination.exists()
-
-
-@pytest.mark.parametrize("gain", [None, np.array([0, 1, 2])])
-def test_missing_or_malformed_actual_gain_fails_before_file_creation(
-    tmp_path: Path, gain
-):
-    metadata = {
-        "actual_bitslice": np.full(NPRODUCTS, 16, dtype=np.int16),
-    }
-    if gain is not None:
-        metadata["actual_gain"] = gain
-    products = Products(spectra=[SpectrumSample(
-        data=np.ones((NPRODUCTS, NCHANNELS), dtype=np.float32),
-        unique_packet_id=1,
-        raw_seconds=1.0,
-        metadata=metadata,
-    )])
-    destination = tmp_path / "bad-gain.h5"
-
-    with pytest.raises(ValueError, match="actual_gain"):
-        write_hdf5(products, destination)
-    assert not destination.exists()
+    with pytest.raises(error, match=message):
+        SpectrumMetadata(**values)
 
 
 def test_layout_v2_and_v3_load_to_identical_in_memory_sdu(tmp_path: Path):
-    products, decoded, bitslices, gains, expected = _products_with_varying_bitslices()
-    v3 = tmp_path / "v3.h5"
+    decoded, bitslices, gains, expected = legacy_spectra_arrays()
     v2 = tmp_path / "v2.h5"
-    write_hdf5(products, v3)
+    v3 = tmp_path / "v3.h5"
+    write_legacy_spectra(v2, 2, decoded, bitslices, gains, expected)
+    write_legacy_spectra(v3, 3, decoded, bitslices, gains, expected)
 
-    # Construct the exact old representation: decoded bit-sliced values,
-    # layout_version=2, no v3 representation attrs, and legacy metadata shapes.
-    shutil.copy2(v3, v2)
-    with h5py.File(v2, "r+") as handle:
-        handle.attrs["layout_version"] = np.int64(2)
-        data = handle["spectra/data"]
-        data[...] = decoded
-        for name in (
-            "units", "representation", "bitslice_restored",
-            "bitslice_reference", "normalization_version",
-        ):
-            if name in data.attrs:
-                del data.attrs[name]
-        metadata = handle["spectra/metadata"]
-        del metadata["actual_bitslice"]
-        metadata.create_dataset("actual_bitslice", data=bitslices[:, None, :])
-        del metadata["actual_gain"]
-        metadata.create_dataset("actual_gain", data=gains[:, None, :])
-
-    v3_bundle = _load_h5(v3)
-    with pytest.warns(RuntimeWarning, match="layout-v2 spectra were bit-slice restored"):
+    with pytest.warns(
+        RuntimeWarning,
+        match="layout-v2 spectra were bit-slice restored",
+    ):
         v2_bundle = _load_h5(v2)
+    v3_bundle = _load_h5(v3)
 
-    np.testing.assert_array_equal(v3_bundle.spectra, expected)
     np.testing.assert_array_equal(v2_bundle.spectra, expected)
+    np.testing.assert_array_equal(v3_bundle.spectra, expected)
     np.testing.assert_array_equal(v2_bundle.spectra, v3_bundle.spectra)
-    assert v2_bundle.spectra_units == v3_bundle.spectra_units == "SDU"
+    assert v2_bundle.spectra_units == v3_bundle.spectra_units == SPECTRA_UNITS
     assert (
         v2_bundle.spectra_representation
         == v3_bundle.spectra_representation
-        == "gain_model_input_sdu"
+        == SPECTRA_REPRESENTATION
     )
     assert v2_bundle.spectra_metadata["actual_bitslice"].shape == (2, NPRODUCTS)
     assert v2_bundle.spectra_metadata["actual_gain"].shape == (2, 4)
 
 
-def test_layout_v3_refuses_missing_or_false_normalization_declaration(tmp_path: Path):
-    products, *_ = _products_with_varying_bitslices()
+@pytest.mark.parametrize(
+    ("attribute", "bad_value", "message"),
+    (
+        ("bitslice_restored", np.bool_(False), "bitslice_restored disagrees"),
+        (
+            "normalization_version",
+            np.uint16(99),
+            "normalization_version disagrees",
+        ),
+    ),
+)
+def test_layout_v4_rejects_corrupt_normalization_declaration(
+    tmp_path: Path,
+    attribute: str,
+    bad_value,
+    message: str,
+):
     valid = tmp_path / "valid.h5"
-    corrupt = tmp_path / "corrupt-bitslice.h5"
-    wrong_version = tmp_path / "corrupt-version.h5"
-    write_hdf5(products, valid)
+    corrupt = tmp_path / f"corrupt-{attribute}.h5"
+    request, *_ = normalized_request()
+    write_hdf5(request, valid)
     shutil.copy2(valid, corrupt)
-    shutil.copy2(valid, wrong_version)
-
     with h5py.File(corrupt, "r+") as handle:
-        handle["spectra/data"].attrs["bitslice_restored"] = np.int64(0)
+        handle["spectra/data"].attrs[attribute] = bad_value
 
-    with pytest.raises(ValueError, match="bitslice_restored=1"):
-        _load_h5(corrupt)
-
-    with h5py.File(wrong_version, "r+") as handle:
-        handle["spectra/data"].attrs["normalization_version"] = np.int64(99)
-
-    with pytest.raises(ValueError, match="normalization_version"):
-        _load_h5(wrong_version)
+    with pytest.raises(LayoutV4ValidationError, match=message):
+        load_bundle(corrupt)
 
 
 def test_lazy_conversion_and_indexing_keep_distinct_unit_decorations():
@@ -216,7 +287,10 @@ def test_lazy_conversion_and_indexing_keep_distinct_unit_decorations():
     raw = np.ones((nrow, NPRODUCTS, freqs.size), dtype=np.float32)
     raw[:, 4] = 3.0
     raw[:, 5] = -4.0
-    data.spectra = label(raw, units="SDU", frame="topo")
+    data.spectra = label(raw, units=SPECTRA_UNITS, frame="topo")
+    data.layout_version = 3
+    data.Nspectra = nrow
+    data.Nfreq = freqs.size
     data.freq = freqs
     data.metadata = {
         "actual_gain": np.full((nrow, 4), 2, dtype=np.int16),
@@ -233,9 +307,8 @@ def test_lazy_conversion_and_indexing_keep_distinct_unit_decorations():
         key: np.full(nrow, value) for key, value in telemetry_values.items()
     }
 
-    # Both forward and conjugated/reversed raw cross indexing remain SDU.
-    assert data[:, (0, 1, "C"), :].units == "SDU"
-    assert data[:, (1, 0, "C"), :].units == "SDU"
+    assert data[:, (0, 1, "C"), :].units == SPECTRA_UNITS
+    assert data[:, (1, 0, "C"), :].units == SPECTRA_UNITS
 
     asd = data.to_physical(chunk_size=1)
     psd = data.to_physical_psd(chunk_size=1)
@@ -243,9 +316,8 @@ def test_lazy_conversion_and_indexing_keep_distinct_unit_decorations():
     assert asd.units == "nV/sqrt(Hz)" and asd.frame == "topo"
     assert psd.units == "V^2/Hz" and psd.frame == "topo"
     assert native_psd.units == "nV^2/Hz" and native_psd.frame == "topo"
-    # Lazy views do not alter the normalized stored values or decoration.
     np.testing.assert_array_equal(np.asarray(data.spectra), raw)
-    assert data.spectra.units == "SDU"
+    assert data.spectra.units == SPECTRA_UNITS
 
 
 def test_realized_gain_codes_are_not_silently_rounded():
@@ -254,7 +326,7 @@ def test_realized_gain_codes_are_not_silently_rounded():
     assert IngestData._level_from_code(b"H") == "H"
     assert IngestData._level_from_code(1.5) is None
     assert IngestData._level_from_code(np.nan) is None
-    assert IngestData._level_from_code(4) is None  # firmware auto-gain state
+    assert IngestData._level_from_code(4) is None
 
 
 def test_concatenated_metadata_nan_fills_missing_sources_with_field_shape():
