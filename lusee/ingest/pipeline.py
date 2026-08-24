@@ -52,6 +52,7 @@ from .constants import (
 from .decode import Products, read_uncrater_session
 from .fits_writer import write_fits
 from .hdf5_writer import write_hdf5
+from .issues import IssueCollector
 from .session import (
     Session,
     assign_telemetry_to_sessions,
@@ -202,6 +203,8 @@ def _bank_path(flash_dir: Path, bank: str) -> Path:
 
 def parse_flash(
     flash_dir: Path | str,
+    *,
+    issue_collector: IssueCollector | None = None,
 ) -> Tuple[List[Session], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     """Parse a FLASH_TLMFS directory through Stage 4.
 
@@ -212,6 +215,8 @@ def parse_flash(
     ``assign_telemetry_to_sessions``.
     """
     flash_dir = Path(flash_dir)
+    if issue_collector is None:
+        issue_collector = IssueCollector()
     science_packets: List[LogicalPacket] = []
     telem_packets: List[LogicalPacket] = []
 
@@ -222,7 +227,11 @@ def parse_flash(
             continue
         log.info("reading science bank %s", path)
         for lp in reassemble_logical_packets(
-            parse_bank_file(path),
+            parse_bank_file(
+                path,
+                bank=bank,
+                issue_collector=issue_collector,
+            ),
             byteswap_pairs=True,
             bank=bank,
         ):
@@ -233,7 +242,11 @@ def parse_flash(
     if tpath.is_file():
         log.info("reading telemetry bank %s", tpath)
         for lp in reassemble_logical_packets(
-            parse_bank_file(tpath),
+            parse_bank_file(
+                tpath,
+                bank=TELEMETRY_BANK,
+                issue_collector=issue_collector,
+            ),
             byteswap_pairs=False,
             bank=TELEMETRY_BANK,
         ):
@@ -444,6 +457,7 @@ def _rederive_telemetry_from_flash(
     *,
     window_lower_raw_seconds: Optional[float],
     window_upper_raw_seconds: Optional[float],
+    issue_collector: IssueCollector | None = None,
 ) -> Tuple[Optional[Dict[str, np.ndarray]], Optional[Dict[str, np.ndarray]]]:
     """Re-parse b01 telemetry and slice it to one session's mission-time window.
 
@@ -456,9 +470,15 @@ def _rederive_telemetry_from_flash(
     tpath = _bank_path(flash_dir, TELEMETRY_BANK)
     if not tpath.is_file():
         return None, None
+    if issue_collector is None:
+        issue_collector = IssueCollector()
     log.info("re-deriving telemetry from %s", tpath)
     telem_packets = list(reassemble_logical_packets(
-        parse_bank_file(tpath),
+        parse_bank_file(
+            tpath,
+            bank=TELEMETRY_BANK,
+            issue_collector=issue_collector,
+        ),
         byteswap_pairs=False,
         bank=TELEMETRY_BANK,
     ))
@@ -491,6 +511,7 @@ def process_session(
     constants_kwargs: Optional[Dict[str, object]] = None,
     flash_root: Optional[Path | str] = None,
     rederive_telemetry: bool = True,
+    issue_collector: IssueCollector | None = None,
 ) -> SessionResult:
     """Process one already-extracted uncrater session directory.
 
@@ -511,6 +532,8 @@ def process_session(
     fits_dir = Path(fits_dir) if fits_dir else None
     plots_dir = Path(plots_dir) if plots_dir else None
     manifest_dir = Path(manifest_dir) if manifest_dir else None
+    if issue_collector is None:
+        issue_collector = IssueCollector()
 
     fpga_arrays: Optional[Dict[str, np.ndarray]] = None
     encoder_arrays: Optional[Dict[str, np.ndarray]] = None
@@ -549,6 +572,7 @@ def process_session(
                 candidate,
                 window_lower_raw_seconds=lower,
                 window_upper_raw_seconds=upper,
+                issue_collector=issue_collector,
             )
             if fpga_arrays or encoder_arrays:
                 telemetry_source = "flash"
@@ -615,6 +639,7 @@ def process_flash(
     interpolation_mode: str = "normalized",
     plot_names: Optional[Sequence[str]] = None,
     constants_kwargs: Optional[Dict[str, object]] = None,
+    issue_collector: IssueCollector | None = None,
 ) -> List[SessionResult]:
     """Single-pass: raw flash directory -> sessions on disk + HDF5/FITS/plots/manifests."""
     flash_dir = Path(flash_dir).resolve()
@@ -626,9 +651,14 @@ def process_flash(
     manifest_dir = Path(manifest_dir) if manifest_dir else None
     if session_name is None:
         session_name = default_session_name
+    if issue_collector is None:
+        issue_collector = IssueCollector()
 
     results: List[SessionResult] = []
-    sessions, _fpga_all, _enc_all = parse_flash(flash_dir)
+    sessions, _fpga_all, _enc_all = parse_flash(
+        flash_dir,
+        issue_collector=issue_collector,
+    )
 
     # Fingerprint the source flash dir once for all sessions in this run.
     flash_fingerprint = _fingerprint_flash(flash_dir)

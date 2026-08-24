@@ -34,11 +34,15 @@ from __future__ import annotations
 
 from .ccsds import (
     CcsdsFrame,
+    FrameLocation,
+    FramingResult,
     PrimaryHeader,
     crc16_ccitt,
     parse_bank_file,
+    parse_bank_file_diagnostic,
     parse_primary_header,
     parse_stream,
+    parse_stream_diagnostic,
 )
 from .collation import (
     LogicalPacket,
@@ -61,6 +65,14 @@ from .decode import (
 )
 from .fits_writer import write_fits
 from .hdf5_writer import write_hdf5
+from .issues import (
+    IngestIssue,
+    IngestIssueError,
+    IssueAction,
+    IssueCollector,
+    IssuePolicy,
+    IssueSeverity,
+)
 from .pipeline import (
     SessionResult,
     parse_flash,
@@ -125,8 +137,12 @@ def __dir__():
 
 __all__ = [
     # ccsds
-    "CcsdsFrame", "PrimaryHeader", "crc16_ccitt",
-    "parse_bank_file", "parse_primary_header", "parse_stream",
+    "CcsdsFrame", "FrameLocation", "FramingResult", "PrimaryHeader",
+    "crc16_ccitt", "parse_bank_file", "parse_bank_file_diagnostic",
+    "parse_primary_header", "parse_stream", "parse_stream_diagnostic",
+    # issues
+    "IngestIssue", "IngestIssueError", "IssueAction", "IssueCollector",
+    "IssuePolicy", "IssueSeverity",
     # collation
     "LogicalPacket", "assign_identities",
     "is_uid_prefixed", "is_uid_typed", "is_uid_derived", "is_dropped_appid",
