@@ -57,13 +57,29 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
     sessions_root = tmp_path / "sessions"
     flash_dir.mkdir()
     collector = IssueCollector()
-    seen = []
+    parse_seen = []
+    worker_seen = []
 
     def fake_parse_flash(path, *, issue_collector=None):
-        seen.append((path, issue_collector))
-        return [], {}, {}
+        parse_seen.append((path, issue_collector))
+        return [pipeline.Session(ordinal=0)], {}, {}
+
+    def fake_process_one_session(**kwargs):
+        worker_seen.append(kwargs)
+        return pipeline.SessionResult(
+            session_ordinal=kwargs["ordinal"],
+            session_name=kwargs["name"],
+            source_path=str(kwargs["source_path"]),
+            source_kind=kwargs["source_kind"],
+        )
 
     monkeypatch.setattr(pipeline, "parse_flash", fake_parse_flash)
+    monkeypatch.setattr(
+        pipeline,
+        "write_uncrater_session",
+        lambda session, session_dir: session_dir,
+    )
+    monkeypatch.setattr(pipeline, "_process_one_session", fake_process_one_session)
 
     result = pipeline.process_flash(
         flash_dir,
@@ -71,8 +87,10 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
         issue_collector=collector,
     )
 
-    assert result == []
-    assert seen == [(flash_dir.resolve(), collector)]
+    assert len(result) == 1
+    assert parse_seen == [(flash_dir.resolve(), collector)]
+    assert len(worker_seen) == 1
+    assert worker_seen[0]["issue_collector"] is collector
 
 
 def test_telemetry_rederive_uses_the_shared_collector(tmp_path, monkeypatch):
@@ -107,6 +125,7 @@ def test_telemetry_rederive_uses_the_shared_collector(tmp_path, monkeypatch):
 def test_process_session_forwards_decoder_policy(tmp_path, monkeypatch):
     session_dir = tmp_path / "session"
     session_dir.mkdir()
+    collector = IssueCollector()
     seen = []
 
     def fake_process_one_session(**kwargs):
@@ -131,18 +150,21 @@ def test_process_session_forwards_decoder_policy(tmp_path, monkeypatch):
         diagnostic_override=True,
         schema_variant="early",
         rederive_telemetry=False,
+        issue_collector=collector,
     )
 
     assert len(seen) == 1
     assert seen[0]["decoder_strict"] is True
     assert seen[0]["diagnostic_override"] is True
     assert seen[0]["schema_variant"] == "early"
+    assert seen[0]["issue_collector"] is collector
 
 
 def test_session_worker_forwards_decoder_policy_to_uncrater(
     tmp_path,
     monkeypatch,
 ):
+    collector = IssueCollector()
     seen = []
 
     def fake_read(path, **kwargs):
@@ -157,6 +179,7 @@ def test_session_worker_forwards_decoder_policy_to_uncrater(
         h5_dir=None,
         plots_dir=None,
         manifest_dir=None,
+        issue_collector=collector,
         decoder_strict=True,
         diagnostic_override=True,
         schema_variant="final",
@@ -169,6 +192,7 @@ def test_session_worker_forwards_decoder_policy_to_uncrater(
                 "strict": True,
                 "diagnostic_override": True,
                 "schema_variant": "final",
+                "issue_collector": collector,
             },
         )
     ]

@@ -5,12 +5,26 @@ from __future__ import annotations
 import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
 from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Mapping
 
+import numpy as np
+
 from .clock_reference import ClockSource
+from .constants import (
+    BITSLICE_REFERENCE,
+    MISSION_TIME_FRACT_DIVISOR,
+    MISSION_TIME_FRACT_SHIFT,
+    NCHANNELS,
+    NPRODUCTS,
+    SPECTRA_NORMALIZATION_VERSION,
+    SPECTRA_REPRESENTATION,
+    SPECTRA_UNITS,
+)
+from .frequency_contract import FrequencyWindowContract
 
 
 class DataQuality(StrEnum):
@@ -289,6 +303,533 @@ class ProductProvenance:
                 raise ValueError("raw_seconds must be finite or None")
         if self.time_valid != (raw_seconds is not None):
             raise ValueError("raw_seconds presence disagrees with time_valid")
+
+
+def _required_uint(value: int, bits: int, name: str) -> int:
+    if type(value) is not int:
+        raise TypeError(f"{name} must be an integer")
+    if not 0 <= value < 1 << bits:
+        raise ValueError(f"{name} must fit in an unsigned {bits}-bit integer")
+    return value
+
+
+def _optional_uint(value: int | None, bits: int, name: str) -> int | None:
+    if value is None:
+        return None
+    return _required_uint(value, bits, name)
+
+
+def _required_bool(value: bool, name: str) -> bool:
+    if type(value) is not bool:
+        raise TypeError(f"{name} must be a boolean")
+    return value
+
+
+def _finite_float(value: float, name: str) -> float:
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
+        raise TypeError(f"{name} must be numeric")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{name} must be finite")
+    return result
+
+
+def _optional_finite_float(value: float | None, name: str) -> float | None:
+    if value is None:
+        return None
+    return _finite_float(value, name)
+
+
+def _readonly_array(
+    value: np.ndarray,
+    *,
+    dtype: np.dtype | type,
+    shape: tuple[int, ...],
+    name: str,
+) -> np.ndarray:
+    """Copy an exact ndarray into storage backed by immutable bytes."""
+    if type(value) is not np.ndarray:
+        raise TypeError(f"{name} must be a numpy.ndarray")
+    expected_dtype = np.dtype(dtype)
+    if value.dtype != expected_dtype:
+        raise TypeError(
+            f"{name} must have dtype {expected_dtype}; got {value.dtype}"
+        )
+    if value.shape != shape:
+        raise ValueError(f"{name} must have shape {shape}; got {value.shape}")
+    immutable_bytes = value.tobytes(order="C")
+    return np.frombuffer(immutable_bytes, dtype=expected_dtype).reshape(shape)
+
+
+@dataclass(frozen=True, slots=True)
+class SpectrumMetadata(Mapping[str, object]):
+    """Normalized science metadata shared by normal and TR spectrum rows."""
+
+    version: int
+    unique_packet_id: int
+    uc_time: int
+    time_32: int | None
+    time_16: int | None
+    tvs_sensors: np.ndarray
+    requested_gain: np.ndarray
+    gain_auto_min: np.ndarray
+    gain_auto_mult: np.ndarray
+    route_plus: np.ndarray
+    route_minus: np.ndarray
+    navg1_shift: int
+    navg2_shift: int
+    notch: int
+    navgf: int
+    high_fraction: int
+    medium_fraction: int
+    requested_bitslice: np.ndarray
+    bitslice_keep_bits: int
+    output_format: int
+    reject_ratio: int
+    reject_max_bad: int
+    tr_start: int
+    tr_stop: int
+    tr_average_shift: int
+    errors: int
+    correlation_products_mask: int
+    actual_gain: np.ndarray
+    actual_bitslice: np.ndarray
+    spectrum_overflow: int
+    notch_overflow: int
+    adc_min: np.ndarray
+    adc_max: np.ndarray
+    adc_valid_count: np.ndarray
+    adc_invalid_count_max: np.ndarray
+    adc_invalid_count_min: np.ndarray
+    adc_total_count: np.ndarray
+    adc_mean: np.ndarray
+    adc_rms: np.ndarray
+    spectrometer_enable: bool
+    calibrator_enable: bool
+    random_state: int
+    weight: int
+    weight_current: int
+    telemetry_v1_0: float
+    telemetry_v1_8: float
+    telemetry_v2_5: float
+    telemetry_t_fpga: float
+    loop_count_min: int | None = None
+    loop_count_max: int | None = None
+    grimm_enable: int | None = None
+    averaging_mode: int | None = None
+    num_bad_min_current: int | None = None
+    num_bad_max_current: int | None = None
+    num_bad_min: int | None = None
+    num_bad_max: int | None = None
+    adc_statistics_valid: np.ndarray = field(init=False, repr=False)
+    current_fields_present: bool = field(init=False)
+
+    def __post_init__(self) -> None:
+        uint_fields = (
+            ("version", 16),
+            ("unique_packet_id", 32),
+            ("uc_time", 64),
+            ("navg1_shift", 8),
+            ("navg2_shift", 8),
+            ("notch", 8),
+            ("navgf", 8),
+            ("high_fraction", 8),
+            ("medium_fraction", 8),
+            ("bitslice_keep_bits", 8),
+            ("output_format", 8),
+            ("reject_ratio", 8),
+            ("reject_max_bad", 8),
+            ("tr_start", 16),
+            ("tr_stop", 16),
+            ("tr_average_shift", 16),
+            ("errors", 32),
+            ("correlation_products_mask", 16),
+            ("spectrum_overflow", 16),
+            ("notch_overflow", 16),
+            ("random_state", 32),
+            ("weight", 16),
+            ("weight_current", 16),
+        )
+        for name, bits in uint_fields:
+            _required_uint(getattr(self, name), bits, name)
+
+        if (self.time_32 is None) != (self.time_16 is None):
+            raise ValueError("time_32 and time_16 must be present together")
+        _optional_uint(self.time_32, 32, "time_32")
+        _optional_uint(self.time_16, 16, "time_16")
+        if self.navgf not in (1, 2, 3, 4):
+            raise ValueError("navgf must be one of 1, 2, 3, or 4")
+        if self.navg2_shift > 15:
+            raise ValueError("navg2_shift must lie in [0, 15]")
+        if self.tr_average_shift > 15:
+            raise ValueError("tr_average_shift must lie in [0, 15]")
+        if self.tr_start > NCHANNELS or self.tr_stop > NCHANNELS:
+            raise ValueError(
+                f"TR bounds must lie in [0, {NCHANNELS}]"
+            )
+
+        array_fields = (
+            ("tvs_sensors", np.uint16, (4,)),
+            ("requested_gain", np.uint8, (4,)),
+            ("gain_auto_min", np.uint16, (4,)),
+            ("gain_auto_mult", np.uint16, (4,)),
+            ("route_plus", np.uint8, (4,)),
+            ("route_minus", np.uint8, (4,)),
+            ("requested_bitslice", np.uint8, (NPRODUCTS,)),
+            ("actual_gain", np.uint8, (4,)),
+            ("actual_bitslice", np.uint8, (NPRODUCTS,)),
+            ("adc_min", np.int64, (4,)),
+            ("adc_max", np.int64, (4,)),
+            ("adc_valid_count", np.int64, (4,)),
+            ("adc_invalid_count_max", np.int64, (4,)),
+            ("adc_invalid_count_min", np.int64, (4,)),
+            ("adc_total_count", np.int64, (4,)),
+            ("adc_mean", np.float64, (4,)),
+            ("adc_rms", np.float64, (4,)),
+        )
+        normalized_arrays: dict[str, np.ndarray] = {}
+        for name, dtype, shape in array_fields:
+            normalized = _readonly_array(
+                getattr(self, name), dtype=dtype, shape=shape, name=name
+            )
+            normalized_arrays[name] = normalized
+            object.__setattr__(self, name, normalized)
+
+        requested_bitslice = normalized_arrays["requested_bitslice"]
+        if np.any(
+            (requested_bitslice > BITSLICE_REFERENCE)
+            & (requested_bitslice != np.uint8(0xFF))
+        ):
+            raise ValueError(
+                "requested_bitslice values must lie in "
+                f"[0, {BITSLICE_REFERENCE}] or equal 255"
+            )
+        actual_bitslice = normalized_arrays["actual_bitslice"]
+        if np.any(actual_bitslice > BITSLICE_REFERENCE):
+            raise ValueError(
+                "actual_bitslice values must lie in "
+                f"[0, {BITSLICE_REFERENCE}]"
+            )
+
+        count_names = (
+            "adc_valid_count",
+            "adc_invalid_count_max",
+            "adc_invalid_count_min",
+            "adc_total_count",
+        )
+        for name in count_names:
+            if np.any(normalized_arrays[name] < 0):
+                raise ValueError(f"{name} values must be nonnegative")
+        expected_total = np.asarray(
+            [
+                int(valid) + int(high) + int(low)
+                for valid, high, low in zip(
+                    normalized_arrays["adc_valid_count"],
+                    normalized_arrays["adc_invalid_count_max"],
+                    normalized_arrays["adc_invalid_count_min"],
+                )
+            ],
+            dtype=np.int64,
+        )
+        if not np.array_equal(
+            normalized_arrays["adc_total_count"], expected_total
+        ):
+            raise ValueError(
+                "adc_total_count must equal valid plus both invalid counts"
+            )
+        if not np.all(np.isfinite(normalized_arrays["adc_mean"])):
+            raise ValueError("adc_mean values must be finite")
+        if not np.all(np.isfinite(normalized_arrays["adc_rms"])):
+            raise ValueError("adc_rms values must be finite")
+        if np.any(normalized_arrays["adc_rms"] < 0):
+            raise ValueError("adc_rms values must be nonnegative")
+        adc_statistics_valid = _readonly_array(
+            np.asarray(
+                normalized_arrays["adc_valid_count"] > 0,
+                dtype=np.bool_,
+            ),
+            dtype=np.bool_,
+            shape=(4,),
+            name="adc_statistics_valid",
+        )
+        object.__setattr__(
+            self, "adc_statistics_valid", adc_statistics_valid
+        )
+
+        _required_bool(self.spectrometer_enable, "spectrometer_enable")
+        _required_bool(self.calibrator_enable, "calibrator_enable")
+        for name in (
+            "telemetry_v1_0",
+            "telemetry_v1_8",
+            "telemetry_v2_5",
+            "telemetry_t_fpga",
+        ):
+            object.__setattr__(
+                self, name, _finite_float(getattr(self, name), name)
+            )
+
+        current_fields = (
+            ("loop_count_min", 16),
+            ("loop_count_max", 16),
+            ("grimm_enable", 8),
+            ("averaging_mode", 8),
+            ("num_bad_min_current", 16),
+            ("num_bad_max_current", 16),
+            ("num_bad_min", 16),
+            ("num_bad_max", 16),
+        )
+        presence = tuple(getattr(self, name) is not None for name, _ in current_fields)
+        if any(presence) and not all(presence):
+            raise ValueError(
+                "current-schema metadata fields must be all present or all absent"
+            )
+        for name, bits in current_fields:
+            _optional_uint(getattr(self, name), bits, name)
+        object.__setattr__(self, "current_fields_present", all(presence))
+
+    @property
+    def raw_seconds(self) -> float | None:
+        """Return exact split mission time, or None when it is absent."""
+        if self.time_32 is None or self.time_16 is None:
+            return None
+        combined = (self.time_16 << 32) + self.time_32
+        return (
+            (combined >> MISSION_TIME_FRACT_SHIFT)
+            / MISSION_TIME_FRACT_DIVISOR
+        )
+
+    def as_mapping(self) -> Mapping[str, object]:
+        """Return a read-only mapping for transitional writer compatibility."""
+        values = {
+            item.name: getattr(self, item.name)
+            for item in fields(self)
+            if item.init and getattr(self, item.name) is not None
+        }
+        values["adc_statistics_valid"] = self.adc_statistics_valid
+        values["current_fields_present"] = self.current_fields_present
+        return MappingProxyType(values)
+
+    def __getitem__(self, key: str) -> object:
+        return self.as_mapping()[key]
+
+    def __iter__(self):
+        return iter(self.as_mapping())
+
+    def __len__(self) -> int:
+        return len(self.as_mapping())
+
+    def items(self):
+        """Return a read-only metadata items view."""
+        return self.as_mapping().items()
+
+
+def _validate_concrete_product_provenance(
+    provenance: ProductProvenance,
+    *,
+    unique_packet_id: int,
+    raw_seconds: float | None,
+) -> None:
+    if not isinstance(provenance, ProductProvenance):
+        raise TypeError("provenance must be a ProductProvenance record")
+    if provenance.unavailable_reason is not None:
+        raise ValueError("strict spectrum records require concrete provenance")
+    if provenance.selected_schema_id is None:
+        raise ValueError("strict spectrum provenance requires a selected schema")
+    if provenance.clock_source != ClockSource.SPECTROMETER.value:
+        raise ValueError(
+            "normal and TR spectrum provenance must use the spectrometer clock"
+        )
+    provenance.validate_product_identity(
+        unique_packet_id=unique_packet_id,
+        raw_seconds=raw_seconds,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SpectrumSample:
+    """One exact restored-SDU normal-spectrum row."""
+
+    data: np.ndarray
+    product_present: np.ndarray
+    navgf: int
+    frequency_contract: FrequencyWindowContract
+    unique_packet_id: int
+    raw_seconds: float | None
+    metadata: SpectrumMetadata
+    provenance: ProductProvenance
+    units: str = field(init=False, default=SPECTRA_UNITS)
+    representation: str = field(init=False, default=SPECTRA_REPRESENTATION)
+    normalization_version: int = field(
+        init=False, default=SPECTRA_NORMALIZATION_VERSION
+    )
+    bitslice_reference: int = field(init=False, default=BITSLICE_REFERENCE)
+
+    def __post_init__(self) -> None:
+        if type(self.navgf) is not int or self.navgf not in (1, 2, 3, 4):
+            raise ValueError("navgf must be one of 1, 2, 3, or 4")
+        if not isinstance(self.frequency_contract, FrequencyWindowContract):
+            raise TypeError(
+                "frequency_contract must be a FrequencyWindowContract"
+            )
+        if self.frequency_contract.navgf != self.navgf:
+            raise ValueError("navgf disagrees with frequency_contract")
+        nfreq = self.frequency_contract.output_count
+        data = _readonly_array(
+            self.data,
+            dtype=np.float32,
+            shape=(NPRODUCTS, nfreq),
+            name="normal spectrum data",
+        )
+        product_present = _readonly_array(
+            self.product_present,
+            dtype=np.bool_,
+            shape=(NPRODUCTS,),
+            name="normal spectrum product_present",
+        )
+        if not np.any(product_present):
+            raise ValueError("normal spectrum must contain at least one product")
+        if not np.all(np.isfinite(data[product_present])):
+            raise ValueError("present normal-spectrum products must be finite")
+        if np.any(~product_present) and not np.all(
+            np.isnan(data[~product_present])
+        ):
+            raise ValueError(
+                "absent normal-spectrum product planes must contain only NaN"
+            )
+
+        unique_packet_id = _optional_uid(
+            self.unique_packet_id, "unique_packet_id"
+        )
+        if unique_packet_id is None:
+            raise ValueError("unique_packet_id must be present")
+        raw_seconds = _optional_finite_float(self.raw_seconds, "raw_seconds")
+        if not isinstance(self.metadata, SpectrumMetadata):
+            raise TypeError("metadata must be a SpectrumMetadata record")
+        if self.metadata.unique_packet_id != unique_packet_id:
+            raise ValueError("metadata UID disagrees with spectrum UID")
+        if self.metadata.navgf != self.navgf:
+            raise ValueError("metadata navgf disagrees with spectrum navgf")
+        if self.metadata.weight == 0:
+            raise ValueError("normal spectrum metadata weight must be nonzero")
+        if self.metadata.raw_seconds != raw_seconds:
+            raise ValueError("metadata split time disagrees with raw_seconds")
+        _validate_concrete_product_provenance(
+            self.provenance,
+            unique_packet_id=unique_packet_id,
+            raw_seconds=raw_seconds,
+        )
+
+        object.__setattr__(self, "data", data)
+        object.__setattr__(self, "product_present", product_present)
+        object.__setattr__(self, "unique_packet_id", unique_packet_id)
+        object.__setattr__(self, "raw_seconds", raw_seconds)
+
+    @property
+    def nfreq(self) -> int:
+        """Number of native output channels in this row."""
+        return self.data.shape[1]
+
+    def restore_bitslice(self) -> None:
+        """Assert the immutable row is already in restored gain-model SDU."""
+        if (
+            self.units != SPECTRA_UNITS
+            or self.representation != SPECTRA_REPRESENTATION
+            or self.normalization_version != SPECTRA_NORMALIZATION_VERSION
+            or self.bitslice_reference != BITSLICE_REFERENCE
+            or self.data.dtype != np.dtype(np.float32)
+            or self.data.shape
+            != (NPRODUCTS, self.frequency_contract.output_count)
+        ):
+            raise ValueError(
+                "normal spectrum does not satisfy the restored-SDU invariant"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class TRSpectrumSample:
+    """One exact native-integer time-resolved spectrum row."""
+
+    data: np.ndarray
+    product_present: np.ndarray
+    unique_packet_id: int
+    raw_seconds: float | None
+    navg2: int
+    tr_length: int
+    metadata: SpectrumMetadata
+    provenance: ProductProvenance
+    units: str = field(init=False, default="unit_unestablished")
+    representation: str = field(init=False, default="native_int32")
+
+    def __post_init__(self) -> None:
+        navg2 = _required_nonnegative(self.navg2, "navg2")
+        tr_length = _required_nonnegative(self.tr_length, "tr_length")
+        if navg2 == 0 or tr_length == 0:
+            raise ValueError("navg2 and tr_length must be positive")
+        if not isinstance(self.metadata, SpectrumMetadata):
+            raise TypeError("metadata must be a SpectrumMetadata record")
+
+        start = self.metadata.tr_start
+        stop = self.metadata.tr_stop
+        if stop <= start:
+            raise ValueError("TR stop must be greater than TR start")
+        span = stop - start
+        average = 1 << self.metadata.tr_average_shift
+        if span % average:
+            raise ValueError(
+                "TR span must be divisible by its averaging factor"
+            )
+        expected_navg2 = 1 << self.metadata.navg2_shift
+        expected_tr_length = span // average
+        if navg2 != expected_navg2:
+            raise ValueError("navg2 disagrees with metadata navg2_shift")
+        if tr_length != expected_tr_length:
+            raise ValueError(
+                "tr_length disagrees with metadata TR geometry"
+            )
+
+        data = _readonly_array(
+            self.data,
+            dtype=np.int32,
+            shape=(NPRODUCTS, navg2, tr_length),
+            name="TR spectrum data",
+        )
+        product_present = _readonly_array(
+            self.product_present,
+            dtype=np.bool_,
+            shape=(NPRODUCTS,),
+            name="TR spectrum product_present",
+        )
+        if not np.any(product_present):
+            raise ValueError("TR spectrum must contain at least one product")
+        if np.any(~product_present) and np.any(data[~product_present] != 0):
+            raise ValueError(
+                "absent TR product backing planes must contain only zero"
+            )
+
+        unique_packet_id = _optional_uid(
+            self.unique_packet_id, "unique_packet_id"
+        )
+        if unique_packet_id is None:
+            raise ValueError("unique_packet_id must be present")
+        raw_seconds = _optional_finite_float(self.raw_seconds, "raw_seconds")
+        if self.metadata.unique_packet_id != unique_packet_id:
+            raise ValueError("metadata UID disagrees with TR spectrum UID")
+        if self.metadata.raw_seconds != raw_seconds:
+            raise ValueError("metadata split time disagrees with raw_seconds")
+        _validate_concrete_product_provenance(
+            self.provenance,
+            unique_packet_id=unique_packet_id,
+            raw_seconds=raw_seconds,
+        )
+
+        object.__setattr__(self, "data", data)
+        object.__setattr__(self, "product_present", product_present)
+        object.__setattr__(self, "unique_packet_id", unique_packet_id)
+        object.__setattr__(self, "raw_seconds", raw_seconds)
+        object.__setattr__(self, "navg2", navg2)
+        object.__setattr__(self, "tr_length", tr_length)
 
 
 @dataclass(frozen=True, slots=True)

@@ -20,6 +20,33 @@ with no reported decoder damage is ``clean``. Caller-built ``Products`` remain
 unassessed (``quality_status is None``) until a decoder boundary classifies
 them.
 
+Repaired-decoder spectrum boundary
+----------------------------------
+
+``read_uncrater_session`` imports each public uncrater decoder issue exactly
+once into the caller's ``IssueCollector``. Fatal decoder findings are
+``error/dropped``; nonfatal diagnostics are ``warning/kept``. Product
+provenance links those issue IDs to concrete packet indices and original and
+normalized AppIDs. The adapter does not invent packet filenames.
+
+Science metadata is normalized into a frozen ``SpectrumMetadata`` record for
+the reviewed ``203``, ``305``, ``306-early``, ``306-final``, and ``307``
+bindings. Required vectors have exact lengths. Split mission time is recomputed
+from ``time_32`` and ``time_16``; missing or inconsistent fields reject that
+metadata row instead of receiving a zero default.
+
+Normal spectra remain native-width ``float32`` records of shape
+``(16, Nfreq)``. The adapter validates ``Nfreq`` against ``Navgf``, applies the
+established bit-slice restoration exactly once, and keeps missing or rejected
+products as absent planes. TR spectra remain unscaled native ``int32`` records
+of shape ``(16, Navg2, Ntr)`` with geometry derived from the metadata settings.
+A metadata-only group does not create a fabricated science row. Duplicate or
+malformed products are dropped individually, so valid siblings survive.
+The top-level ``lusee.ingest`` spectrum exports are these validated records.
+The mutable rows still defined inside ``lusee.ingest.decode`` exist only for
+layout-v2/v3 caller-built compatibility and are excluded from validated
+product counts pending the layout-v4 cutover.
+
 Waveform clocks in layout v3
 ----------------------------
 

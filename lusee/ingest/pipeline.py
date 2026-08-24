@@ -332,6 +332,7 @@ def _process_one_session(
     h5_dir: Optional[Path],
     plots_dir: Optional[Path],
     manifest_dir: Optional[Path],
+    issue_collector: IssueCollector,
     fits_dir: Optional[Path] = None,
     fpga_arrays: Optional[Dict[str, np.ndarray]] = None,
     encoder_arrays: Optional[Dict[str, np.ndarray]] = None,
@@ -348,6 +349,7 @@ def _process_one_session(
 ) -> SessionResult:
     products = read_uncrater_session(
         session_dir,
+        issue_collector=issue_collector,
         strict=decoder_strict,
         diagnostic_override=diagnostic_override,
         schema_variant=schema_variant,
@@ -612,6 +614,7 @@ def process_session(
             fits_dir=fits_dir,
             plots_dir=plots_dir,
             manifest_dir=manifest_dir,
+            issue_collector=issue_collector,
             fpga_arrays=fpga_arrays,
             encoder_arrays=encoder_arrays,
             has_legacy_sidecar=sidecar is not None,
@@ -712,6 +715,7 @@ def process_flash(
                 fits_dir=fits_dir,
                 plots_dir=plots_dir,
                 manifest_dir=manifest_dir,
+                issue_collector=issue_collector,
                 fpga_arrays=fpga_arrays,
                 encoder_arrays=encoder_arrays,
                 has_legacy_sidecar=False,

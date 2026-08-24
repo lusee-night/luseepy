@@ -82,8 +82,6 @@ _LAZY_EXPORTS = {
     "CalDataSample": ("decode", "CalDataSample"),
     "HKSample": ("decode", "HKSample"),
     "Products": ("decode", "Products"),
-    "SpectrumSample": ("decode", "SpectrumSample"),
-    "TRSpectrumSample": ("decode", "TRSpectrumSample"),
     "WaveformSample": ("decode", "WaveformSample"),
     "ZoomSample": ("decode", "ZoomSample"),
     "read_uncrater_session": ("decode", "read_uncrater_session"),
@@ -93,6 +91,9 @@ _LAZY_EXPORTS = {
     "ExecutionMode": ("products", "ExecutionMode"),
     "ProductProvenance": ("products", "ProductProvenance"),
     "SourcePacketProvenance": ("products", "SourcePacketProvenance"),
+    "SpectrumMetadata": ("products", "SpectrumMetadata"),
+    "SpectrumSample": ("products", "SpectrumSample"),
+    "TRSpectrumSample": ("products", "TRSpectrumSample"),
     "ValidatedCounts": ("products", "ValidatedCounts"),
     # Versioned frequency-window and clock-reference contracts
     "ClockReference": ("clock_reference", "ClockReference"),
@@ -188,7 +189,8 @@ __all__ = [
     "read_uncrater_session",
     # product/decode provenance
     "DataQuality", "DecodeProvenance", "ExecutionMode",
-    "ProductProvenance", "SourcePacketProvenance", "ValidatedCounts",
+    "ProductProvenance", "SourcePacketProvenance", "SpectrumMetadata",
+    "ValidatedCounts",
     # v4 clock and frequency contracts
     "ClockReference", "ClockReferenceFormatError", "ClockReferenceSet",
     "ClockReferenceUnavailableError", "ClockSource",

@@ -2,17 +2,58 @@ from __future__ import annotations
 
 import sys
 from collections import Counter
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, dataclass, replace
 from types import ModuleType, SimpleNamespace
 
 import pytest
 
 from lusee.ingest import uncrater_adapter as adapter
+from lusee.ingest.issues import (
+    IngestIssueError,
+    IssueAction,
+    IssueCollector,
+    IssuePolicy,
+    IssueSeverity,
+)
 
 
 class FakePacketBase:
     def read(self):
         return None
+
+
+class FakeMetadata(FakePacketBase):
+    pass
+
+
+class FakeSpectrum(FakePacketBase):
+    pass
+
+
+class FakeTRSpectrum(FakePacketBase):
+    pass
+
+
+@dataclass(frozen=True)
+class FakeDecodeIssue:
+    code: str
+    message: str
+    appid: int | None = None
+    source: str | None = None
+    fatal: bool = False
+    details: tuple[tuple[str, object], ...] = ()
+
+
+class FakeDecodeStatus:
+    def __init__(self, issues=()):
+        self._issues = tuple(issues)
+
+    @property
+    def issues(self):
+        return self._issues
+
+    def counts(self):
+        return dict(Counter(issue.code for issue in self._issues))
 
 
 class FakeCollection:
@@ -29,6 +70,8 @@ class FakeCollection:
         self.calls.append(
             (directory, strict, diagnostic_override, schema_variant)
         )
+        self.cont = []
+        self.decode_status = FakeDecodeStatus()
 
     def canonical_report(self):
         return {"public": True}
@@ -53,9 +96,17 @@ def fake_decoder(monkeypatch):
     package.PacketBase = FakePacketBase
     package.Collection = FakeCollection
     package.Packet = lambda *args, **kwargs: None
+    package.Packet_Metadata = FakeMetadata
+    package.Packet_Spectrum = FakeSpectrum
+    package.Packet_TR_Spectrum = FakeTRSpectrum
+    package.NPRODUCTS = 16
+    package.NCHANNELS = 2048
+    package.normalize_dcb_appid = lambda appid: (
+        0x2F0 if appid == 0x4F0 else appid
+    )
     package.id = SimpleNamespace()
     for name in adapter._REQUIRED_TOP_LEVEL:
-        if name in {"PacketBase", "Collection", "Packet", "id"}:
+        if hasattr(package, name):
             continue
         setattr(package, name, lambda appid: False)
 
@@ -65,8 +116,8 @@ def fake_decoder(monkeypatch):
     registry.resolve_wire_version = lambda version: None
 
     status = ModuleType("uncrater.decode_status")
-    status.DecodeIssue = type("DecodeIssue", (), {})
-    status.DecodeStatus = type("DecodeStatus", (), {})
+    status.DecodeIssue = FakeDecodeIssue
+    status.DecodeStatus = FakeDecodeStatus
     status.PacketDecodeError = type("PacketDecodeError", (ValueError,), {})
 
     monkeypatch.setitem(sys.modules, "uncrater", package)
@@ -76,6 +127,64 @@ def fake_decoder(monkeypatch):
     adapter.load_uncrater.cache_clear()
     yield package
     adapter.load_uncrater.cache_clear()
+
+
+def fake_packet(
+    packet_class=FakeSpectrum,
+    *,
+    packet_index=7,
+    original_appid=0x210,
+    appid=0x210,
+    schema_id=0x307,
+    binding_key="307",
+    reported_version=0x307,
+    binding_variant=None,
+    schema_assumed=False,
+    source_release=FakeBinding.source_release,
+    source_commit=FakeBinding.source_commit,
+    abi_fingerprint=FakeBinding.abi_fingerprint,
+    issues=(),
+):
+    packet = packet_class()
+    packet.packet_index = packet_index
+    packet.original_appid = original_appid
+    packet.appid = appid
+    packet.schema_id = schema_id
+    packet.schema = SimpleNamespace(binding_key=binding_key)
+    packet.reported_version = reported_version
+    packet.binding_provenance = {
+        "binding_key": binding_key,
+        "canonical_schema_id": schema_id,
+        "variant": binding_variant,
+        "source_release": source_release,
+        "source_commit": source_commit,
+        "abi": {"sha256": abi_fingerprint},
+    }
+    packet.schema_assumed = schema_assumed
+    packet.decode_status = FakeDecodeStatus(issues)
+    return packet
+
+
+def fake_binding(
+    *,
+    reported_schema_ids=(0x307,),
+    selected_schema_id=0x307,
+    binding_key="307",
+    variant=None,
+    schema_assumed=False,
+) -> adapter.UncraterBindingInfo:
+    return adapter.UncraterBindingInfo(
+        reported_schema_ids=reported_schema_ids,
+        selected_schema_id=selected_schema_id,
+        binding_key=binding_key,
+        variant=variant,
+        schema_assumed=schema_assumed,
+        source_release=FakeBinding.source_release,
+        source_commit=FakeBinding.source_commit,
+        abi_fingerprint=FakeBinding.abi_fingerprint,
+        appid_counts=(),
+        issue_counts=(),
+    )
 
 
 def test_public_only_decoder_and_collection_policy_forwarding(fake_decoder):
@@ -106,6 +215,343 @@ def test_public_only_decoder_and_collection_policy_forwarding(fake_decoder):
         ("capture", False, False, None),
         ("capture", True, True, "early"),
     ]
+
+
+def test_required_spectrum_classes_and_dimensions_fail_closed(fake_decoder):
+    fake_decoder.NPRODUCTS = 15
+    adapter.load_uncrater.cache_clear()
+    with pytest.raises(adapter.IncompatibleUncraterError, match="NPRODUCTS"):
+        adapter.load_uncrater()
+
+    fake_decoder.NPRODUCTS = 16
+    fake_decoder.Packet_Metadata = object()
+    adapter.load_uncrater.cache_clear()
+    with pytest.raises(adapter.IncompatibleUncraterError, match="Packet_Metadata"):
+        adapter.load_uncrater()
+
+
+@pytest.mark.parametrize("copy_packet_issues", [False, True])
+def test_import_decode_issues_deduplicates_collection_and_packet_statuses(
+    fake_decoder,
+    copy_packet_issues,
+):
+    diagnostic = FakeDecodeIssue(
+        code="crc_mismatch",
+        message="CRC differs",
+        appid=0x210,
+        source="00007_0210.bin",
+        fatal=False,
+        details=(("expected", 1), ("observed", 2)),
+    )
+    fatal = FakeDecodeIssue(
+        code="payload_decode_failed",
+        message="payload is truncated",
+        appid=0x210,
+        source="00007_0210.bin",
+        fatal=True,
+        details=(("available", 3),),
+    )
+    assembly = FakeDecodeIssue(
+        code="duplicate_numeric_index",
+        message="packet index is duplicated",
+        appid=0x210,
+        source="00007_0210.bin",
+        fatal=False,
+        details=(("packet_index", 7), ("filenames", ["a.bin", "b.bin"])),
+    )
+    packet = fake_packet(issues=(diagnostic, fatal))
+    collection = FakeCollection("capture")
+    collection.cont = [packet]
+    # Real Collection.decode_status retains the same immutable packet issues
+    aggregate = (
+        (replace(diagnostic), replace(fatal))
+        if copy_packet_issues
+        else (diagnostic, fatal)
+    )
+    collection.decode_status = FakeDecodeStatus((assembly, *aggregate))
+    collector = IssueCollector()
+    collector.record(
+        code="framing.test",
+        severity="info",
+        stage="framing",
+        message="preexisting",
+        action="kept",
+    )
+
+    imported = adapter.import_decode_issues(
+        collection,
+        collector,
+        fake_binding(),
+    )
+
+    assert [issue.issue_id for issue in imported.issues] == [
+        "issue-00000002",
+        "issue-00000003",
+        "issue-00000004",
+    ]
+    assert [issue.code for issue in imported.issues] == [
+        "decode.duplicate_numeric_index",
+        "decode.crc_mismatch",
+        "decode.payload_decode_failed",
+    ]
+    assert imported.issues[0].severity is IssueSeverity.WARNING
+    assert imported.issues[0].action is IssueAction.KEPT
+    assert imported.issues[1].packet_index == 7
+    assert imported.issues[1].appid == 0x210
+    assert imported.issues[1].input_identity == "00007_0210.bin"
+    assert imported.issues[1].as_dict()["details"] == {
+        "expected": 1,
+        "observed": 2,
+    }
+    assert imported.issues[2].severity is IssueSeverity.ERROR
+    assert imported.issues[2].action is IssueAction.DROPPED
+    assert imported.issue_ids_by_packet_index == {
+        7: (
+            "issue-00000002",
+            "issue-00000003",
+            "issue-00000004",
+        ),
+    }
+    assert len(collector.issues) == 4
+    with pytest.raises(TypeError):
+        imported.issue_ids_by_packet_index[7] = ()
+
+
+def test_import_decode_issues_preserves_strict_collector_policy(fake_decoder):
+    issue = FakeDecodeIssue(
+        code="crc_mismatch",
+        message="CRC differs",
+        appid=0x210,
+        source="00007_0210.bin",
+    )
+    collection = FakeCollection("capture")
+    collection.cont = [fake_packet(issues=(issue,))]
+    collection.decode_status = FakeDecodeStatus((issue,))
+    collector = IssueCollector(IssuePolicy.STRICT)
+
+    with pytest.raises(IngestIssueError) as caught:
+        adapter.import_decode_issues(collection, collector, fake_binding())
+
+    assert caught.value.issue.code == "decode.crc_mismatch"
+    assert collector.issues == (caught.value.issue,)
+
+
+def test_source_packet_provenance_uses_only_concrete_public_fields(fake_decoder):
+    packet = fake_packet()
+
+    provenance = adapter.source_packet_provenance(
+        packet,
+        role="normal_product_0",
+        binding=fake_binding(),
+    )
+
+    assert provenance.role == "normal_product_0"
+    assert provenance.filename is None
+    assert provenance.packet_index == 7
+    assert provenance.original_appid == 0x210
+    assert provenance.normalized_appid == 0x210
+
+    normalized = adapter.source_packet_provenance(
+        fake_packet(original_appid=0x4F0, appid=0x2F0),
+        role="waveform",
+        binding=fake_binding(),
+    )
+    assert normalized.original_appid == 0x4F0
+    assert normalized.normalized_appid == 0x2F0
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("packet_index", "packet_index"),
+        ("original_appid", "original_appid"),
+        ("appid", "appid"),
+        ("schema_id", "schema_id"),
+        ("decode_status", "decode_status"),
+        ("schema", "schema"),
+        ("reported_version", "reported_version"),
+        ("binding_provenance", "binding_provenance"),
+        ("schema_assumed", "schema_assumed"),
+    ],
+)
+def test_source_packet_provenance_rejects_missing_public_fields(
+    fake_decoder,
+    field,
+    message,
+):
+    packet = fake_packet()
+    delattr(packet, field)
+
+    with pytest.raises(adapter.IncompatibleUncraterError, match=message):
+        adapter.source_packet_provenance(
+            packet,
+            role="normal_product_0",
+            binding=fake_binding(),
+        )
+
+
+def test_source_packet_provenance_rejects_contract_disagreement(fake_decoder):
+    wrong_appid = fake_packet(appid=0x211)
+    with pytest.raises(adapter.IncompatibleUncraterError, match="AppID"):
+        adapter.source_packet_provenance(
+            wrong_appid,
+            role="normal_product_0",
+            binding=fake_binding(),
+        )
+
+    wrong_schema = fake_packet(schema_id=0x306)
+    with pytest.raises(adapter.IncompatibleUncraterError, match="schema"):
+        adapter.source_packet_provenance(
+            wrong_schema,
+            role="normal_product_0",
+            binding=fake_binding(),
+        )
+
+    malformed_status = fake_packet()
+    malformed_status.decode_status = SimpleNamespace(issues=())
+    with pytest.raises(adapter.IncompatibleUncraterError, match="DecodeStatus"):
+        adapter.source_packet_provenance(
+            malformed_status,
+            role="normal_product_0",
+            binding=fake_binding(),
+        )
+
+
+def test_source_packet_provenance_rejects_wrong_306_binding(fake_decoder):
+    binding = fake_binding(
+        reported_schema_ids=(0x306,),
+        selected_schema_id=0x306,
+        binding_key="306-early",
+        variant="early",
+    )
+    matching = fake_packet(
+        schema_id=0x306,
+        binding_key="306-early",
+        reported_version=0x306,
+        binding_variant="early",
+    )
+    assert adapter.source_packet_provenance(
+        matching,
+        role="normal_product_0",
+        binding=binding,
+    ).packet_index == 7
+
+    packet = fake_packet(
+        schema_id=0x306,
+        binding_key="306-final",
+        reported_version=0x306,
+        binding_variant="final",
+    )
+
+    with pytest.raises(adapter.IncompatibleUncraterError, match="binding keys"):
+        adapter.source_packet_provenance(
+            packet,
+            role="normal_product_0",
+            binding=binding,
+        )
+
+
+def test_source_packet_provenance_rejects_binding_provenance_drift(fake_decoder):
+    missing_binding_key = fake_packet()
+    missing_binding_key.schema = SimpleNamespace()
+    with pytest.raises(adapter.IncompatibleUncraterError, match="binding_key"):
+        adapter.source_packet_provenance(
+            missing_binding_key,
+            role="normal_product_0",
+            binding=fake_binding(),
+        )
+
+    wrong_reported_version = fake_packet(reported_version=0x306)
+    with pytest.raises(adapter.IncompatibleUncraterError, match="reported"):
+        adapter.source_packet_provenance(
+            wrong_reported_version,
+            role="normal_product_0",
+            binding=fake_binding(),
+        )
+
+    wrong_assumption = fake_packet(schema_assumed=True)
+    with pytest.raises(adapter.IncompatibleUncraterError, match="schema_assumed"):
+        adapter.source_packet_provenance(
+            wrong_assumption,
+            role="normal_product_0",
+            binding=fake_binding(),
+        )
+
+    wrong_provenance = fake_packet(source_commit="wrong")
+    with pytest.raises(
+        adapter.IncompatibleUncraterError,
+        match="binding_provenance disagrees on source_commit",
+    ):
+        adapter.source_packet_provenance(
+            wrong_provenance,
+            role="normal_product_0",
+            binding=fake_binding(),
+        )
+
+    wrong_abi = fake_packet(abi_fingerprint="wrong")
+    with pytest.raises(adapter.IncompatibleUncraterError, match="ABI fingerprint"):
+        adapter.source_packet_provenance(
+            wrong_abi,
+            role="normal_product_0",
+            binding=fake_binding(),
+        )
+
+
+def test_import_decode_issues_rejects_wrong_306_binding_before_mutation(
+    fake_decoder,
+):
+    binding = fake_binding(
+        reported_schema_ids=(0x306,),
+        selected_schema_id=0x306,
+        binding_key="306-early",
+        variant="early",
+    )
+    collection = FakeCollection("capture")
+    collection.cont = [
+        fake_packet(
+            schema_id=0x306,
+            binding_key="306-final",
+            reported_version=0x306,
+            binding_variant="final",
+        )
+    ]
+    collector = IssueCollector()
+    preexisting = collector.record(
+        code="framing.test",
+        severity="info",
+        stage="framing",
+        message="preexisting",
+        action="kept",
+    )
+
+    with pytest.raises(adapter.IncompatibleUncraterError, match="binding keys"):
+        adapter.import_decode_issues(collection, collector, binding)
+
+    assert collector.issues == (preexisting,)
+
+
+def test_import_decode_issues_validates_before_mutating_collector(fake_decoder):
+    valid = FakeDecodeIssue(
+        code="crc_mismatch",
+        message="CRC differs",
+        appid=0x210,
+    )
+    malformed = FakeDecodeIssue(
+        code="payload_decode_failed",
+        message="bad fatal field",
+        appid=0x210,
+        fatal=1,
+    )
+    packet = fake_packet(issues=(valid, malformed))
+    collection = FakeCollection("capture")
+    collection.cont = [packet]
+    collection.decode_status = FakeDecodeStatus((valid, malformed))
+    collector = IssueCollector()
+
+    with pytest.raises(adapter.IncompatibleUncraterError, match="fatal"):
+        adapter.import_decode_issues(collection, collector, fake_binding())
+
+    assert collector.issues == ()
 
 
 def test_decoder_and_binding_provenance_is_immutable_and_sorted(
@@ -291,6 +737,11 @@ def test_real_empty_collection_matches_pinned_decoder(tmp_path):
     decode_provenance = adapter.collection_provenance(
         collection, strict=False
     )
+    imported = adapter.import_decode_issues(
+        collection,
+        IssueCollector(),
+        provenance,
+    )
 
     assert decoder.__version__ == "1.0.0"
     decoder_provenance = adapter.decoder_info()
@@ -323,6 +774,8 @@ def test_real_empty_collection_matches_pinned_decoder(tmp_path):
     assert decode_provenance.valid_packet_count == 0
     assert decode_provenance.execution_mode.value == "collect"
     assert decode_provenance.canonical_report() == report
+    assert dict(imported.issue_ids_by_packet_index) == {}
+    assert imported.issues == ()
 
     from lusee.ingest.decode import read_uncrater_session
 
