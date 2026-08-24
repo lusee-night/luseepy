@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from lusee.ingest import pipeline
 from lusee.ingest.constants import BANK_FILENAME, SCIENCE_BANKS, TELEMETRY_BANK
+from lusee.ingest.decode import Products
 from lusee.ingest.issues import IssueCollector
 
 
@@ -101,3 +102,73 @@ def test_telemetry_rederive_uses_the_shared_collector(tmp_path, monkeypatch):
     assert len(seen) == 1
     assert seen[0][1] == TELEMETRY_BANK
     assert seen[0][2] is collector
+
+
+def test_process_session_forwards_decoder_policy(tmp_path, monkeypatch):
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    seen = []
+
+    def fake_process_one_session(**kwargs):
+        seen.append(kwargs)
+        return pipeline.SessionResult(
+            session_ordinal=kwargs["ordinal"],
+            session_name=kwargs["name"],
+            source_path=str(kwargs["source_path"]),
+            source_kind=kwargs["source_kind"],
+        )
+
+    monkeypatch.setattr(pipeline, "_process_one_session", fake_process_one_session)
+    monkeypatch.setattr(
+        pipeline.telemetry_mod,
+        "find_legacy_sidecar",
+        lambda path: None,
+    )
+
+    pipeline.process_session(
+        session_dir,
+        decoder_strict=True,
+        diagnostic_override=True,
+        schema_variant="early",
+        rederive_telemetry=False,
+    )
+
+    assert len(seen) == 1
+    assert seen[0]["decoder_strict"] is True
+    assert seen[0]["diagnostic_override"] is True
+    assert seen[0]["schema_variant"] == "early"
+
+
+def test_session_worker_forwards_decoder_policy_to_uncrater(
+    tmp_path,
+    monkeypatch,
+):
+    seen = []
+
+    def fake_read(path, **kwargs):
+        seen.append((path, kwargs))
+        return Products()
+
+    monkeypatch.setattr(pipeline, "read_uncrater_session", fake_read)
+    pipeline._process_one_session(
+        session_dir=tmp_path,
+        name="session",
+        ordinal=0,
+        h5_dir=None,
+        plots_dir=None,
+        manifest_dir=None,
+        decoder_strict=True,
+        diagnostic_override=True,
+        schema_variant="final",
+    )
+
+    assert seen == [
+        (
+            tmp_path,
+            {
+                "strict": True,
+                "diagnostic_override": True,
+                "schema_variant": "final",
+            },
+        )
+    ]

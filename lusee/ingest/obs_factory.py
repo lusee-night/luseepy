@@ -42,6 +42,7 @@ from .constants import (
     SPECTRA_UNITS,
 )
 from .decode import canonical_actual_bitslice, restore_bitsliced_spectra
+from .dependencies import import_optional_dependency
 
 log = logging.getLogger(__name__)
 
@@ -176,7 +177,7 @@ def _resolve_paths(target, *, prefer_format: str = "h5") -> List[Path]:
 # ---------------------------------------------------------------------------
 
 def _load_h5(path: Path) -> SessionBundle:
-    import h5py
+    h5py = import_optional_dependency("h5py", "HDF5 ingest input")
 
     bundle = SessionBundle(source_path=path)
     with h5py.File(path, "r") as f:

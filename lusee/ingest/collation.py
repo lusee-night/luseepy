@@ -13,66 +13,62 @@ comes from:
 * uid-derived:  no embedded uid; inherit from the most recent preceding
                 uid-prefixed or uid-typed packet.
 
-AppID constants and the per-APID predicates come from the ``uncrater``
-package (which itself wraps ``pycoreloop`` and honors ``CORELOOP_DIR``).
-This is the single coreloop integration point for the whole pipeline.
+AppID constants and the per-APID predicates come from the public ``uncrater``
+API through :mod:`lusee.ingest.uncrater_adapter`.
 """
 
 from __future__ import annotations
 
 import logging
 import warnings
-from dataclasses import dataclass, field
-from typing import Callable, Iterable, Iterator, List, Optional
+from typing import Callable, Iterable, List, Optional
 
-from uncrater import (
-    Packet,
-    appid_is_cal_any,
-    appid_is_grimm_spectrum,
-    appid_is_heartbeat,
-    appid_is_hello,
-    appid_is_housekeeping,
-    appid_is_metadata,
-    appid_is_raw_adc,
-    appid_is_spectrum,
-    appid_is_tr_spectrum,
-    appid_is_watchdog,
-    appid_is_zoom_spectrum,
-)
-from uncrater.coreloop import pycoreloop
-
-appId = pycoreloop.appId
-
-from .ccsds import CcsdsFrame
+from .reassembly import LogicalPacket, reassemble_logical_packets
+from .uncrater_adapter import load_uncrater, read_packet
 
 log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# AppID constants -- sourced from coreloop via uncrater
+# Compatibility AppID constants -- resolved lazily from public uncrater.id
 # ---------------------------------------------------------------------------
 
-APID_HK            = appId.AppID_uC_Housekeeping
-APID_EOS           = appId.AppID_End_Of_Sequence
-APID_BOOTLOADER    = appId.AppID_uC_Bootloader
-APID_HELLO         = appId.AppID_uC_Start
-APID_HEARTBEAT     = appId.AppID_uC_Heartbeat
-APID_WATCHDOG      = appId.AppID_Watchdog
-APID_METADATA      = appId.AppID_MetaData
-APID_SPECTRA_HIGH  = appId.AppID_SpectraHigh
-APID_SPECTRA_MED   = appId.AppID_SpectraMed
-APID_SPECTRA_LOW   = appId.AppID_SpectraLow
-APID_TR_HIGH       = appId.AppID_SpectraTRHigh
-APID_TR_MED        = appId.AppID_SpectraTRMed
-APID_TR_LOW        = appId.AppID_SpectraTRLow
-APID_ZOOM          = appId.AppID_ZoomSpectra
-APID_CAL_METADATA  = appId.AppID_Calibrator_MetaData
-APID_CAL_DATA      = appId.AppID_Calibrator_Data
-APID_CAL_RAW_PFB   = appId.AppID_Calibrator_RawPFB
-APID_CAL_DEBUG     = appId.AppID_Calibrator_Debug
-APID_GRIMM         = appId.AppID_SpectraGrimm
-APID_RAW_ADC       = appId.AppID_RawADC
-APID_RAW_ADC_META  = appId.AppID_RawADC_Meta
+_APID_ATTRIBUTES = {
+    "APID_HK": "AppID_uC_Housekeeping",
+    "APID_EOS": "AppID_End_Of_Sequence",
+    "APID_BOOTLOADER": "AppID_uC_Bootloader",
+    "APID_HELLO": "AppID_uC_Start",
+    "APID_HEARTBEAT": "AppID_uC_Heartbeat",
+    "APID_WATCHDOG": "AppID_Watchdog",
+    "APID_METADATA": "AppID_MetaData",
+    "APID_SPECTRA_HIGH": "AppID_SpectraHigh",
+    "APID_SPECTRA_MED": "AppID_SpectraMed",
+    "APID_SPECTRA_LOW": "AppID_SpectraLow",
+    "APID_TR_HIGH": "AppID_SpectraTRHigh",
+    "APID_TR_MED": "AppID_SpectraTRMed",
+    "APID_TR_LOW": "AppID_SpectraTRLow",
+    "APID_ZOOM": "AppID_ZoomSpectra",
+    "APID_CAL_METADATA": "AppID_Calibrator_MetaData",
+    "APID_CAL_DATA": "AppID_Calibrator_Data",
+    "APID_CAL_RAW_PFB": "AppID_Calibrator_RawPFB",
+    "APID_CAL_DEBUG": "AppID_Calibrator_Debug",
+    "APID_GRIMM": "AppID_SpectraGrimm",
+    "APID_RAW_ADC": "AppID_RawADC",
+    "APID_RAW_ADC_META": "AppID_RawADC_Meta",
+}
+
+
+def __getattr__(name: str):
+    attribute = _APID_ATTRIBUTES.get(name)
+    if attribute is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = int(getattr(load_uncrater().id, attribute))
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_APID_ATTRIBUTES))
 
 
 # ---------------------------------------------------------------------------
@@ -81,140 +77,42 @@ APID_RAW_ADC_META  = appId.AppID_RawADC_Meta
 
 def is_uid_prefixed(appid: int) -> bool:
     """APIDs whose blob[0:4] is a little-endian uint32 unique_packet_id."""
+    decoder = load_uncrater()
     return (
-        appid_is_spectrum(appid)
-        or appid_is_tr_spectrum(appid)
-        or appid_is_zoom_spectrum(appid)
-        or appid_is_grimm_spectrum(appid)
-        or appid_is_cal_any(appid)
+        decoder.appid_is_spectrum(appid)
+        or decoder.appid_is_tr_spectrum(appid)
+        or decoder.appid_is_zoom_spectrum(appid)
+        or decoder.appid_is_grimm_spectrum(appid)
+        or decoder.appid_is_cal_segmented_payload(appid)
     )
 
 
 def is_uid_typed(appid: int) -> bool:
     """APIDs whose blob starts with a typed C-struct header carrying the uid."""
+    decoder = load_uncrater()
     return (
-        appid_is_hello(appid)
-        or appid_is_housekeeping(appid)
-        or appid_is_metadata(appid)
-        or appid == APID_CAL_METADATA
-        or appid == APID_RAW_ADC_META
+        decoder.appid_is_hello(appid)
+        or decoder.appid_is_housekeeping(appid)
+        or decoder.appid_is_metadata(appid)
+        or decoder.appid_is_cal_metadata(appid)
+        or decoder.appid_is_raw_adc_metadata(appid)
     )
 
 
 def is_uid_derived(appid: int) -> bool:
     """APIDs whose uid is inherited from a preceding uid-prefixed/typed packet."""
+    decoder = load_uncrater()
     return (
-        appid_is_raw_adc(appid)
-        or appid_is_watchdog(appid)
-        or appid == APID_BOOTLOADER
-        or appid == APID_EOS
+        decoder.appid_is_raw_adc(appid)
+        or decoder.appid_is_watchdog(appid)
+        or appid == int(decoder.id.AppID_uC_Bootloader)
+        or appid == int(decoder.id.AppID_End_Of_Sequence)
     )
 
 
 def is_dropped_appid(appid: int) -> bool:
     """APIDs deliberately dropped from the science stream."""
-    return appid_is_heartbeat(appid)
-
-
-# ---------------------------------------------------------------------------
-# Logical packet record
-# ---------------------------------------------------------------------------
-
-@dataclass
-class LogicalPacket:
-    appid: int
-    start_seq: int
-    seq: int
-    blob: bytes
-    single_packet: bool
-    unique_packet_id: Optional[int] = None
-    bank: Optional[str] = None    # "b05".."b09" or "b01"; informational
-    file_index: Optional[int] = None  # index within the source bank stream
-
-
-# ---------------------------------------------------------------------------
-# Stage 2: reassembly
-# ---------------------------------------------------------------------------
-
-def _byteswap16(payload: bytes) -> bytes:
-    if len(payload) % 2:
-        raise ValueError(
-            f"science payload must be even-length for 16-bit byteswap "
-            f"(got {len(payload)})"
-        )
-    out = bytearray(len(payload))
-    out[0::2] = payload[1::2]
-    out[1::2] = payload[0::2]
-    return bytes(out)
-
-
-def reassemble_logical_packets(
-    frames: Iterable[CcsdsFrame],
-    *,
-    byteswap_pairs: bool,
-    bank: Optional[str] = None,
-) -> Iterator[LogicalPacket]:
-    """Stage 2: turn CCSDS frames into logical packets.
-
-    ``byteswap_pairs`` is True for science banks (b05..b09) and False for
-    the DCB telemetry bank (b01). Termination follows the standard CCSDS
-    rule: a logical packet ends on ``groupflags == 1`` or ``== 3``.
-    """
-    buf = bytearray()
-    start_seq: Optional[int] = None
-    current_appid: Optional[int] = None
-
-    def take_payload(p: bytes) -> bytes:
-        return _byteswap16(p) if byteswap_pairs else p
-
-    for frame in frames:
-        hdr = frame.header
-        if start_seq is None:
-            start_seq = hdr.sequence_cnt
-            current_appid = hdr.appid
-        elif hdr.appid != current_appid:
-            warnings.warn(
-                f"APID changed mid logical packet "
-                f"(was 0x{current_appid:03x}, now 0x{hdr.appid:03x}); "
-                f"continuing accumulation",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-        try:
-            buf.extend(take_payload(frame.payload))
-        except ValueError as exc:
-            warnings.warn(
-                f"discarding logical packet (bank={bank}, "
-                f"appid=0x{(current_appid or 0):03x}): {exc}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            buf.clear()
-            start_seq = None
-            current_appid = None
-            continue
-
-        gf = hdr.groupflags
-        if gf in (1, 3):
-            yield LogicalPacket(
-                appid=current_appid,    # type: ignore[arg-type]
-                start_seq=start_seq,    # type: ignore[arg-type]
-                seq=hdr.sequence_cnt,
-                blob=bytes(buf),
-                single_packet=(gf == 3),
-                bank=bank,
-            )
-            buf.clear()
-            start_seq = None
-            current_appid = None
-
-    if buf:
-        warnings.warn(
-            f"trailing partial logical packet (bank={bank}, "
-            f"appid=0x{(current_appid or 0):03x}); discarding",
-            RuntimeWarning,
-            stacklevel=2,
-        )
+    return load_uncrater().appid_is_heartbeat(appid)
 
 
 # ---------------------------------------------------------------------------
@@ -228,8 +126,8 @@ TypedUidExtractor = Callable[[int, bytes, Optional[int]], Optional[int]]
 def _uncrater_typed_uid_extractor(appid: int, blob: bytes, sw_version: Optional[int]) -> Optional[int]:
     """Default uid-typed extractor; reads the typed C-struct via uncrater."""
     try:
-        pkt = Packet(appid, blob=blob, version=sw_version)
-        pkt._read()
+        pkt = load_uncrater().Packet(appid, blob=blob, version=sw_version)
+        read_packet(pkt)
         return int(getattr(pkt, "unique_packet_id"))
     except Exception as exc:    # noqa: BLE001
         warnings.warn(
@@ -246,11 +144,12 @@ def detect_sw_version(packets: Iterable[LogicalPacket]) -> Optional[int]:
 
     Used to seed uid-typed extraction. Returns None if no Hello is present.
     """
+    decoder = load_uncrater()
     for p in packets:
-        if p.appid == APID_HELLO:
+        if decoder.appid_is_hello(p.appid):
             try:
-                hello = Packet(p.appid, blob=p.blob)
-                hello._read()
+                hello = decoder.Packet(p.appid, blob=p.blob)
+                read_packet(hello)
                 return int(getattr(hello, "SW_version"))
             except Exception as exc:    # noqa: BLE001
                 warnings.warn(

@@ -29,12 +29,9 @@ import numpy as np
 from . import telemetry as telemetry_mod
 from .ccsds import parse_bank_file
 from .collation import (
-    APID_HELLO,
-    LogicalPacket,
     assign_identities,
     detect_sw_version,
     is_dropped_appid,
-    reassemble_logical_packets,
 )
 from .constants import (
     BANK_FILENAME,
@@ -50,20 +47,14 @@ from .constants import (
     TELEMETRY_BANK,
 )
 from .decode import Products, read_uncrater_session
-from .fits_writer import write_fits
-from .hdf5_writer import write_hdf5
 from .issues import IssueCollector
+from .reassembly import LogicalPacket, reassemble_logical_packets
 from .session import (
     Session,
     assign_telemetry_to_sessions,
     split_sessions,
     write_uncrater_session,
 )
-
-try:
-    from . import viz as _viz
-except Exception:    # noqa: BLE001
-    _viz = None    # matplotlib may not be available in some test envs
 
 log = logging.getLogger(__name__)
 
@@ -351,8 +342,16 @@ def _process_one_session(
     interpolation_mode: str = "normalized",
     plot_names: Optional[Sequence[str]] = None,
     constants_kwargs: Optional[Dict[str, object]] = None,
+    decoder_strict: bool = False,
+    diagnostic_override: bool = False,
+    schema_variant: str | None = None,
 ) -> SessionResult:
-    products = read_uncrater_session(session_dir)
+    products = read_uncrater_session(
+        session_dir,
+        strict=decoder_strict,
+        diagnostic_override=diagnostic_override,
+        schema_variant=schema_variant,
+    )
     constants_kwargs = dict(constants_kwargs or {})
 
     has_telemetry = bool(fpga_arrays) or bool(encoder_arrays)
@@ -386,6 +385,8 @@ def _process_one_session(
     )
 
     if h5_dir is not None:
+        from .hdf5_writer import write_hdf5
+
         h5_dir.mkdir(parents=True, exist_ok=True)
         h5_path = h5_dir / f"{name}.h5"
         write_hdf5(
@@ -403,6 +404,8 @@ def _process_one_session(
         h5_path = None
 
     if fits_dir is not None:
+        from .fits_writer import write_fits
+
         fits_dir.mkdir(parents=True, exist_ok=True)
         fits_path = fits_dir / f"{name}.fits"
         write_fits(
@@ -417,10 +420,12 @@ def _process_one_session(
         )
         result.fits_path = str(fits_path.resolve())
 
-    if plots_dir is not None and h5_path is not None and _viz is not None:
+    if plots_dir is not None and h5_path is not None:
+        from . import viz as viz_mod
+
         plot_dest = plots_dir / name
         plot_dest.mkdir(parents=True, exist_ok=True)
-        plot_paths = _viz.plot_session(h5_path, plot_dest, plots=plot_names)
+        plot_paths = viz_mod.plot_session(h5_path, plot_dest, plots=plot_names)
         result.plot_paths = [str(p.resolve()) for p in plot_paths]
 
     if manifest_dir is not None:
@@ -512,6 +517,9 @@ def process_session(
     flash_root: Optional[Path | str] = None,
     rederive_telemetry: bool = True,
     issue_collector: IssueCollector | None = None,
+    decoder_strict: bool = False,
+    diagnostic_override: bool = False,
+    schema_variant: str | None = None,
 ) -> SessionResult:
     """Process one already-extracted uncrater session directory.
 
@@ -526,6 +534,9 @@ def process_session(
 
     Writes HDF5 / FITS / plots / manifest to the caller-supplied parent
     directories. Each output is opt-in (pass None to skip).
+
+    ``decoder_strict``, ``diagnostic_override``, and ``schema_variant`` are
+    forwarded to the one uncrater Collection for this standalone session.
     """
     session_dir = Path(session_dir).resolve()
     h5_dir = Path(h5_dir) if h5_dir else None
@@ -610,6 +621,9 @@ def process_session(
             interpolation_mode=interpolation_mode,
             plot_names=plot_names,
             constants_kwargs=constants_kwargs,
+            decoder_strict=decoder_strict,
+            diagnostic_override=diagnostic_override,
+            schema_variant=schema_variant,
         )
     result.warnings_summary = cap.records
     result.n_warnings = len(cap.records)

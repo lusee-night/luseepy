@@ -33,12 +33,12 @@ cuda12 = [
 cuda13 = [
     "jax[cuda13]; sys_platform == 'linux'",
 ]
-# Downlink-ingest pipeline (lusee.ingest). The packet decoder itself lives
-# in the external uncrater project and must be installed separately.
+# Downlink-ingest pipeline (lusee.ingest).
 ingest = [
     "h5py",
     "hexdump",
     "icecream",
+    "uncrater @ git+https://github.com/lusee-night/uncrater.git@00bed15f18d62530e3f706c9ce5be61255ce4740",
 ]
 dev = ["pytest>=7"]
 

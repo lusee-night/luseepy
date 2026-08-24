@@ -15,10 +15,14 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Iterable, List, Optional, Sequence, Union
 
-import h5py
 import numpy as np
+
+from .dependencies import import_optional_dependency
+
+if TYPE_CHECKING:
+    import h5py
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +41,7 @@ _AVAILABLE_PLOTS = (
 
 @contextmanager
 def _open_h5(h5: Union[h5py.File, Path, str]):
+    h5py = import_optional_dependency("h5py", "ingest visualization")
     if isinstance(h5, h5py.File):
         yield h5
         return

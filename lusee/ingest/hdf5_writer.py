@@ -23,7 +23,6 @@ import logging
 from pathlib import Path
 from typing import Dict, Mapping, Optional, Sequence
 
-import h5py
 import numpy as np
 
 from .constants import (
@@ -49,6 +48,7 @@ from .constants import (
     ZOOM_COMPONENTS,
 )
 from .decode import Products
+from .dependencies import import_optional_dependency
 
 log = logging.getLogger(__name__)
 
@@ -716,6 +716,7 @@ def write_hdf5(
     provenance of the raw/MJD time axes in /constants; the default
     "unknown" makes readers require an explicit ``assume_scale``.
     """
+    h5py = import_optional_dependency("h5py", "HDF5 ingest output")
     if time_scale not in KNOWN_TIME_SCALES:
         raise ValueError(
             f"time_scale must be one of {KNOWN_TIME_SCALES}; got {time_scale!r}"

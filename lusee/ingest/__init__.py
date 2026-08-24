@@ -32,6 +32,8 @@ Most callers will only need ``process_flash`` or ``process_session``.
 
 from __future__ import annotations
 
+from importlib import import_module
+
 from .ccsds import (
     CcsdsFrame,
     FrameLocation,
@@ -44,27 +46,7 @@ from .ccsds import (
     parse_stream,
     parse_stream_diagnostic,
 )
-from .collation import (
-    LogicalPacket,
-    assign_identities,
-    is_dropped_appid,
-    is_uid_derived,
-    is_uid_prefixed,
-    is_uid_typed,
-    reassemble_logical_packets,
-)
-from .decode import (
-    CalDataSample,
-    HKSample,
-    Products,
-    SpectrumSample,
-    TRSpectrumSample,
-    WaveformSample,
-    ZoomSample,
-    read_uncrater_session,
-)
-from .fits_writer import write_fits
-from .hdf5_writer import write_hdf5
+from .dependencies import MissingIngestExtraError
 from .issues import (
     IngestIssue,
     IngestIssueError,
@@ -73,66 +55,80 @@ from .issues import (
     IssuePolicy,
     IssueSeverity,
 )
-from .pipeline import (
-    SessionResult,
-    parse_flash,
-    process_flash,
-    process_session,
-    write_manifest,
-)
-from .session import (
-    Session,
-    raw_seconds_from_split_time,
-    split_sessions,
-    write_uncrater_session,
-)
-from .telemetry import (
-    field_groups,
-    find_legacy_sidecar,
-    has_decoder,
-    parse_b01_packets,
-    parse_legacy_sidecar,
-    slice_arrays_by_window,
-    telemetry_apids,
-)
-
-# Visualization is optional (matplotlib may be absent in some envs).
-try:
-    from .viz import (
-        plot_adc_stats,
-        plot_dcb_telemetry,
-        plot_session,
-        plot_spectra_mean,
-        plot_spectra_waterfall,
-    )
-except ImportError:    # pragma: no cover
-    plot_session = None    # type: ignore[assignment]
-    plot_spectra_waterfall = None    # type: ignore[assignment]
-    plot_spectra_mean = None    # type: ignore[assignment]
-    plot_adc_stats = None    # type: ignore[assignment]
-    plot_dcb_telemetry = None    # type: ignore[assignment]
+from .reassembly import LogicalPacket, reassemble_logical_packets
 
 
-# IngestData / load are lazily imported via __getattr__ below: their
-# implementation lives in obs_factory.py, which depends on lusee.Observation
-# (and thus astropy + lunarsky + a SPICE-kernel download). Importing
-# lusee.ingest itself stays light; the heavy chain only triggers when a
-# user actually accesses lusee.ingest.IngestData or lusee.ingest.load.
+_LAZY_EXPORTS = {
+    # Stage 3 identity assignment
+    "assign_identities": ("collation", "assign_identities"),
+    "is_dropped_appid": ("collation", "is_dropped_appid"),
+    "is_uid_derived": ("collation", "is_uid_derived"),
+    "is_uid_prefixed": ("collation", "is_uid_prefixed"),
+    "is_uid_typed": ("collation", "is_uid_typed"),
+    # Session split and persistence
+    "Session": ("session", "Session"),
+    "raw_seconds_from_split_time": ("session", "raw_seconds_from_split_time"),
+    "split_sessions": ("session", "split_sessions"),
+    "write_uncrater_session": ("session", "write_uncrater_session"),
+    # Private telemetry proxy
+    "field_groups": ("telemetry", "field_groups"),
+    "find_legacy_sidecar": ("telemetry", "find_legacy_sidecar"),
+    "has_decoder": ("telemetry", "has_decoder"),
+    "parse_b01_packets": ("telemetry", "parse_b01_packets"),
+    "parse_legacy_sidecar": ("telemetry", "parse_legacy_sidecar"),
+    "slice_arrays_by_window": ("telemetry", "slice_arrays_by_window"),
+    "telemetry_apids": ("telemetry", "telemetry_apids"),
+    # Decoder products
+    "CalDataSample": ("decode", "CalDataSample"),
+    "HKSample": ("decode", "HKSample"),
+    "Products": ("decode", "Products"),
+    "SpectrumSample": ("decode", "SpectrumSample"),
+    "TRSpectrumSample": ("decode", "TRSpectrumSample"),
+    "WaveformSample": ("decode", "WaveformSample"),
+    "ZoomSample": ("decode", "ZoomSample"),
+    "read_uncrater_session": ("decode", "read_uncrater_session"),
+    # Writers and orchestration
+    "write_hdf5": ("hdf5_writer", "write_hdf5"),
+    "write_fits": ("fits_writer", "write_fits"),
+    "SessionResult": ("pipeline", "SessionResult"),
+    "parse_flash": ("pipeline", "parse_flash"),
+    "process_flash": ("pipeline", "process_flash"),
+    "process_session": ("pipeline", "process_session"),
+    "write_manifest": ("pipeline", "write_manifest"),
+    # Visualization
+    "plot_adc_stats": ("viz", "plot_adc_stats"),
+    "plot_dcb_telemetry": ("viz", "plot_dcb_telemetry"),
+    "plot_session": ("viz", "plot_session"),
+    "plot_spectra_mean": ("viz", "plot_spectra_mean"),
+    "plot_spectra_waterfall": ("viz", "plot_spectra_waterfall"),
+    # Reader/factory
+    "IngestData": ("obs_factory", "IngestData"),
+    "load": ("obs_factory", "load"),
+    "SessionBundle": ("obs_factory", "SessionBundle"),
+    # Decoder boundary provenance
+    "DecoderInfo": ("uncrater_adapter", "DecoderInfo"),
+    "IncompatibleUncraterError": (
+        "uncrater_adapter", "IncompatibleUncraterError"
+    ),
+    "UncraterBindingInfo": ("uncrater_adapter", "UncraterBindingInfo"),
+    "binding_info": ("uncrater_adapter", "binding_info"),
+    "decoder_info": ("uncrater_adapter", "decoder_info"),
+}
 
-_LAZY_FROM_OBS_FACTORY = ("IngestData", "load", "SessionBundle")
 
-
-def __getattr__(name):
-    if name in _LAZY_FROM_OBS_FACTORY:
-        from . import obs_factory
-        value = getattr(obs_factory, name)
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module 'lusee.ingest' has no attribute {name!r}")
+def __getattr__(name: str):
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module 'lusee.ingest' has no attribute {name!r}")
+    module_name, attribute = target
+    module = import_module(f".{module_name}", __name__)
+    value = getattr(module, attribute)
+    globals()[name] = value
+    return value
 
 
 def __dir__():
-    return sorted(set(globals().keys()) | set(_LAZY_FROM_OBS_FACTORY))
+    return sorted(set(globals()) | set(_LAZY_EXPORTS))
 
 
 __all__ = [
@@ -142,7 +138,7 @@ __all__ = [
     "parse_primary_header", "parse_stream", "parse_stream_diagnostic",
     # issues
     "IngestIssue", "IngestIssueError", "IssueAction", "IssueCollector",
-    "IssuePolicy", "IssueSeverity",
+    "IssuePolicy", "IssueSeverity", "MissingIngestExtraError",
     # collation
     "LogicalPacket", "assign_identities",
     "is_uid_prefixed", "is_uid_typed", "is_uid_derived", "is_dropped_appid",
@@ -170,4 +166,7 @@ __all__ = [
     "plot_adc_stats", "plot_dcb_telemetry",
     # obs_factory (lazy)
     "IngestData", "load", "SessionBundle",
+    # uncrater adapter provenance (lazy)
+    "DecoderInfo", "IncompatibleUncraterError", "UncraterBindingInfo",
+    "binding_info", "decoder_info",
 ]

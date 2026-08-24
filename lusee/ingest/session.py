@@ -20,7 +20,6 @@ from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
-from .collation import APID_HELLO, LogicalPacket
 from .constants import (
     FILENAME_APID_HEX_WIDTH,
     FILENAME_PACKET_INDEX_DEFAULT_WIDTH,
@@ -28,6 +27,8 @@ from .constants import (
     MISSION_TIME_FRACT_DIVISOR,
     MISSION_TIME_FRACT_SHIFT,
 )
+from .reassembly import LogicalPacket
+from .uncrater_adapter import load_uncrater, read_packet
 
 log = logging.getLogger(__name__)
 
@@ -76,20 +77,12 @@ def raw_seconds_from_split_time(time_32: int, time_16: int) -> float:
 
 def _read_hello(blob: bytes, sw_version: Optional[int] = None) -> Optional[dict]:
     """Decode a Hello packet's identity / time fields. Returns None on failure."""
+    decoder = load_uncrater()
     try:
-        from uncrater import Packet  # type: ignore[import-not-found]
-    except ImportError:
-        warnings.warn(
-            "uncrater not available -- Hello decoding skipped (session start "
-            "time and firmware metadata will be absent)",
-            RuntimeWarning,
-            stacklevel=2,
+        pkt = decoder.Packet(
+            int(decoder.id.AppID_uC_Start), blob=blob, version=sw_version
         )
-        return None
-
-    try:
-        pkt = Packet(APID_HELLO, blob=blob, version=sw_version)
-        pkt._read()
+        read_packet(pkt)
     except Exception as exc:    # noqa: BLE001
         warnings.warn(f"failed to decode Hello: {exc}", RuntimeWarning, stacklevel=2)
         return None
@@ -105,8 +98,9 @@ def _read_hello(blob: bytes, sw_version: Optional[int] = None) -> Optional[dict]
 
 def _populate_session_start(session: Session) -> None:
     """If the session has a first Hello, read it and fill start-* fields."""
+    decoder = load_uncrater()
     for p in session.packets:
-        if p.appid == APID_HELLO:
+        if decoder.appid_is_hello(p.appid):
             fields = _read_hello(p.blob, sw_version=session.sw_version)
             if fields is None:
                 return
@@ -142,9 +136,10 @@ def split_sessions(packets: Sequence[LogicalPacket]) -> List[Session]:
     sessions: List[Session] = []
     current: Optional[Session] = None
     seen_non_hello = False
+    decoder = load_uncrater()
 
     for p in packets:
-        if p.appid == APID_HELLO:
+        if decoder.appid_is_hello(p.appid):
             if current is None or seen_non_hello:
                 current = Session(ordinal=len(sessions))
                 sessions.append(current)

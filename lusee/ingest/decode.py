@@ -26,6 +26,7 @@ from .constants import (
     ZOOM_COMPONENTS,
 )
 from .session import raw_seconds_from_split_time
+from .uncrater_adapter import binding_info, make_collection, read_packet
 
 log = logging.getLogger(__name__)
 
@@ -375,30 +376,40 @@ def _tr_spectrum_dict_to_array(spec_dict: dict) -> Optional[np.ndarray]:
 # Top-level decoder
 # ---------------------------------------------------------------------------
 
-def read_uncrater_session(session_dir: Path | str) -> Products:
+def read_uncrater_session(
+    session_dir: Path | str,
+    *,
+    strict: bool = False,
+    diagnostic_override: bool = False,
+    schema_variant: str | None = None,
+) -> Products:
     """Decode an uncrater session directory into a ``Products`` instance."""
-    try:
-        from uncrater import Collection  # type: ignore[import-not-found]
-        from uncrater.Packet_Spectrum import Packet_Grimm  # type: ignore[import-not-found]
-    except ImportError as exc:
-        raise RuntimeError(
-            "uncrater package is required to decode session directories; "
-            "install it (see lusee.ingest README) to use read_uncrater_session"
-        ) from exc
-
     session_dir = Path(session_dir)
     cdi = session_dir / "cdi_output"
     if not cdi.is_dir():
         cdi = session_dir   # Layout A: bare directory of *.bin files
 
-    coll = Collection(str(cdi))
+    coll = make_collection(
+        cdi,
+        strict=strict,
+        diagnostic_override=diagnostic_override,
+        schema_variant=schema_variant,
+    )
+    selected_binding = binding_info(coll)
+    log.info(
+        "session %s uses uncrater binding %s (schema 0x%03x, assumed=%s)",
+        session_dir,
+        selected_binding.binding_key,
+        selected_binding.selected_schema_id,
+        selected_binding.schema_assumed,
+    )
     products = Products()
 
     # ---- Hello / session-invariants ----
     for pkt in coll.cont:
         if getattr(pkt, "appid", None) == 0x209:    # AppID_uC_Start
             try:
-                pkt._read()
+                read_packet(pkt)
             except Exception as exc:    # noqa: BLE001
                 warnings.warn(f"Hello decode failed: {exc}", RuntimeWarning, stacklevel=2)
                 break
@@ -424,7 +435,7 @@ def read_uncrater_session(session_dir: Path | str) -> Products:
         if meta is None:
             continue
         try:
-            meta._read()
+            read_packet(meta)
         except Exception as exc:    # noqa: BLE001
             warnings.warn(f"metadata decode failed: {exc}", RuntimeWarning, stacklevel=2)
             continue
@@ -446,7 +457,7 @@ def read_uncrater_session(session_dir: Path | str) -> Products:
         if meta is None:
             continue
         try:
-            meta._read()
+            read_packet(meta)
         except Exception as exc:    # noqa: BLE001
             warnings.warn(f"TR metadata decode failed: {exc}", RuntimeWarning, stacklevel=2)
             continue
@@ -470,7 +481,7 @@ def read_uncrater_session(session_dir: Path | str) -> Products:
     next_spec = next(spec_iter, None)
     for zpkt in getattr(coll, "zoom_spectra_packets", []):
         try:
-            zpkt._read()
+            read_packet(zpkt)
         except Exception as exc:    # noqa: BLE001
             warnings.warn(f"zoom decode failed: {exc}", RuntimeWarning, stacklevel=2)
             continue
@@ -497,7 +508,7 @@ def read_uncrater_session(session_dir: Path | str) -> Products:
     # ---- Waveforms ----
     for wpkt in getattr(coll, "waveform_packets", []):
         try:
-            wpkt._read()
+            read_packet(wpkt)
         except Exception as exc:    # noqa: BLE001
             warnings.warn(f"waveform decode failed: {exc}", RuntimeWarning, stacklevel=2)
             continue
@@ -518,7 +529,7 @@ def read_uncrater_session(session_dir: Path | str) -> Products:
     # ---- Housekeeping ----
     for hk in getattr(coll, "housekeeping_packets", []):
         try:
-            hk._read()
+            read_packet(hk)
         except Exception as exc:    # noqa: BLE001
             warnings.warn(f"housekeeping decode failed: {exc}", RuntimeWarning, stacklevel=2)
             continue
@@ -606,7 +617,7 @@ def read_uncrater_session(session_dir: Path | str) -> Products:
         if getattr(pkt, "appid", None) != 0x2A0:
             continue
         try:
-            pkt._read()
+            read_packet(pkt)
         except Exception as exc:    # noqa: BLE001
             warnings.warn(f"grimm decode failed: {exc}", RuntimeWarning, stacklevel=2)
             continue
