@@ -5,9 +5,9 @@ The ``lusee.ingest`` package decodes raw CCSDS downlinks or extracted
 ``uncrater`` sessions. Decoder-derived products carry immutable decoder and
 packet provenance records. Compatibility rows produced by the older adapters
 are marked ``legacy_adapter_provenance_pending`` and are not counted as
-validated product rows. Strict, family-specific product adoption and layout-v4
-output are being introduced incrementally; the existing writers remain layout
-v3 until that cutover.
+validated product rows. The layout-v4 HDF5 and FITS writers accept only the
+strict, family-specific ``WriteRequest`` boundary. Operational pipeline call
+sites migrate to that boundary in the later session-persistence phase.
 
 Quality and execution mode
 --------------------------
@@ -105,15 +105,15 @@ element-valid, or product-presence flag array is added at this stage.
 
 The full on-disk contract is documented in :doc:`ingest_layout_v4`.
 
-Waveform clocks in layout v3
+Waveform clocks in layout v4
 ----------------------------
 
 Waveform mission time and the ADC hardware counter are separate clock domains.
-The additive layout-v3 fields are:
+The layout-v4 fields are:
 
-* HDF5: ``timestamps`` (mission seconds, NaN when absent),
+* HDF5: ``raw_seconds`` plus ``raw_time_valid`` (mission seconds),
   ``adc_timestamps`` (``uint64``), and ``adc_timestamp_valid``;
-* FITS: ``TIMESTAMP``, ``ADC_TIME``, and ``ADC_VALID``. ``ADC_TIME`` is a
+* FITS: the same canonical lowercase column names. ``adc_timestamps`` is a
   ``K`` column with unsigned scaling ``TZERO = 2**63`` and round-trips through
   Astropy and fitsio, including ``UINT64_MAX``.
 

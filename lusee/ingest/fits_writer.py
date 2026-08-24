@@ -1,619 +1,725 @@
-"""FITS writer that mirrors the HDF5 layout.
-
-The HDU naming and column structure are designed to be a 1-to-1
-translation of the HDF5 schema produced by :mod:`lusee.ingest.hdf5_writer`.
-The mapping rules are:
-
-  HDF5                                            FITS
-  ----                                            ----
-  group with attributes only                  ->  IMAGE HDU, NAXIS=0,
-                                                  header keywords
-  dense cube dataset (spectra cube etc.)      ->  IMAGE HDU
-  group of (N,)-aligned datasets              ->  BINTABLE HDU, one
-                                                  column per field
-  per-channel subgroup (waveforms)            ->  one BINTABLE per channel
-
-Same retention rule as HDF5: rows of `/spectra` and `/tr_spectra` whose
-entire cube slice is NaN are dropped, so the FITS row counts match
-exactly. All time-series tables use TUNITn for units where known.
-"""
+"""Atomic FITS transport for the validated ingest layout v4 tree."""
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
+import os
+import tempfile
+from importlib import import_module
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
-from astropy.io import fits
 
-from .constants import (
-    BITSLICE_REFERENCE,
-    DEFAULT_CLOCK_SOURCE,
-    DEFAULT_LUN_HEIGHT_M,
-    DEFAULT_LUN_LAT_DEG,
-    DEFAULT_LUN_LONG_DEG,
-    DEFAULT_MJD_EPOCH_OFFSET_DAYS,
-    DEFAULT_RAW_TIME_SUBTRACT_SECONDS,
-    DEFAULT_TIME_SCALE,
-    KNOWN_TIME_SCALES,
-    LEGACY_FITS_LAYOUT_VERSION,
-    NCHANNELS,
-    NPRODUCTS,
-    SPECTRA_NORMALIZATION_VERSION,
-    SPECTRA_REPRESENTATION,
-    SPECTRA_UNITS,
+from .constants import INGEST_LAYOUT_VERSION
+from .dependencies import import_optional_dependency
+from .layout_v4_tree import (
+    LayoutDataset,
+    LayoutGroup,
+    assert_layout_trees_equal,
+    build_layout_v4_tree,
+    group_datasets,
+    iter_layout_groups,
 )
-from .decode import Products
-from .hdf5_writer import _interpolate_telemetry, _to_mjd
+from .write_request import WriteRequest
 
 log = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# Column construction helpers
-# ---------------------------------------------------------------------------
-
-def _format_for_dtype(dt: np.dtype) -> Optional[str]:
-    """Map a numpy dtype to its FITS BINTABLE TFORM base character."""
-    k = dt.kind
-    if k == "f":
-        return "E" if dt.itemsize == 4 else "D"
-    if k in ("i", "u", "b"):
-        if dt.itemsize <= 1:
-            return "I"   # FITS has no signed int8; promote to int16
-        if dt.itemsize == 2:
-            return "I"
-        if dt.itemsize == 4:
-            return "J"
-        return "K"
-    return None
+FITS_TRANSPORT_VERSION = 1
+_PATH_KEY = "LUSEEPTH"
+_KIND_KEY = "LUSEEKND"
+_ATTRS_KEY = "ATTRJSON"
+_COLUMNS_KEY = "COLJSON"
+_PART_KEY = "LUSEEPRT"
+_COLUMN_NAME_MAX = 60
+_MAX_TABLE_COLUMNS = 999
 
 
-def _column(name: str, arr: np.ndarray, *,
-            unit: Optional[str] = None,
-            disp: Optional[str] = None) -> Optional[fits.Column]:
-    """Build a fits.Column from a numpy array (1-D or N-D-per-row).
+def _canonical_json(value: object) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
 
-    Returns None if the dtype is not representable as a numeric / byte
-    BINTABLE column.
-    """
-    arr = np.asarray(arr)
-    if arr.dtype.kind == "S":
-        # Per-row bytes. Joining (N, k) S1 -> (N,) S<k> is the natural form.
-        if arr.ndim == 2 and arr.dtype.itemsize == 1:
-            joined = np.array([b"".join(row) for row in arr], dtype=f"S{arr.shape[1]}")
-            tform = f"{arr.shape[1]}A"
-            return fits.Column(name=name, format=tform, array=joined, unit=unit, disp=disp)
-        if arr.ndim == 1:
-            width = arr.dtype.itemsize
-            tform = f"{width}A" if width > 1 else "1A"
-            return fits.Column(name=name, format=tform, array=arr, unit=unit, disp=disp)
-        return None
 
-    base = _format_for_dtype(arr.dtype)
+def _header_count(header, name: str) -> int:
+    return header.count(name) if name in header else 0
+
+
+def _semantic_header_cards(header) -> list[tuple[str, object, str]]:
+    return [
+        (card.keyword, card.value, card.comment)
+        for card in header.cards
+        if card.keyword not in ("CHECKSUM", "DATASUM")
+    ]
+
+
+def _fits_module():
+    import_optional_dependency("astropy", "FITS ingest output")
+    return import_module("astropy.io.fits")
+
+
+def _encode_attr(value: object) -> dict[str, object]:
+    if type(value) is str:
+        return {"encoding": "utf8", "value": value}
+    array = np.asarray(value)
+    if array.dtype.kind == "U":
+        return {
+            "encoding": "utf8_array",
+            "dtype": array.dtype.str,
+            "shape": list(array.shape),
+            "values": array.reshape(-1).tolist(),
+        }
+    if array.dtype.hasobject:
+        raise TypeError("layout-v4 FITS attributes must not have object dtype")
+    return {
+        "encoding": "raw",
+        "dtype": array.dtype.str,
+        "shape": list(array.shape),
+        "data": base64.b64encode(array.tobytes(order="C")).decode("ascii"),
+    }
+
+
+def _decode_attr(record: object) -> object:
+    if not isinstance(record, dict):
+        raise TypeError("FITS attribute record must be an object")
+    encoding = record.get("encoding")
+    if encoding == "utf8":
+        value = record.get("value")
+        if type(value) is not str:
+            raise ValueError("FITS UTF-8 attribute is invalid")
+        return value
+    if encoding == "utf8_array":
+        dtype = np.dtype(record["dtype"])
+        shape = _json_shape(record["shape"])
+        values = record.get("values")
+        if not isinstance(values, list):
+            raise ValueError("FITS UTF-8 attribute array is invalid")
+        return np.asarray(values, dtype=dtype).reshape(shape)
+    if encoding != "raw":
+        raise ValueError("FITS attribute encoding is unsupported")
+    dtype = np.dtype(record["dtype"])
+    shape = _json_shape(record["shape"])
+    encoded = record.get("data")
+    if type(encoded) is not str:
+        raise ValueError("FITS raw attribute data is invalid")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("FITS raw attribute data is invalid") from exc
+    expected_size = int(np.prod(shape, dtype=np.int64)) * dtype.itemsize
+    if not shape:
+        expected_size = dtype.itemsize
+    if len(raw) != expected_size:
+        raise ValueError("FITS raw attribute byte count disagrees")
+    array = np.frombuffer(raw, dtype=dtype).copy().reshape(shape)
+    return array[()] if not shape else array
+
+
+def _encode_attrs(attrs: dict[str, object]) -> str:
+    return _canonical_json(
+        {name: _encode_attr(value) for name, value in sorted(attrs.items())}
+    )
+
+
+def _decode_attrs(value: object) -> dict[str, object]:
+    if type(value) is not str:
+        raise ValueError("FITS layout attributes are missing")
+    try:
+        records = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("FITS layout attribute JSON is invalid") from exc
+    if not isinstance(records, dict):
+        raise TypeError("FITS layout attribute JSON must encode an object")
+    return {name: _decode_attr(record) for name, record in records.items()}
+
+
+def _json_shape(value: object) -> tuple[int, ...]:
+    if not isinstance(value, list) or any(
+        type(item) is not int or item < 0 for item in value
+    ):
+        raise ValueError("FITS logical array shape is invalid")
+    return tuple(value)
+
+
+def _column_for_dataset(name: str, dataset: LayoutDataset, fits):
+    array = dataset.data
+    if array.ndim == 0:
+        raise ValueError(f"layout-v4 FITS dataset {name!r} has no row axis")
+    logical_shape = array.shape
+    cell_shape = logical_shape[1:]
+    schema: dict[str, object] = {
+        "logical_dtype": "utf8" if dataset.is_utf8 else array.dtype.str,
+        "logical_shape": list(logical_shape),
+        "attrs": {
+            attr_name: _encode_attr(value)
+            for attr_name, value in sorted(dataset.attrs.items())
+        },
+    }
+    if cell_shape and int(np.prod(cell_shape, dtype=np.int64)) == 0:
+        storage = np.zeros((logical_shape[0], 1), dtype=np.uint8)
+        column = fits.Column(name=name, format="1B", array=storage)
+        schema.update({"encoding": "empty", "tform": "1B"})
+        return column, schema
+    if dataset.is_utf8:
+        column, transport = _utf8_column(name, array, fits)
+        schema.update(transport)
+        return column, schema
+    if array.dtype.kind == "S":
+        itemsize = array.dtype.itemsize
+        storage = array.view(np.uint8).reshape((*array.shape, itemsize))
+        column = _numeric_column(name, storage, "B", fits)
+        schema.update(
+            {
+                "encoding": "bytes",
+                "itemsize": itemsize,
+                "tform": column.format,
+            }
+        )
+        return column, schema
+    if array.dtype.kind == "b":
+        column = _numeric_column(name, array, "L", fits)
+        schema.update({"encoding": "native", "tform": column.format})
+        return column, schema
+    if array.dtype.kind == "i":
+        if array.dtype.itemsize == 1:
+            storage = array.astype(np.int16)
+            column = _numeric_column(name, storage, "I", fits)
+            schema.update({"encoding": "int8", "tform": column.format})
+            return column, schema
+        base = {2: "I", 4: "J", 8: "K"}.get(array.dtype.itemsize)
+        if base is None:
+            raise TypeError(f"FITS cannot store dtype {array.dtype}")
+        column = _numeric_column(name, array, base, fits)
+        schema.update({"encoding": "native", "tform": column.format})
+        return column, schema
+    if array.dtype.kind == "u":
+        base = {1: "B", 2: "I", 4: "J", 8: "K"}.get(array.dtype.itemsize)
+        if base is None:
+            raise TypeError(f"FITS cannot store dtype {array.dtype}")
+        bzero = None if array.dtype.itemsize == 1 else 1 << (
+            8 * array.dtype.itemsize - 1
+        )
+        column = _numeric_column(name, array, base, fits, bzero=bzero)
+        schema.update(
+            {
+                "encoding": "unsigned",
+                "tform": column.format,
+                "bzero": bzero,
+            }
+        )
+        return column, schema
+    if array.dtype.kind == "f":
+        base = {4: "E", 8: "D"}.get(array.dtype.itemsize)
+    elif array.dtype.kind == "c":
+        base = {8: "C", 16: "M"}.get(array.dtype.itemsize)
+    else:
+        base = None
     if base is None:
-        return None
-
-    if arr.ndim == 1:
-        return fits.Column(name=name, format=base, array=arr, unit=unit, disp=disp)
-
-    per_row = int(np.prod(arr.shape[1:]))
-    tform = f"{per_row}{base}"
-    if arr.ndim == 2:
-        return fits.Column(name=name, format=tform, array=arr, unit=unit, disp=disp)
-    # Higher-dim per-row: use TDIM. FITS convention: fastest axis first.
-    inner_dims = list(reversed(arr.shape[1:]))
-    dim = "(" + ",".join(str(d) for d in inner_dims) + ")"
-    return fits.Column(name=name, format=tform, array=arr, dim=dim,
-                       unit=unit, disp=disp)
+        raise TypeError(f"FITS cannot store dtype {array.dtype}")
+    column = _numeric_column(name, array, base, fits)
+    schema.update({"encoding": "native", "tform": column.format})
+    return column, schema
 
 
-def _bintable_from_columns(cols: List[fits.Column], *,
-                           name: str, extdesc: str = "") -> fits.BinTableHDU:
-    hdu = fits.BinTableHDU.from_columns(cols, name=name)
-    if extdesc:
-        hdu.header["EXTDESC"] = extdesc
-    return hdu
-
-
-def _empty_image_hdu(name: str, *, kvs: Mapping[str, object],
-                     extdesc: str = "") -> fits.ImageHDU:
-    """An IMAGE HDU with NAXIS=0 carrying only header keywords."""
-    hdu = fits.ImageHDU(data=None, name=name)
-    if extdesc:
-        hdu.header["EXTDESC"] = extdesc
-    for k, v in kvs.items():
-        if v is None:
-            continue
-        # FITS keyword cap is 8 chars; allow longer via HIERARCH.
-        key = k if len(k) <= 8 else f"HIERARCH {k}"
-        hdu.header[key] = v
-    return hdu
-
-
-# ---------------------------------------------------------------------------
-# Per-section writers
-# ---------------------------------------------------------------------------
-
-def _spectra_retention(products: Products) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Mirror of the HDF5 retention rule. Returns (cube[keep], unique_ids[keep],
-    raw_times[keep], keep_indices)."""
-    n = len(products.spectra)
-    cube = np.full((n, NPRODUCTS, NCHANNELS), np.nan, dtype=np.float32)
-    unique_ids = np.zeros(n, dtype=np.int64)
-    raw_times = np.zeros(n, dtype=np.float64)
-    for i, s in enumerate(products.spectra):
-        cube[i] = s.data
-        unique_ids[i] = s.unique_packet_id
-        raw_times[i] = s.raw_seconds
-    finite_mask = np.any(np.isfinite(cube.reshape(n, -1)), axis=1)
-    keep = np.flatnonzero(finite_mask)
-    return cube[keep], unique_ids[keep], raw_times[keep], keep
-
-
-def _tr_retention(products: Products):
-    n = len(products.tr_spectra)
-    if n == 0:
-        return None
-    navg2_max = max(s.navg2 for s in products.tr_spectra)
-    tr_len_max = max(s.tr_length for s in products.tr_spectra)
-    cube = np.full((n, NPRODUCTS, navg2_max, tr_len_max), np.nan, dtype=np.float32)
-    unique_ids = np.zeros(n, dtype=np.int64)
-    raw_times = np.zeros(n, dtype=np.float64)
-    navg2_per = np.zeros(n, dtype=np.int64)
-    tr_len_per = np.zeros(n, dtype=np.int64)
-    for i, s in enumerate(products.tr_spectra):
-        cube[i, :, :s.navg2, :s.tr_length] = s.data
-        unique_ids[i] = s.unique_packet_id
-        raw_times[i] = s.raw_seconds
-        navg2_per[i] = s.navg2
-        tr_len_per[i] = s.tr_length
-    finite_mask = np.any(np.isfinite(cube.reshape(n, -1)), axis=1)
-    keep = np.flatnonzero(finite_mask)
-    return (cube[keep], unique_ids[keep], raw_times[keep],
-            navg2_per[keep], tr_len_per[keep], keep, navg2_max, tr_len_max)
-
-
-def _stack_metadata(products_list, keep: np.ndarray) -> Dict[str, np.ndarray]:
-    """Aggregate per-row metadata dicts into (N, ...) arrays then trim by keep."""
-    bag: Dict[str, list] = {}
-    n = len(products_list)
-    for s in products_list:
-        for k, v in s.metadata.items():
-            bag.setdefault(k, []).append(v)
-    out: Dict[str, np.ndarray] = {}
-    for k, items in bag.items():
-        if len(items) != n:
-            continue
-        try:
-            arr = np.asarray(items)
-        except Exception:    # noqa: BLE001
-            continue
-        if arr.size == 0 or arr.dtype.kind in ("U", "O"):
-            continue
-        out[k] = arr[keep]
-    return out
-
-
-def _times_columns(unique_ids, raw_times, raw_subtract, mjd_offset,
-                   original_indices) -> List[fits.Column]:
-    cols = [
-        _column("UNIQUE_ID", unique_ids),
-        _column("RAW_TIME", raw_times, unit="s"),
-        _column("MJD_TIME", _to_mjd(raw_times, raw_subtract, mjd_offset), unit="d"),
-        _column("ORIG_IDX", original_indices.astype(np.int64)),
+def _utf8_column(name: str, array: np.ndarray, fits):
+    row_count = array.shape[0]
+    cell_shape = array.shape[1:]
+    element_count = int(np.prod(cell_shape, dtype=np.int64)) if cell_shape else 1
+    flattened = array.reshape(row_count, element_count)
+    encoded = [
+        item.encode("utf-8")
+        for item in flattened.reshape(-1).tolist()
     ]
-    return [c for c in cols if c is not None]
+    width = max((len(item) for item in encoded), default=0)
+    width = max(width, 1)
+    storage = np.zeros((row_count, element_count, width), dtype=np.uint8)
+    storage_flat = storage.reshape(-1, width)
+    for index, item in enumerate(encoded):
+        storage_flat[index, : len(item)] = np.frombuffer(item, dtype=np.uint8)
+    if not cell_shape:
+        storage = storage.reshape(row_count, width)
+    else:
+        storage = storage.reshape(row_count, *cell_shape, width)
+    column = _numeric_column(name, storage, "B", fits)
+    return column, {
+        "encoding": "utf8",
+        "utf8_width": width,
+        "tform": column.format,
+    }
 
 
-def _build_spectra_hdus(products, raw_subtract, mjd_offset) -> List[fits.HDUList]:
-    if not products.spectra:
-        return []
-    cube, uids, raw_times, keep = _spectra_retention(products)
-    if cube.shape[0] == 0:
-        return []
-    hdus: List = []
-    img = fits.ImageHDU(data=cube, name="SPECTRA")
-    img.header["EXTDESC"] = "Spectra cube (n_time, n_product, n_channel)"
-    img.header["NTIME"] = cube.shape[0]
-    img.header["NPROD"] = cube.shape[1]
-    img.header["NCHAN"] = cube.shape[2]
-    img.header["BUNIT"] = SPECTRA_UNITS
-    img.header["BITSREST"] = (True, "actual bit-slice restored at ingestion")
-    img.header["BITSREF"] = BITSLICE_REFERENCE
-    img.header["NORMVER"] = SPECTRA_NORMALIZATION_VERSION
-    img.header["HIERARCH REPRESENTATION"] = SPECTRA_REPRESENTATION
-    hdus.append(img)
-    hdus.append(_bintable_from_columns(
-        _times_columns(uids, raw_times, raw_subtract, mjd_offset, keep),
-        name="SPECTRA_TIMES",
-        extdesc="Per-row time/identity for /SPECTRA",
-    ))
-    md = _stack_metadata(products.spectra, keep)
-    if md:
-        cols = []
-        for name, arr in md.items():
-            col = _column(name[:68], arr)
-            if col is not None:
-                cols.append(col)
-        if cols:
-            hdus.append(_bintable_from_columns(
-                cols, name="SPECTRA_META",
-                extdesc="Per-row metadata for /SPECTRA",
-            ))
-    return hdus
+def _numeric_column(name: str, array: np.ndarray, base: str, fits, *, bzero=None):
+    inner_shape = array.shape[1:]
+    repeat = int(np.prod(inner_shape, dtype=np.int64)) if inner_shape else 1
+    format_name = base if repeat == 1 else f"{repeat}{base}"
+    dim = None
+    if inner_shape:
+        dim = "(" + ",".join(str(item) for item in reversed(inner_shape)) + ")"
+    return fits.Column(
+        name=name,
+        format=format_name,
+        array=array,
+        dim=dim,
+        bzero=bzero,
+    )
 
 
-def _build_tr_hdus(products, raw_subtract, mjd_offset) -> List:
-    out = _tr_retention(products)
-    if out is None:
-        return []
-    cube, uids, raw_times, navg2_per, tr_len_per, keep, navg2_max, tr_len_max = out
-    if cube.shape[0] == 0:
-        return []
-    hdus: List = []
-    img = fits.ImageHDU(data=cube, name="TR_SPECTRA")
-    img.header["EXTDESC"] = "TR spectra (n_time, n_product, navg2, tr_length)"
-    img.header["NTIME"] = cube.shape[0]
-    img.header["NPROD"] = cube.shape[1]
-    img.header["NAVG2"] = navg2_max
-    img.header["TR_LEN"] = tr_len_max
-    hdus.append(img)
-    cols = _times_columns(uids, raw_times, raw_subtract, mjd_offset, keep)
-    cols.append(_column("NAVG2", navg2_per.astype(np.int64)))
-    cols.append(_column("TR_LEN", tr_len_per.astype(np.int64)))
-    hdus.append(_bintable_from_columns(
-        [c for c in cols if c is not None],
-        name="TR_TIMES",
-        extdesc="Per-row time/identity for /TR_SPECTRA",
-    ))
-    md = _stack_metadata(products.tr_spectra, keep)
-    if md:
-        cols2 = [c for c in (_column(name[:68], arr) for name, arr in md.items()) if c is not None]
-        if cols2:
-            hdus.append(_bintable_from_columns(
-                cols2, name="TR_META",
-                extdesc="Per-row metadata for /TR_SPECTRA",
-            ))
-    return hdus
-
-
-def _build_zoom_hdus(products, raw_subtract, mjd_offset) -> List:
-    if not products.zoom_spectra:
-        return []
-    n = len(products.zoom_spectra)
-    cube = np.zeros((n, 4, 64), dtype=np.float32)
-    uids = np.zeros(n, dtype=np.int64)
-    pfb = np.zeros(n, dtype=np.int32)
-    raw_times = np.zeros(n, dtype=np.float64)
-    for i, z in enumerate(products.zoom_spectra):
-        cube[i] = z.data
-        uids[i] = z.unique_packet_id
-        pfb[i] = z.pfb_index
-        raw_times[i] = z.raw_seconds
-    hdus = []
-    img = fits.ImageHDU(data=cube, name="ZOOM_DATA")
-    img.header["EXTDESC"] = "Calibrator zoom spectra (n_time, 4, 64)"
-    img.header["NTIME"] = cube.shape[0]
-    hdus.append(img)
-    cols = _times_columns(uids, raw_times, raw_subtract, mjd_offset, np.arange(n, dtype=np.int64))
-    cols.append(_column("PFB_IDX", pfb.astype(np.int32)))
-    hdus.append(_bintable_from_columns(
-        [c for c in cols if c is not None],
-        name="ZOOM_TIMES",
-        extdesc="Per-row time/identity for /ZOOM_DATA",
-    ))
-    return hdus
-
-
-def _build_grimm_hdus(products, raw_subtract, mjd_offset) -> List:
-    if not products.grimm_spectra:
-        return []
-    n = len(products.grimm_spectra)
-    cube = np.full((n, NPRODUCTS, NCHANNELS), np.nan, dtype=np.float32)
-    uids = np.zeros(n, dtype=np.int64)
-    raw_times = np.zeros(n, dtype=np.float64)
-    for i, s in enumerate(products.grimm_spectra):
-        cube[i] = s.data
-        uids[i] = s.unique_packet_id
-        raw_times[i] = s.raw_seconds
-    hdus = []
-    img = fits.ImageHDU(data=cube, name="GRIMM")
-    img.header["EXTDESC"] = "Grimm spectra (n_time, n_product, n_channel)"
-    hdus.append(img)
-    hdus.append(_bintable_from_columns(
-        _times_columns(uids, raw_times, raw_subtract, mjd_offset,
-                       np.arange(n, dtype=np.int64)),
-        name="GRIMM_TIMES",
-        extdesc="Per-row time/identity for /GRIMM",
-    ))
-    return hdus
-
-
-def _build_waveform_hdus(products) -> List:
-    if not products.waveforms:
-        return []
-    by_channel: Dict[int, list] = {}
-    for w in products.waveforms:
-        by_channel.setdefault(w.channel, []).append(w)
-    hdus = []
-    for ch in sorted(by_channel.keys()):
-        items = by_channel[ch]
-        wf = np.stack([w.data for w in items]).astype(np.int16)
-        ts = np.array([w.raw_seconds for w in items], dtype=np.float64)
-        adc_ts = np.array([
-            0 if w.adc_timestamp is None else w.adc_timestamp
-            for w in items
-        ], dtype=np.uint64)
-        adc_valid = np.array([
-            w.adc_timestamp is not None for w in items
-        ], dtype=np.uint8)
-        cols = [
-            _column("WAVEFORM", wf),
-            _column("TIMESTAMP", ts, unit="s"),
-            fits.Column(
-                name="ADC_TIME",
-                format="K",
-                array=adc_ts,
-                bzero=2**63,
-            ),
-            _column("ADC_VALID", adc_valid),
-        ]
-        hdu = _bintable_from_columns(
-            [c for c in cols if c is not None],
-            name=f"WF_CH{ch}",
-            extdesc=f"Raw ADC waveforms, channel {ch}",
-        )
-        hdu.header["CHANNEL"] = int(ch)
-        hdu.header["WFLEN"] = int(wf.shape[1])
-        hdus.append(hdu)
-    return hdus
-
-
-def _build_housekeeping_hdus(products) -> List:
-    if not products.housekeeping:
-        return []
-    by_type: Dict[int, list] = {}
-    for hk in products.housekeeping:
-        by_type.setdefault(hk.hk_type, []).append(hk)
-    hdus = []
-    for type_id in sorted(by_type.keys()):
-        rows = sorted(
-            by_type[type_id],
-            key=lambda row: (
-                row.raw_seconds is None,
-                0.0 if row.raw_seconds is None else row.raw_seconds,
-            ),
-        )
-        n = len(rows)
-        cols: List[fits.Column] = []
-        cols.append(_column("UPID", np.array([r.unique_packet_id for r in rows], dtype=np.int64)))
-        cols.append(_column("VERSION", np.array([r.version for r in rows], dtype=np.int16)))
-        cols.append(_column("ERRORS", np.array([r.errors for r in rows], dtype=np.int32)))
-        cols.append(_column("RAW_TIME", np.array([r.raw_seconds for r in rows], dtype=np.float64), unit="s"))
-
-        if type_id == 0:
-            cols.append(_column("TIME", np.array([float(r.fields.get("time", 0.0) or 0.0) for r in rows], dtype=np.float64), unit="s"))
-        elif type_id == 1:
-            for name in ("adc_min", "adc_max"):
-                arr = np.zeros((n, 4), dtype=np.int16)
-                for i, r in enumerate(rows):
-                    v = r.fields.get(name)
-                    if v is not None:
-                        m = min(np.asarray(v).size, 4)
-                        arr[i, :m] = np.asarray(v).reshape(-1)[:m]
-                cols.append(_column(name.upper(), arr, unit="ADC counts"))
-            for name in ("adc_mean", "adc_rms"):
-                arr = np.zeros((n, 4), dtype=np.float32)
-                for i, r in enumerate(rows):
-                    v = r.fields.get(name)
-                    if v is not None:
-                        m = min(np.asarray(v).size, 4)
-                        arr[i, :m] = np.asarray(v).reshape(-1)[:m]
-                cols.append(_column(name.upper(), arr, unit="ADC counts"))
-            ag = np.full((n, 4), b"\x00", dtype="S1")
-            for i, r in enumerate(rows):
-                v = r.fields.get("actual_gain")
-                if v is None:
-                    continue
-                arr = np.asarray(v).reshape(-1) if not isinstance(v, np.ndarray) else v.reshape(-1)
-                m = min(arr.size, 4)
-                ag[i, :m] = arr[:m]
-            cols.append(_column("ACT_GAIN", ag, disp="A4"))
-        elif type_id == 2:
-            cols.append(_column("TIME", np.array([float(r.fields.get("time", 0.0) or 0.0) for r in rows], dtype=np.float64), unit="s"))
-            cols.append(_column("OK", np.array([int(bool(r.fields.get("ok", False))) for r in rows], dtype=np.int16)))
-            telem_keys: List[str] = []
-            seen: set = set()
-            for r in rows:
-                for k in r.fields:
-                    if k.startswith("telemetry") and k not in seen:
-                        telem_keys.append(k)
-                        seen.add(k)
-            for k in telem_keys:
-                arr = np.full(n, np.nan, dtype=np.float32)
-                for i, r in enumerate(rows):
-                    v = r.fields.get(k)
-                    if v is None:
-                        continue
-                    try:
-                        arr[i] = float(v)
-                    except (TypeError, ValueError):
-                        pass
-                # FITS column names cap at 68 chars; the channel name is
-                # already short enough.
-                cols.append(_column(k[:68], arr))
-        elif type_id == 3:
-            cols.append(_column("CHECKSUM", np.array([int(r.fields.get("checksum", 0) or 0) for r in rows], dtype=np.int64)))
-            cols.append(_column("WGT_NDX", np.array([int(r.fields.get("weight_ndx", 0) or 0) for r in rows], dtype=np.int32)))
-
-        cols = [c for c in cols if c is not None]
-        hdu = _bintable_from_columns(
-            cols, name=f"HK_T{type_id}",
-            extdesc=f"Housekeeping records, type {type_id}",
-        )
-        hdu.header["HKTYPE"] = type_id
-        hdus.append(hdu)
-    return hdus
-
-
-def _build_dcb_telemetry_hdus(fpga, encoder) -> List:
-    hdus: List = []
-    if fpga:
-        ms = np.asarray(fpga.get("mission_seconds", np.empty(0)), dtype=np.float64)
-        ss = np.asarray(fpga.get("lusee_subsecs", np.empty(0)), dtype=np.float64)
-        if ms.size:
-            cols = [_column("MS", ms, unit="s"), _column("SUBSEC", ss, unit="ticks")]
-            for fname, arr in fpga.items():
-                if fname in ("mission_seconds", "lusee_subsecs"):
-                    continue
-                col = _column(fname[:68], np.asarray(arr, dtype=np.float64))
-                if col is not None:
-                    cols.append(col)
-            cols = [c for c in cols if c is not None]
-            hdu = _bintable_from_columns(
-                cols, name="DCB_FPGA",
-                extdesc="DCB FPGA telemetry time series",
-            )
-            hdus.append(hdu)
-    if encoder and encoder.get("mission_seconds") is not None:
-        ms = np.asarray(encoder["mission_seconds"], dtype=np.float64)
-        ss = np.asarray(encoder.get("lusee_subsecs", np.zeros_like(ms)), dtype=np.float64)
-        cols = [
-            _column("MS", ms, unit="s"),
-            _column("SUBSEC", ss, unit="ticks"),
-            _column("ENC_POS", np.asarray(encoder.get("enc_pos", np.zeros_like(ms)), dtype=np.int64)),
-            _column("ENC_STAT", np.asarray(encoder.get("enc_status", np.zeros_like(ms)), dtype=np.int64)),
-        ]
-        cols = [c for c in cols if c is not None]
-        hdus.append(_bintable_from_columns(
-            cols, name="DCB_ENC",
-            extdesc="DCB encoder telemetry time series",
-        ))
-    return hdus
-
-
-def _build_interp_telemetry_hdu(fpga, products, raw_subtract, mjd_offset, mode) -> List:
-    if not fpga or not products.spectra:
-        return []
-    spec_raw = np.array([s.raw_seconds for s in products.spectra], dtype=np.float64)
-    finite_mask = np.array([np.any(np.isfinite(s.data)) for s in products.spectra])
-    spec_raw = spec_raw[finite_mask]
-    if spec_raw.size == 0:
-        return []
-    interp = _interpolate_telemetry(fpga, spec_raw, mode=mode)
-    if not interp:
-        return []
-    cols = [
-        _column("RAW_TIME", spec_raw, unit="s"),
-        _column("MJD_TIME", _to_mjd(spec_raw, raw_subtract, mjd_offset), unit="d"),
-    ]
-    for k, arr in interp.items():
-        col = _column(k[:68], np.asarray(arr, dtype=np.float64))
-        if col is not None:
-            cols.append(col)
-    cols = [c for c in cols if c is not None]
-    return [_bintable_from_columns(
-        cols, name="SPEC_INTERP",
-        extdesc="FPGA telemetry interpolated onto /SPECTRA time axis",
-    )]
-
-
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-
-def write_fits(
-    products: Products,
-    dest: Path | str,
+def _table_hdu(
+    group: LayoutGroup,
+    datasets: dict[str, LayoutDataset],
+    index: int,
+    fits,
     *,
-    cdi_directory: Optional[Path | str] = None,
-    fpga_telemetry: Optional[Mapping[str, np.ndarray]] = None,
-    encoder_telemetry: Optional[Mapping[str, np.ndarray]] = None,
-    interpolate_telemetry: bool = False,
-    interpolation_mode: str = "normalized",
-    lun_lat_deg: float = DEFAULT_LUN_LAT_DEG,
-    lun_long_deg: float = DEFAULT_LUN_LONG_DEG,
-    lun_height_m: float = DEFAULT_LUN_HEIGHT_M,
-    raw_time_subtract_seconds: float = DEFAULT_RAW_TIME_SUBTRACT_SECONDS,
-    mjd_epoch_offset_days: float = DEFAULT_MJD_EPOCH_OFFSET_DAYS,
-    time_scale: str = DEFAULT_TIME_SCALE,
-    clock_source: str = DEFAULT_CLOCK_SOURCE,
-    clock_epoch_isot: Optional[str] = None,
-) -> Path:
-    """Write a ``Products`` instance + optional telemetry to ``dest`` (FITS).
-
-    The HDU layout mirrors the HDF5 schema: the same product cubes, the
-    same per-row identity tables, and the same per-type housekeeping
-    tables, just expressed as IMAGE / BINTABLE HDUs.  Time provenance
-    (``time_scale``/``clock_source``/``clock_epoch_isot``) lands in the
-    CONSTANTS HDU as TIMESYS/CLKSRC/CLKEPOCH.
-    """
-    if time_scale not in KNOWN_TIME_SCALES:
-        raise ValueError(
-            f"time_scale must be one of {KNOWN_TIME_SCALES}; got {time_scale!r}"
+    kind: str,
+    include_attrs: bool,
+    part: int | None = None,
+):
+    extname = f"L4G{index:04d}"
+    columns = []
+    schema = {}
+    for column_index, (name, dataset) in enumerate(datasets.items(), start=1):
+        transport_name = (
+            name
+            if len(name.encode("ascii")) <= _COLUMN_NAME_MAX
+            else f"__L4C{column_index:04d}"
         )
-    # Keep FITS and HDF5 views of the same Products object in the same SDU
-    # state.  TR and Grimm products are deliberately not normalized here.
-    products.restore_spectra_bitslices()
-    dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
+        column, record = _column_for_dataset(transport_name, dataset, fits)
+        if transport_name != name:
+            record["transport_name"] = transport_name
+        columns.append(column)
+        schema[name] = record
+    hdu = fits.BinTableHDU.from_columns(columns, name=extname)
+    hdu.header[_KIND_KEY] = kind
+    hdu.header[_COLUMNS_KEY] = _canonical_json(schema)
+    hdu.header[_PATH_KEY] = group.path
+    if include_attrs:
+        hdu.header[_ATTRS_KEY] = _encode_attrs(group.attrs)
+    if part is not None:
+        hdu.header[_PART_KEY] = part
+    return hdu
 
-    # Primary HDU: file-level provenance + the HDF5-equivalent root attrs.
+
+def _group_hdus(group: LayoutGroup, start_index: int, fits):
+    datasets = group_datasets(group)
+    if not datasets:
+        hdu = fits.ImageHDU(data=None, name=f"L4G{start_index:04d}")
+        hdu.header[_KIND_KEY] = "group"
+        hdu.header[_PATH_KEY] = group.path
+        hdu.header[_ATTRS_KEY] = _encode_attrs(group.attrs)
+        return [hdu]
+    by_row_count: dict[int, dict[str, LayoutDataset]] = {}
+    for name, dataset in datasets.items():
+        by_row_count.setdefault(dataset.shape[0], {})[name] = dataset
+    partitions = []
+    for row_count in sorted(by_row_count):
+        items = list(by_row_count[row_count].items())
+        for start in range(0, len(items), _MAX_TABLE_COLUMNS):
+            partitions.append(dict(items[start : start + _MAX_TABLE_COLUMNS]))
+    if len(partitions) == 1:
+        return [
+            _table_hdu(
+                group,
+                partitions[0],
+                start_index,
+                fits,
+                kind="table",
+                include_attrs=True,
+            )
+        ]
+    header_hdu = fits.ImageHDU(data=None, name=f"L4G{start_index:04d}")
+    header_hdu.header[_KIND_KEY] = "group"
+    header_hdu.header[_PATH_KEY] = group.path
+    header_hdu.header[_ATTRS_KEY] = _encode_attrs(group.attrs)
+    hdus = [header_hdu]
+    for part, partition in enumerate(partitions):
+        hdus.append(
+            _table_hdu(
+                group,
+                partition,
+                start_index + part + 1,
+                fits,
+                kind="table-part",
+                include_attrs=False,
+                part=part,
+            )
+        )
+    return hdus
+
+
+def _tree_to_hdul(root: LayoutGroup, fits):
     primary = fits.PrimaryHDU()
-    primary.header["LAYOUTV"] = LEGACY_FITS_LAYOUT_VERSION
     primary.header["ORIGIN"] = "lusee.ingest.fits_writer"
-    if cdi_directory is not None:
-        primary.header["CDI_DIR"] = str(cdi_directory)[:68]
+    primary.header["LAYOUTV"] = INGEST_LAYOUT_VERSION
+    primary.header["FITSFMT"] = FITS_TRANSPORT_VERSION
+    primary.header["QUALITY"] = root.attrs["quality_status"]
+    primary.header["EXECMODE"] = root.attrs["execution_mode"]
+    primary.header[_PATH_KEY] = "/"
+    primary.header[_KIND_KEY] = "primary"
+    primary.header[_ATTRS_KEY] = _encode_attrs(root.attrs)
+    hdus = [primary]
+    next_index = 1
+    for group in iter_layout_groups(root):
+        group_hdus = _group_hdus(group, next_index, fits)
+        hdus.extend(group_hdus)
+        next_index += len(group_hdus)
+    return fits.HDUList(hdus)
 
-    hdus: List = [primary]
 
-    hdus.append(_empty_image_hdu(
-        "SESSION_INV",
-        kvs={
-            "SW_VERS":  products.sw_version,
-            "FW_VERS":  products.fw_version,
-            "FW_ID":    products.fw_id,
-            "FW_DATE":  products.fw_date,
-            "FW_TIME":  products.fw_time,
-            "ST_UPID":  products.start_unique_packet_id,
-            "ST_T32":   products.start_time_32,
-            "ST_T16":   products.start_time_16,
-        },
-        extdesc="Session-invariant identity from Hello packet",
-    ))
-    hdus.append(_empty_image_hdu(
-        "CONSTANTS",
-        kvs={
-            "LUN_LAT":  lun_lat_deg,
-            "LUN_LON":  lun_long_deg,
-            "LUN_HGT":  lun_height_m,
-            "RAWSHFT":  raw_time_subtract_seconds,
-            "MJDOFF":   mjd_epoch_offset_days,
-            # FITS convention spells time-scale values uppercase; the
-            # reader lowercases on the way back in
-            "TIMESYS":  time_scale.upper(),
-            "CLKSRC":   clock_source,
-            "CLKEPOCH": clock_epoch_isot,
-        },
-        extdesc="Lunar landing coordinates and MJD calibration",
-    ))
+def _write_fits_temp(path: Path, root: LayoutGroup, fits) -> None:
+    hdul = _tree_to_hdul(root, fits)
+    try:
+        hdul.writeto(
+            path,
+            overwrite=True,
+            checksum=True,
+            output_verify="exception",
+        )
+    finally:
+        hdul.close()
 
-    hdus.extend(_build_spectra_hdus(products, raw_time_subtract_seconds, mjd_epoch_offset_days))
-    hdus.extend(_build_tr_hdus(products, raw_time_subtract_seconds, mjd_epoch_offset_days))
-    hdus.extend(_build_zoom_hdus(products, raw_time_subtract_seconds, mjd_epoch_offset_days))
-    hdus.extend(_build_grimm_hdus(products, raw_time_subtract_seconds, mjd_epoch_offset_days))
-    hdus.extend(_build_waveform_hdus(products))
-    hdus.extend(_build_housekeeping_hdus(products))
-    hdus.extend(_build_dcb_telemetry_hdus(fpga_telemetry, encoder_telemetry))
-    if interpolate_telemetry and fpga_telemetry:
-        hdus.extend(_build_interp_telemetry_hdu(
-            fpga_telemetry, products,
-            raw_time_subtract_seconds, mjd_epoch_offset_days,
-            interpolation_mode,
-        ))
 
-    fits.HDUList(hdus).writeto(dest, overwrite=True)
-    log.info("wrote FITS %s", dest)
-    return dest
+def _read_layout_tree(hdul, fits) -> LayoutGroup:
+    primary = hdul[0]
+    if not isinstance(primary, fits.PrimaryHDU):
+        raise TypeError("temporary FITS has no primary HDU")
+    if (
+        primary.header.get("LAYOUTV") != INGEST_LAYOUT_VERSION
+        or primary.header.get("FITSFMT") != FITS_TRANSPORT_VERSION
+        or primary.header.get(_PATH_KEY) != "/"
+        or primary.header.get(_KIND_KEY) != "primary"
+    ):
+        raise ValueError("temporary FITS primary contract disagrees")
+    root = LayoutGroup(path="", attrs=_decode_attrs(primary.header.get(_ATTRS_KEY)))
+    if (
+        primary.header.get("QUALITY") != root.attrs.get("quality_status")
+        or primary.header.get("EXECMODE") != root.attrs.get("execution_mode")
+    ):
+        raise ValueError("temporary FITS public provenance cards disagree")
+    declared_paths = set()
+    next_part: dict[str, int] = {}
+    for hdu_index, hdu in enumerate(hdul[1:], start=1):
+        if hdu.name != f"L4G{hdu_index:04d}":
+            raise ValueError("temporary FITS extension order disagrees")
+        path = hdu.header.get(_PATH_KEY)
+        kind = hdu.header.get(_KIND_KEY)
+        if (
+            type(path) is not str
+            or not path.startswith("/")
+            or path == "/"
+        ):
+            raise ValueError("temporary FITS group path is invalid")
+        group = _require_tree_group(root, path)
+        if kind in ("group", "table"):
+            if path in declared_paths:
+                raise ValueError("temporary FITS group path is duplicated")
+            declared_paths.add(path)
+            group.attrs.update(_decode_attrs(hdu.header.get(_ATTRS_KEY)))
+        elif kind == "table-part":
+            if path not in declared_paths or _ATTRS_KEY in hdu.header:
+                raise ValueError("temporary FITS table partition is invalid")
+            part = hdu.header.get(_PART_KEY)
+            if type(part) is not int or part != next_part.get(path, 0):
+                raise ValueError("temporary FITS table partition order disagrees")
+            next_part[path] = part + 1
+        else:
+            raise ValueError(f"temporary FITS HDU kind disagrees at {path}")
+        if kind == "group":
+            if not isinstance(hdu, fits.ImageHDU) or hdu.data is not None:
+                raise ValueError(f"temporary FITS group HDU disagrees at {path}")
+            continue
+        if not isinstance(hdu, fits.BinTableHDU):
+            raise TypeError(f"temporary FITS table HDU disagrees at {path}")
+        _read_group_datasets(group, hdu)
+    return root
+
+
+def _require_tree_group(root: LayoutGroup, path: str) -> LayoutGroup:
+    group = root
+    for part in path.strip("/").split("/"):
+        child = group.children.get(part)
+        if child is None:
+            child = group._new_group(part)
+            group.children[part] = child
+        if not isinstance(child, LayoutGroup):
+            raise TypeError(f"temporary FITS path crosses a dataset: {path}")
+        group = child
+    return group
+
+
+def _read_group_datasets(group: LayoutGroup, hdu) -> None:
+    raw_schema = hdu.header.get(_COLUMNS_KEY)
+    if type(raw_schema) is not str:
+        raise ValueError(f"temporary FITS column schema is missing at {group.path}")
+    try:
+        schema = json.loads(raw_schema)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"temporary FITS column schema is invalid at {group.path}"
+        ) from exc
+    if not isinstance(schema, dict) or not schema:
+        raise ValueError(f"temporary FITS columns disagree at {group.path}")
+    transport_names = []
+    for name, record in schema.items():
+        if not isinstance(record, dict):
+            raise TypeError(
+                f"temporary FITS column record is invalid at {group.path}"
+            )
+        transport_name = record.get("transport_name", name)
+        if type(transport_name) is not str:
+            raise TypeError(
+                f"temporary FITS transport name is invalid at {group.path}"
+            )
+        transport_names.append(transport_name)
+    if len(set(transport_names)) != len(transport_names) or (
+        list(hdu.columns.names) != transport_names
+    ):
+        raise ValueError(f"temporary FITS columns disagree at {group.path}")
+    for column_index, (name, record) in enumerate(schema.items(), start=1):
+        transport_name = transport_names[column_index - 1]
+        expected_tform = record.get("tform")
+        observed_tform = hdu.header.get(f"TFORM{column_index}")
+        if (
+            type(expected_tform) is not str
+            or observed_tform.strip() != expected_tform
+        ):
+            raise ValueError(
+                f"temporary FITS TFORM disagrees for {group.path}/{name}"
+            )
+        bzero = record.get("bzero")
+        observed_bzero = hdu.header.get(f"TZERO{column_index}")
+        observed_scale = hdu.header.get(f"TSCAL{column_index}")
+        if bzero is None:
+            if observed_bzero is not None:
+                raise ValueError(
+                    f"temporary FITS unsigned scaling is unexpected for "
+                    f"{group.path}/{name}"
+                )
+        elif observed_bzero != bzero or observed_scale not in (None, 1):
+            raise ValueError(
+                f"temporary FITS unsigned scaling disagrees for "
+                f"{group.path}/{name}"
+            )
+        dataset = _decode_column(hdu.data[transport_name], record)
+        raw_attrs = record.get("attrs")
+        if not isinstance(raw_attrs, dict):
+            raise TypeError(
+                f"temporary FITS dataset attributes are invalid at "
+                f"{group.path}/{name}"
+            )
+        dataset.attrs = {
+            attr_name: _decode_attr(value)
+            for attr_name, value in raw_attrs.items()
+        }
+        if name in group.children:
+            raise ValueError(
+                f"temporary FITS duplicates dataset {group.path}/{name}"
+            )
+        group.children[name] = dataset
+
+
+def _decode_column(raw: object, record: dict[str, object]) -> LayoutDataset:
+    logical_shape = _json_shape(record.get("logical_shape"))
+    logical_dtype = record.get("logical_dtype")
+    encoding = record.get("encoding")
+    if encoding == "empty":
+        if logical_dtype == "utf8":
+            return LayoutDataset(
+                np.empty(logical_shape, dtype=object),
+                is_utf8=True,
+            )
+        dtype = np.dtype(logical_dtype)
+        return LayoutDataset(np.empty(logical_shape, dtype=dtype))
+    if encoding == "utf8":
+        width = record.get("utf8_width")
+        if type(width) is not int or width <= 0:
+            raise ValueError("temporary FITS UTF-8 width is invalid")
+        row_count = logical_shape[0]
+        cell_shape = logical_shape[1:]
+        element_count = (
+            int(np.prod(cell_shape, dtype=np.int64)) if cell_shape else 1
+        )
+        storage = np.asarray(raw, dtype=np.uint8).reshape(
+            row_count, element_count, width
+        )
+        values = []
+        for item in storage.reshape(-1, width):
+            encoded = item.tobytes().rstrip(b"\x00")
+            try:
+                values.append(encoded.decode("utf-8"))
+            except UnicodeDecodeError as exc:
+                raise ValueError("temporary FITS UTF-8 value is invalid") from exc
+        data = np.asarray(values, dtype=object).reshape(logical_shape)
+        return LayoutDataset(data=data, is_utf8=True)
+    dtype = np.dtype(logical_dtype)
+    if encoding == "bytes":
+        itemsize = record.get("itemsize")
+        if type(itemsize) is not int or itemsize != dtype.itemsize:
+            raise ValueError("temporary FITS byte width disagrees")
+        storage = np.asarray(raw, dtype=np.uint8).reshape(
+            *logical_shape, itemsize
+        )
+        data = np.frombuffer(storage.tobytes(), dtype=dtype).copy().reshape(
+            logical_shape
+        )
+        return LayoutDataset(data=data)
+    if encoding not in ("native", "unsigned", "int8"):
+        raise ValueError("temporary FITS column encoding is unsupported")
+    data = np.asarray(raw).astype(dtype, copy=False).reshape(logical_shape)
+    return LayoutDataset(data=data)
+
+
+def _verify_fits(path: Path, expected: LayoutGroup, fits) -> None:
+    with fits.open(path, mode="readonly", uint=True, memmap=False) as hdul:
+        hdul.verify("exception")
+        for hdu in hdul:
+            if (
+                _header_count(hdu.header, "CHECKSUM") != 1
+                or _header_count(hdu.header, "DATASUM") != 1
+                or hdu.verify_checksum() != 1
+                or hdu.verify_datasum() != 1
+            ):
+                raise ValueError("temporary FITS checksum contract failed")
+        _verify_transport_headers(hdul, expected, fits)
+        observed = _read_layout_tree(hdul, fits)
+    assert_layout_trees_equal(
+        expected,
+        observed,
+        context="temporary FITS",
+    )
+
+
+def _verify_transport_headers(observed, expected_root: LayoutGroup, fits) -> None:
+    expected = _tree_to_hdul(expected_root, fits)
+    try:
+        if len(observed) != len(expected):
+            raise ValueError("temporary FITS HDU count disagrees")
+        for hdu_index, (observed_hdu, expected_hdu) in enumerate(
+            zip(observed, expected, strict=True)
+        ):
+            if type(observed_hdu) is not type(expected_hdu):
+                raise TypeError(
+                    f"temporary FITS HDU type disagrees at index {hdu_index}"
+                )
+            for name in (
+                "ORIGIN",
+                "LAYOUTV",
+                "FITSFMT",
+                "QUALITY",
+                "EXECMODE",
+                "EXTNAME",
+                _PATH_KEY,
+                _KIND_KEY,
+                _ATTRS_KEY,
+                _COLUMNS_KEY,
+                _PART_KEY,
+                "XTENSION",
+                "BITPIX",
+                "NAXIS",
+                "NAXIS1",
+                "NAXIS2",
+                "PCOUNT",
+                "GCOUNT",
+                "TFIELDS",
+            ):
+                if (
+                    _header_count(observed_hdu.header, name)
+                    != _header_count(expected_hdu.header, name)
+                    or observed_hdu.header.get(name)
+                    != expected_hdu.header.get(name)
+                ):
+                    raise ValueError(
+                        f"temporary FITS header {name} disagrees at "
+                        f"index {hdu_index}"
+                    )
+            if not isinstance(expected_hdu, fits.BinTableHDU):
+                if _semantic_header_cards(observed_hdu.header) != (
+                    _semantic_header_cards(expected_hdu.header)
+                ):
+                    raise ValueError(
+                        f"temporary FITS complete header disagrees at "
+                        f"index {hdu_index}"
+                    )
+                continue
+            if observed_hdu.columns.names != expected_hdu.columns.names:
+                raise ValueError(
+                    f"temporary FITS column names disagree at index {hdu_index}"
+                )
+            for column_index in range(1, len(expected_hdu.columns) + 1):
+                for prefix in (
+                    "TTYPE",
+                    "TFORM",
+                    "TDIM",
+                    "TZERO",
+                    "TSCAL",
+                    "TNULL",
+                    "TUNIT",
+                ):
+                    key = f"{prefix}{column_index}"
+                    if (
+                        _header_count(observed_hdu.header, key)
+                        != _header_count(expected_hdu.header, key)
+                        or observed_hdu.header.get(key)
+                        != expected_hdu.header.get(key)
+                    ):
+                        raise ValueError(
+                            f"temporary FITS header {key} disagrees at "
+                            f"index {hdu_index}"
+                        )
+            if _semantic_header_cards(observed_hdu.header) != (
+                _semantic_header_cards(expected_hdu.header)
+            ):
+                raise ValueError(
+                    f"temporary FITS complete header disagrees at "
+                    f"index {hdu_index}"
+                )
+    finally:
+        expected.close()
+
+
+def _install_atomic(temp_path: Path, destination: Path, *, overwrite: bool) -> None:
+    if overwrite:
+        os.replace(temp_path, destination)
+        return
+    os.link(temp_path, destination)
+    temp_path.unlink()
+
+
+def write_fits(request: WriteRequest, dest: Path | str) -> Path:
+    """Validate, write, verify, and atomically install one layout-v4 FITS file."""
+    if not isinstance(request, WriteRequest):
+        raise TypeError("write_fits requires a validated WriteRequest")
+    request.validate()
+    destination = Path(dest)
+    if destination.exists() and not request.overwrite:
+        raise FileExistsError(destination)
+    destination_preexisted = destination.exists()
+    fits = _fits_module()
+    expected = build_layout_v4_tree(
+        request,
+        destination_preexisted=destination_preexisted,
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        dir=destination.parent,
+    )
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        _write_fits_temp(temporary, expected, fits)
+        _verify_fits(temporary, expected, fits)
+        _install_atomic(temporary, destination, overwrite=request.overwrite)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    log.info("wrote layout-v4 FITS %s", destination)
+    return destination
+
+
+__all__ = ["write_fits"]

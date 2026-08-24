@@ -1178,6 +1178,38 @@ def _write_root_attrs(h5, request: WriteRequest) -> None:
         )
 
 
+def _populate_layout_v4(
+    h5,
+    request: WriteRequest,
+    h5py,
+    *,
+    destination_preexisted: bool,
+) -> None:
+    _write_root_attrs(h5, request)
+    _write_session_invariants(h5, request)
+    _write_constants(h5, request)
+    _write_clock_reference(h5, request, h5py)
+    _write_run_provenance(
+        h5,
+        request,
+        destination_preexisted=destination_preexisted,
+    )
+    _write_decoder_provenance(h5, request, h5py)
+    issue_index = _write_issues(h5, request, h5py)
+    provenance_index = _write_product_provenance(h5, request, h5py, issue_index)
+    _write_family_status(h5, request, h5py, issue_index)
+    _write_spectra(h5, request, provenance_index, h5py)
+    _write_tr_spectra(h5, request, provenance_index, h5py)
+    _write_zoom(h5, request, provenance_index, h5py)
+    _write_waveforms(h5, request, provenance_index, h5py)
+    _write_grimm(h5, request, provenance_index, h5py)
+    _write_housekeeping(h5, request, provenance_index, h5py)
+    _write_calibrator_metadata(h5, request, provenance_index, h5py)
+    _write_calibrator_data(h5, request, provenance_index, h5py)
+    _write_calibrator_raw_pfb(h5, request, provenance_index, h5py)
+    _write_calibrator_debug(h5, request, provenance_index, h5py)
+
+
 def _write_layout_v4(
     path: Path,
     request: WriteRequest,
@@ -1186,29 +1218,12 @@ def _write_layout_v4(
     destination_preexisted: bool,
 ) -> None:
     with h5py.File(path, "w") as h5:
-        _write_root_attrs(h5, request)
-        _write_session_invariants(h5, request)
-        _write_constants(h5, request)
-        _write_clock_reference(h5, request, h5py)
-        _write_run_provenance(
+        _populate_layout_v4(
             h5,
             request,
+            h5py,
             destination_preexisted=destination_preexisted,
         )
-        _write_decoder_provenance(h5, request, h5py)
-        issue_index = _write_issues(h5, request, h5py)
-        provenance_index = _write_product_provenance(h5, request, h5py, issue_index)
-        _write_family_status(h5, request, h5py, issue_index)
-        _write_spectra(h5, request, provenance_index, h5py)
-        _write_tr_spectra(h5, request, provenance_index, h5py)
-        _write_zoom(h5, request, provenance_index, h5py)
-        _write_waveforms(h5, request, provenance_index, h5py)
-        _write_grimm(h5, request, provenance_index, h5py)
-        _write_housekeeping(h5, request, provenance_index, h5py)
-        _write_calibrator_metadata(h5, request, provenance_index, h5py)
-        _write_calibrator_data(h5, request, provenance_index, h5py)
-        _write_calibrator_raw_pfb(h5, request, provenance_index, h5py)
-        _write_calibrator_debug(h5, request, provenance_index, h5py)
         h5.flush()
 
 

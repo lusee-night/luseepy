@@ -2,11 +2,8 @@ Ingest layout version 4
 =======================
 
 Layout 4 is the first ingest format written from a validated, format-neutral
-``WriteRequest``. HDF5 implements the contract described here. The legacy FITS
-writer remains explicitly labelled layout 3 until its separate layout-4
-serializer implements the same science and provenance contract. Layout
-versions 2 and 3 remain read-only compatibility formats once that migration is
-complete.
+``WriteRequest``. HDF5 and FITS implement the same science and provenance
+tree. Layout versions 2 and 3 remain read-only compatibility formats.
 
 Write contract
 --------------
@@ -87,8 +84,31 @@ families use ``/spectra``, ``/tr_spectra``, ``/waveform``,
 has a row count plus row-aligned identity, raw-time validity, optional MJD
 validity, original-index, and product-provenance references.
 
-The layout-4 FITS serialization uses ``LAYOUTV = 4`` and equivalent named
-images/tables. The canonical reader normalizes both serializations to one
-bundle contract; FITS-specific integer encoding is an on-disk transport detail
-and does not change the public dtype. The existing legacy FITS writer still
-emits ``LAYOUTV = 3`` and is not a layout-4 compatibility path.
+FITS organization
+-----------------
+
+The FITS primary HDU records ``LAYOUTV = 4`` and ``FITSFMT = 1``. Every
+layout group is identified by its canonical absolute path in ``LUSEEPTH``.
+Row-aligned datasets use one binary table with the same lowercase public names
+as HDF5 when they fit in a FITS header card. Longer normalized field names use
+short physical ``TTYPE`` aliases recorded in ``COLJSON``. A group whose direct
+datasets have different row counts, or exceed FITS's 999-column limit, uses a
+header-only group HDU followed by deterministic table partitions. ``ATTRJSON``
+and ``COLJSON`` are versioned, ASCII JSON transport records for exact logical
+attribute values, column dtypes, shapes, and encodings; non-ASCII text itself
+is stored as UTF-8 bytes in ``B`` columns rather than being forced into FITS
+ASCII strings. Fixed-width byte arrays likewise use exact raw-byte columns.
+
+FITS signed integers, floats, complex values, logical values, and
+multidimensional cell shapes retain their canonical widths. Unsigned 16-,
+32-, and 64-bit columns use FITS unsigned scaling. In particular, waveform
+``adc_timestamps`` is a ``K`` column with ``TZERO = 2**63`` and an independent
+validity column, so ``UINT64_MAX`` round-trips exactly through Astropy and
+fitsio. The transport encoding does not change the logical public dtype.
+
+The writer validates the complete request before creating a temporary file,
+writes checksums for every HDU, reopens the closed file with unsigned reading
+enabled, verifies structure and every checksum explicitly, reconstructs the
+logical layout tree, and requires exact attribute/dataset parity before atomic
+installation. HDF5 and FITS therefore preserve the same strict product rows;
+neither serializer is a layout-v2/v3 writing path.
