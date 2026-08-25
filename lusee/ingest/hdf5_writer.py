@@ -1158,10 +1158,183 @@ def _write_calibrator_debug(h5, request, provenance_index, h5py) -> None:
         )
 
 
+def _write_telemetry_metadata(
+    parent,
+    name: str,
+    field_metadata,
+    request: WriteRequest,
+    h5py,
+) -> None:
+    metadata = parent.create_group(name)
+    metadata.attrs["count"] = np.uint64(len(field_metadata))
+    for dataset_name in ("name", "unit", "kind", "interpolation"):
+        _write_strings(
+            metadata,
+            dataset_name,
+            [getattr(item, dataset_name) for item in field_metadata],
+            request,
+            h5py,
+        )
+    _write_strings(
+        metadata,
+        "display_group",
+        [item.display_group or "" for item in field_metadata],
+        request,
+        h5py,
+    )
+    _create_dataset(
+        metadata,
+        "display_group_valid",
+        np.asarray(
+            [item.display_group is not None for item in field_metadata],
+            dtype=np.bool_,
+        ),
+        request,
+    )
+
+
+def _write_telemetry_block(
+    parent,
+    name: str,
+    block,
+    field_metadata,
+    request: WriteRequest,
+    h5py,
+) -> None:
+    group = parent.create_group(name)
+    group.attrs["count"] = np.uint64(block.row_count)
+    group.attrs["source_kind"] = block.source_kind
+    group.attrs["field_count"] = np.uint32(len(block.field_names))
+    group.attrs["clock_source"] = ClockSource.DCB.value
+    group.attrs["subsecond_divisor"] = np.uint32(65536)
+    group.attrs["input_index_kind"] = "decoder_input_ordinal"
+    for dataset_name, values in (
+        ("input_indices", block.input_indices),
+        ("mission_seconds", block.mission_seconds),
+        ("lusee_subsecs", block.lusee_subsecs),
+        ("raw_seconds", block.raw_seconds),
+        ("mjd_times", block.mjd_times),
+        ("mjd_time_valid", block.mjd_time_valid),
+        ("raw_counts", block.raw_counts),
+        ("values", block.values),
+        ("valid", block.valid),
+    ):
+        _create_dataset(group, dataset_name, values, request)
+    _write_telemetry_metadata(
+        group,
+        "field_metadata",
+        field_metadata,
+        request,
+        h5py,
+    )
+
+
+def _write_telemetry(
+    h5,
+    request: WriteRequest,
+    h5py,
+    issue_index: Mapping[str, int],
+) -> None:
+    telemetry = request.telemetry
+    group = h5.create_group("telemetry")
+    group.attrs["input_state"] = telemetry.input_state.value
+    group.attrs["decoder_status"] = telemetry.decoder_status.value
+    group.attrs["coverage"] = telemetry.coverage.value
+    group.attrs["counts_scope"] = telemetry.counts_scope
+    group.attrs["issue_count"] = np.uint64(len(telemetry.issues))
+    _write_optional_attr(group, "selected_source", telemetry.input_source)
+
+    issue_group = group.create_group("issue_refs")
+    issue_group.attrs["count"] = np.uint64(len(telemetry.issues))
+    _create_dataset(
+        issue_group,
+        "issue_index",
+        np.asarray(
+            [issue_index[issue.issue_id] for issue in telemetry.issues],
+            dtype=np.uint64,
+        ),
+        request,
+    )
+    if telemetry.decoder_info is not None:
+        decoder = group.create_group("decoder")
+        decoder.attrs["api_version"] = np.uint16(
+            telemetry.decoder_info.api_version
+        )
+        decoder.attrs["decoder_name"] = telemetry.decoder_info.decoder_name
+        decoder.attrs["decoder_version"] = telemetry.decoder_info.decoder_version
+        _create_dataset(
+            decoder,
+            "claimed_appids",
+            np.asarray(telemetry.decoder_info.claimed_appids, dtype=np.uint16),
+            request,
+        )
+        _write_telemetry_metadata(
+            group,
+            "field_metadata",
+            telemetry.field_metadata,
+            request,
+            h5py,
+        )
+    if telemetry.counts is not None:
+        counts = group.create_group("counts")
+        counts.attrs["kind"] = telemetry.counts.source
+        counts.attrs["scope"] = telemetry.counts_scope
+        for name, value in telemetry.counts.scalar_counts:
+            counts.attrs[name] = np.uint64(value)
+        for name, values in (
+            ("claimed_appids", telemetry.counts.claimed_appid_counts),
+            ("unclaimed_appids", telemetry.counts.unclaimed_appid_counts),
+        ):
+            if telemetry.counts.source != "b01":
+                continue
+            appids = counts.create_group(name)
+            appids.attrs["count"] = np.uint64(len(values))
+            _create_dataset(
+                appids,
+                "appid",
+                np.asarray([item[0] for item in values], dtype=np.uint16),
+                request,
+            )
+            _create_dataset(
+                appids,
+                "packet_count",
+                np.asarray([item[1] for item in values], dtype=np.uint64),
+                request,
+            )
+    if telemetry.fpga is not None:
+        _write_telemetry_block(
+            group,
+            "fpga",
+            telemetry.fpga,
+            telemetry.field_metadata,
+            request,
+            h5py,
+        )
+    if telemetry.unassigned_fpga is not None:
+        _write_telemetry_block(
+            group,
+            "unassigned_fpga",
+            telemetry.unassigned_fpga,
+            telemetry.field_metadata,
+            request,
+            h5py,
+        )
+    if telemetry.encoder is not None:
+        _write_telemetry_block(
+            group,
+            "encoder",
+            telemetry.encoder,
+            (),
+            request,
+            h5py,
+        )
+        group["encoder"].attrs["measurement_status"] = "unvalidated"
+
+
 def _write_root_attrs(h5, request: WriteRequest) -> None:
     products = request.products
     h5.attrs["layout_version"] = np.uint16(HDF5_LAYOUT_VERSION)
-    h5.attrs["quality_status"] = products.quality_status.value
+    h5.attrs["quality_status"] = request.quality_status.value
     h5.attrs["execution_mode"] = products.execution_mode.value
     h5.attrs["issue_count"] = np.uint64(len(request.issues))
     severity_counts = Counter(issue.severity.value for issue in request.issues)
@@ -1198,6 +1371,7 @@ def _populate_layout_v4(
     issue_index = _write_issues(h5, request, h5py)
     provenance_index = _write_product_provenance(h5, request, h5py, issue_index)
     _write_family_status(h5, request, h5py, issue_index)
+    _write_telemetry(h5, request, h5py, issue_index)
     _write_spectra(h5, request, provenance_index, h5py)
     _write_tr_spectra(h5, request, provenance_index, h5py)
     _write_zoom(h5, request, provenance_index, h5py)
@@ -1275,7 +1449,12 @@ def _verify_layout_v4(
             if h5py.check_string_dtype(dataset.dtype) is not None
             else dataset[:]
         )
-        if not np.array_equal(observed, np.asarray(expected)):
+        expected_array = np.asarray(expected)
+        if observed.dtype.kind in "fc" and expected_array.dtype.kind in "fc":
+            equal = np.array_equal(observed, expected_array, equal_nan=True)
+        else:
+            equal = np.array_equal(observed, expected_array)
+        if not equal:
             raise ValueError(
                 f"temporary HDF5 values disagree in {dataset.name}"
             )
@@ -1870,6 +2049,158 @@ def _verify_layout_v4(
     )
     values["status/families"]["reason"] = reasons
     values["status/families"]["reason_valid"] = reason_valid
+
+    telemetry = request.telemetry
+    telemetry_issue_indices = np.asarray(
+        [issue_id_to_index[issue.issue_id] for issue in telemetry.issues],
+        dtype=np.uint64,
+    )
+    attrs["telemetry"] = {
+        "input_state": telemetry.input_state.value,
+        "decoder_status": telemetry.decoder_status.value,
+        "coverage": telemetry.coverage.value,
+        "counts_scope": telemetry.counts_scope,
+        "issue_count": np.uint64(len(telemetry.issues)),
+        **optional_attrs({"selected_source": telemetry.input_source}),
+    }
+    attrs["telemetry/issue_refs"] = {
+        "count": np.uint64(len(telemetry.issues))
+    }
+    specs["telemetry/issue_refs"] = {
+        "issue_index": ((len(telemetry.issues),), np.uint64)
+    }
+    values["telemetry/issue_refs"] = {
+        "issue_index": telemetry_issue_indices
+    }
+
+    def add_telemetry_metadata(path_name, metadata):
+        attrs[path_name] = {"count": np.uint64(len(metadata))}
+        specs[path_name] = {
+            "name": ((len(metadata),), None),
+            "unit": ((len(metadata),), None),
+            "kind": ((len(metadata),), None),
+            "interpolation": ((len(metadata),), None),
+            "display_group": ((len(metadata),), None),
+            "display_group_valid": ((len(metadata),), np.bool_),
+        }
+        values[path_name] = {
+            "name": [item.name for item in metadata],
+            "unit": [item.unit for item in metadata],
+            "kind": [item.kind for item in metadata],
+            "interpolation": [item.interpolation for item in metadata],
+            "display_group": [item.display_group or "" for item in metadata],
+            "display_group_valid": np.asarray(
+                [item.display_group is not None for item in metadata],
+                dtype=np.bool_,
+            ),
+        }
+
+    if telemetry.decoder_info is not None:
+        decoder_info = telemetry.decoder_info
+        attrs["telemetry/decoder"] = {
+            "api_version": np.uint16(decoder_info.api_version),
+            "decoder_name": decoder_info.decoder_name,
+            "decoder_version": decoder_info.decoder_version,
+        }
+        specs["telemetry/decoder"] = {
+            "claimed_appids": ((len(decoder_info.claimed_appids),), np.uint16)
+        }
+        values["telemetry/decoder"] = {
+            "claimed_appids": np.asarray(
+                decoder_info.claimed_appids,
+                dtype=np.uint16,
+            )
+        }
+        add_telemetry_metadata(
+            "telemetry/field_metadata",
+            telemetry.field_metadata,
+        )
+    if telemetry.counts is not None:
+        attrs["telemetry/counts"] = {
+            "kind": telemetry.counts.source,
+            "scope": telemetry.counts_scope,
+            **{
+                name: np.uint64(value)
+                for name, value in telemetry.counts.scalar_counts
+            },
+        }
+        if telemetry.counts.source == "b01":
+            for name, entries in (
+                ("claimed_appids", telemetry.counts.claimed_appid_counts),
+                ("unclaimed_appids", telemetry.counts.unclaimed_appid_counts),
+            ):
+                path_name = f"telemetry/counts/{name}"
+                attrs[path_name] = {"count": np.uint64(len(entries))}
+                specs[path_name] = {
+                    "appid": ((len(entries),), np.uint16),
+                    "packet_count": ((len(entries),), np.uint64),
+                }
+                values[path_name] = {
+                    "appid": np.asarray(
+                        [entry[0] for entry in entries],
+                        dtype=np.uint16,
+                    ),
+                    "packet_count": np.asarray(
+                        [entry[1] for entry in entries],
+                        dtype=np.uint64,
+                    ),
+                }
+
+    def add_telemetry_block(path_name, block, metadata, *, encoder=False):
+        field_count = len(block.field_names)
+        attrs[path_name] = {
+            "count": np.uint64(block.row_count),
+            "source_kind": block.source_kind,
+            "field_count": np.uint32(field_count),
+            "clock_source": ClockSource.DCB.value,
+            "subsecond_divisor": np.uint32(65536),
+            "input_index_kind": "decoder_input_ordinal",
+        }
+        if encoder:
+            attrs[path_name]["measurement_status"] = "unvalidated"
+        specs[path_name] = {
+            "input_indices": ((block.row_count,), np.int64),
+            "mission_seconds": ((block.row_count,), np.uint32),
+            "lusee_subsecs": ((block.row_count,), np.uint16),
+            "raw_seconds": ((block.row_count,), np.float64),
+            "mjd_times": ((block.row_count,), np.float64),
+            "mjd_time_valid": ((block.row_count,), np.bool_),
+            "raw_counts": ((block.row_count, field_count), np.uint16),
+            "values": ((block.row_count, field_count), np.float64),
+            "valid": ((block.row_count, field_count), np.bool_),
+        }
+        values[path_name] = {
+            "input_indices": block.input_indices,
+            "mission_seconds": block.mission_seconds,
+            "lusee_subsecs": block.lusee_subsecs,
+            "raw_seconds": block.raw_seconds,
+            "mjd_times": block.mjd_times,
+            "mjd_time_valid": block.mjd_time_valid,
+            "raw_counts": block.raw_counts,
+            "values": block.values,
+            "valid": block.valid,
+        }
+        add_telemetry_metadata(f"{path_name}/field_metadata", metadata)
+
+    if telemetry.fpga is not None:
+        add_telemetry_block(
+            "telemetry/fpga",
+            telemetry.fpga,
+            telemetry.field_metadata,
+        )
+    if telemetry.unassigned_fpga is not None:
+        add_telemetry_block(
+            "telemetry/unassigned_fpga",
+            telemetry.unassigned_fpga,
+            telemetry.field_metadata,
+        )
+    if telemetry.encoder is not None:
+        add_telemetry_block(
+            "telemetry/encoder",
+            telemetry.encoder,
+            (),
+            encoder=True,
+        )
     field_unions: list[tuple[str, int]] = []
     forbidden_paths: list[str] = []
 
@@ -2133,7 +2464,7 @@ def _verify_layout_v4(
             h5,
             {
                 "layout_version": np.uint16(HDF5_LAYOUT_VERSION),
-                "quality_status": products.quality_status.value,
+                "quality_status": request.quality_status.value,
                 "execution_mode": products.execution_mode.value,
                 "issue_count": np.uint64(issue_count),
                 "input_packet_count": np.uint64(
@@ -2151,6 +2482,21 @@ def _verify_layout_v4(
                 raise ValueError(
                     f"temporary HDF5 unexpectedly contains /{path_name}"
                 )
+        expected_telemetry_children = {"issue_refs"}
+        if telemetry.decoder_info is not None:
+            expected_telemetry_children.update(("decoder", "field_metadata"))
+        if telemetry.counts is not None:
+            expected_telemetry_children.add("counts")
+        for name, block in (
+            ("fpga", telemetry.fpga),
+            ("unassigned_fpga", telemetry.unassigned_fpga),
+            ("encoder", telemetry.encoder),
+        ):
+            if block is not None:
+                expected_telemetry_children.add(name)
+        telemetry_group = group_at(h5, "telemetry")
+        if set(telemetry_group) != expected_telemetry_children:
+            raise ValueError("temporary HDF5 telemetry tree is not canonical")
         for path_name, datasets in specs.items():
             group = group_at(h5, path_name)
             for name, (shape, dtype) in datasets.items():

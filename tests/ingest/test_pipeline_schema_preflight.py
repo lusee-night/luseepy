@@ -63,7 +63,11 @@ def install_synthetic_flash(monkeypatch, products):
     monkeypatch.setattr(
         pipeline,
         "_parse_flash_loaded",
-        lambda *args, **kwargs: (sessions, {}, {}),
+        lambda *args, **kwargs: (
+            sessions,
+            pipeline.telemetry_mod.TelemetryDecodeResult.absent(),
+            None,
+        ),
     )
 
     def materialize(session, session_dir):

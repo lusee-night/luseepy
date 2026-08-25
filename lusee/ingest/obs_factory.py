@@ -9,9 +9,9 @@ Inputs may be:
   win over FITS when both are present (override with ``prefer_format``);
 * an iterable of any of the above.
 
-Sessions are loaded in a deterministic order using the recorded session-start
-raw counter when available, then concatenated along the spectra time axis.
-The raw counter order is not claimed to be global acquisition chronology.
+Sessions are loaded in a deterministic order using recorded absolute time when
+available, then a spectrometer raw-counter fallback, and finally source path.
+DCB raw counters are never compared directly with spectrometer raw counters.
 The result is a single ``IngestData`` whose ``self.times`` carries the actual
 irregular sample times (not a uniform synthetic grid), so
 :class:`Observation`'s ``get_track_*`` methods work out of the box.
@@ -87,11 +87,20 @@ from .products import (
     WaveformSample,
     ZoomSample,
 )
+from .telemetry import (
+    TelemetryBlock,
+    TelemetryCollection,
+    TelemetryCounts,
+    TelemetryDecodeResult,
+    TelemetryDecoderInfo,
+    TelemetryFieldMetadata,
+)
 from .write_request import (
     ALL_FAMILIES,
     FamilyStatus,
     InterpolationPolicy,
     RunProvenance,
+    family_status_for_telemetry,
 )
 
 log = logging.getLogger(__name__)
@@ -194,6 +203,13 @@ class SessionBundle:
     housekeeping_field_present: Tuple[Dict[str, bool], ...] = ()
 
     calibrator: Dict[str, object] = field(default_factory=dict)
+
+    telemetry: Optional[TelemetryDecodeResult] = field(
+        default_factory=TelemetryDecodeResult.absent
+    )
+    telemetry_sessions: Tuple[TelemetryDecodeResult, ...] = ()
+    telemetry_session_sources: Tuple[Optional[Path], ...] = ()
+    telemetry_fpga: Optional[TelemetryCollection] = None
 
     dcb_fpga: Dict[str, np.ndarray] = field(default_factory=dict)
     dcb_encoder: Dict[str, np.ndarray] = field(default_factory=dict)
@@ -2459,6 +2475,584 @@ def _v4_parse_issues(validator) -> Dict[str, object]:
     return result
 
 
+def _v4_telemetry_metadata(validator, path: str, field_count: int):
+    group = validator.group(path)
+    expected_children = {
+        "name",
+        "unit",
+        "kind",
+        "interpolation",
+        "display_group",
+        "display_group_valid",
+    }
+    if set(group.children) != expected_children or set(group.attrs) != {"count"}:
+        raise LayoutV4ValidationError(
+            f"layout-v4 telemetry metadata tree disagrees at {path}"
+        )
+    if int(_v4_scalar_attr(validator, path, "count", np.uint64)) != field_count:
+        raise LayoutV4ValidationError(
+            f"layout-v4 telemetry metadata count disagrees at {path}"
+        )
+    text = {
+        name: validator.dataset(
+            f"{path}/{name}",
+            utf8=True,
+            shape=(field_count,),
+        ).data
+        for name in ("name", "unit", "kind", "interpolation", "display_group")
+    }
+    display_valid = validator.dataset(
+        f"{path}/display_group_valid",
+        dtype=np.bool_,
+        utf8=False,
+        shape=(field_count,),
+    ).data
+    metadata = []
+    for index in range(field_count):
+        display_group = str(text["display_group"][index])
+        if bool(display_valid[index]) != bool(display_group):
+            raise LayoutV4ValidationError(
+                "layout-v4 telemetry display-group validity disagrees"
+            )
+        try:
+            metadata.append(TelemetryFieldMetadata(
+                name=str(text["name"][index]),
+                unit=str(text["unit"][index]),
+                kind=str(text["kind"][index]),
+                interpolation=str(text["interpolation"][index]),
+                display_group=(display_group if display_valid[index] else None),
+            ))
+        except (TypeError, ValueError) as exc:
+            raise LayoutV4ValidationError(
+                f"layout-v4 telemetry metadata row {index} is invalid: {exc}"
+            ) from exc
+    return tuple(metadata)
+
+
+def _v4_telemetry_block(
+    validator,
+    path: str,
+    *,
+    clock_reference_set: ClockReferenceSet | None,
+    encoder: bool = False,
+) -> tuple[TelemetryBlock, tuple[TelemetryFieldMetadata, ...]]:
+    group = validator.group(path)
+    expected_attrs = {
+        "count",
+        "source_kind",
+        "field_count",
+        "clock_source",
+        "subsecond_divisor",
+        "input_index_kind",
+    }
+    if encoder:
+        expected_attrs.add("measurement_status")
+    if set(group.attrs) != expected_attrs:
+        raise LayoutV4ValidationError(
+            f"layout-v4 telemetry block attributes disagree at {path}"
+        )
+    row_count = int(_v4_scalar_attr(validator, path, "count", np.uint64))
+    field_count = int(
+        _v4_scalar_attr(validator, path, "field_count", np.uint32)
+    )
+    if (
+        _v4_text_attr(validator, path, "clock_source")
+        != ClockSource.DCB.value
+        or int(
+            _v4_scalar_attr(
+                validator,
+                path,
+                "subsecond_divisor",
+                np.uint32,
+            )
+        )
+        != 65536
+        or _v4_text_attr(validator, path, "input_index_kind")
+        != "decoder_input_ordinal"
+    ):
+        raise LayoutV4ValidationError(
+            f"layout-v4 telemetry time contract disagrees at {path}"
+        )
+    if encoder and _v4_text_attr(
+        validator, path, "measurement_status"
+    ) != "unvalidated":
+        raise LayoutV4ValidationError(
+            "layout-v4 encoder measurements must remain unvalidated"
+        )
+    expected_children = {
+        "input_indices",
+        "mission_seconds",
+        "lusee_subsecs",
+        "raw_seconds",
+        "mjd_times",
+        "mjd_time_valid",
+        "raw_counts",
+        "values",
+        "valid",
+        "field_metadata",
+    }
+    if set(group.children) != expected_children:
+        raise LayoutV4ValidationError(
+            f"layout-v4 telemetry block tree disagrees at {path}"
+        )
+    arrays = {
+        "input_indices": validator.dataset(
+            f"{path}/input_indices",
+            dtype=np.int64,
+            utf8=False,
+            shape=(row_count,),
+        ).data,
+        "mission_seconds": validator.dataset(
+            f"{path}/mission_seconds",
+            dtype=np.uint32,
+            utf8=False,
+            shape=(row_count,),
+        ).data,
+        "lusee_subsecs": validator.dataset(
+            f"{path}/lusee_subsecs",
+            dtype=np.uint16,
+            utf8=False,
+            shape=(row_count,),
+        ).data,
+        "raw_seconds": validator.dataset(
+            f"{path}/raw_seconds",
+            dtype=np.float64,
+            utf8=False,
+            shape=(row_count,),
+        ).data,
+        "mjd_times": validator.dataset(
+            f"{path}/mjd_times",
+            dtype=np.float64,
+            utf8=False,
+            shape=(row_count,),
+        ).data,
+        "mjd_time_valid": validator.dataset(
+            f"{path}/mjd_time_valid",
+            dtype=np.bool_,
+            utf8=False,
+            shape=(row_count,),
+        ).data,
+        "raw_counts": validator.dataset(
+            f"{path}/raw_counts",
+            dtype=np.uint16,
+            utf8=False,
+            shape=(row_count, field_count),
+        ).data,
+        "values": validator.dataset(
+            f"{path}/values",
+            dtype=np.float64,
+            utf8=False,
+            shape=(row_count, field_count),
+        ).data,
+        "valid": validator.dataset(
+            f"{path}/valid",
+            dtype=np.bool_,
+            utf8=False,
+            shape=(row_count, field_count),
+        ).data,
+    }
+    metadata = _v4_telemetry_metadata(
+        validator,
+        f"{path}/field_metadata",
+        field_count,
+    )
+    try:
+        block = TelemetryBlock(
+            source_kind=_v4_text_attr(validator, path, "source_kind"),
+            field_names=tuple(item.name for item in metadata),
+            **arrays,
+        )
+    except (TypeError, ValueError) as exc:
+        raise LayoutV4ValidationError(
+            f"layout-v4 telemetry block is invalid at {path}: {exc}"
+        ) from exc
+    dcb_reference = (
+        clock_reference_set.reference_for(ClockSource.DCB)
+        if clock_reference_set is not None
+        else None
+    )
+    if dcb_reference is None:
+        if block.mjd_time_valid.any():
+            raise LayoutV4ValidationError(
+                "layout-v4 telemetry MJD requires a DCB clock reference"
+            )
+    elif block.row_count:
+        if not block.mjd_time_valid.all():
+            raise LayoutV4ValidationError(
+                "layout-v4 DCB-referenced telemetry has missing MJD times"
+            )
+        expected_mjd = np.asarray(
+            clock_reference_set.to_mjd(
+                block.raw_seconds,
+                clock_source=ClockSource.DCB,
+            ),
+            dtype=np.float64,
+        )
+        if not np.array_equal(block.mjd_times, expected_mjd):
+            raise LayoutV4ValidationError(
+                "layout-v4 telemetry MJD contradicts the DCB clock reference"
+            )
+    return block, metadata
+
+
+def _v4_parse_telemetry(
+    validator,
+    *,
+    issue_ids: np.ndarray,
+    issue_records: tuple[IngestIssue, ...],
+    clock_reference_set: ClockReferenceSet | None,
+) -> TelemetryDecodeResult:
+    path = "/telemetry"
+    group = validator.group(path)
+    expected_attrs = {
+        "input_state",
+        "decoder_status",
+        "coverage",
+        "counts_scope",
+        "issue_count",
+        "selected_source_valid",
+    }
+    selected_source_valid = bool(
+        _v4_scalar_attr(
+            validator,
+            path,
+            "selected_source_valid",
+            np.bool_,
+        )
+    )
+    if selected_source_valid:
+        expected_attrs.add("selected_source")
+    if set(group.attrs) != expected_attrs:
+        raise LayoutV4ValidationError(
+            "layout-v4 telemetry attributes disagree"
+        )
+    selected_source = (
+        _v4_text_attr(validator, path, "selected_source")
+        if selected_source_valid
+        else None
+    )
+    issue_count = int(
+        _v4_scalar_attr(validator, path, "issue_count", np.uint64)
+    )
+    issue_ref_path = f"{path}/issue_refs"
+    issue_ref_group = validator.group(issue_ref_path)
+    if set(issue_ref_group.attrs) != {"count"} or set(
+        issue_ref_group.children
+    ) != {"issue_index"}:
+        raise LayoutV4ValidationError(
+            "layout-v4 telemetry issue-reference tree disagrees"
+        )
+    if int(
+        _v4_scalar_attr(validator, issue_ref_path, "count", np.uint64)
+    ) != issue_count:
+        raise LayoutV4ValidationError(
+            "layout-v4 telemetry issue-reference count disagrees"
+        )
+    issue_index = validator.dataset(
+        f"{issue_ref_path}/issue_index",
+        dtype=np.uint64,
+        utf8=False,
+        shape=(issue_count,),
+    ).data
+    if np.any(issue_index >= issue_ids.size) or len(set(issue_index.tolist())) != len(
+        issue_index
+    ):
+        raise LayoutV4ValidationError(
+            "layout-v4 telemetry issue reference is invalid"
+        )
+    issues = tuple(issue_records[int(index)] for index in issue_index)
+
+    decoder_info = None
+    if validator.has(f"{path}/decoder"):
+        decoder_path = f"{path}/decoder"
+        decoder_group = validator.group(decoder_path)
+        if set(decoder_group.attrs) != {
+            "api_version",
+            "decoder_name",
+            "decoder_version",
+        } or set(decoder_group.children) != {"claimed_appids"}:
+            raise LayoutV4ValidationError(
+                "layout-v4 telemetry decoder tree disagrees"
+            )
+        claimed_appids = validator.dataset(
+            f"{decoder_path}/claimed_appids",
+            dtype=np.uint16,
+            utf8=False,
+            ndim=1,
+        ).data
+        try:
+            decoder_info = TelemetryDecoderInfo(
+                api_version=int(
+                    _v4_scalar_attr(
+                        validator,
+                        decoder_path,
+                        "api_version",
+                        np.uint16,
+                    )
+                ),
+                decoder_name=_v4_text_attr(
+                    validator, decoder_path, "decoder_name"
+                ),
+                decoder_version=_v4_text_attr(
+                    validator, decoder_path, "decoder_version"
+                ),
+                claimed_appids=tuple(int(value) for value in claimed_appids),
+            )
+        except (TypeError, ValueError) as exc:
+            raise LayoutV4ValidationError(
+                f"layout-v4 telemetry decoder identity is invalid: {exc}"
+            ) from exc
+
+    metadata = ()
+    metadata_path = f"{path}/field_metadata"
+    if decoder_info is not None:
+        if not validator.has(metadata_path):
+            raise LayoutV4ValidationError(
+                "layout-v4 telemetry decoder metadata is absent"
+            )
+        metadata = _v4_telemetry_metadata(
+            validator,
+            metadata_path,
+            int(_v4_scalar_attr(validator, metadata_path, "count", np.uint64)),
+        )
+
+    counts = None
+    if validator.has(f"{path}/counts"):
+        counts_path = f"{path}/counts"
+        counts_group = validator.group(counts_path)
+        kind = _v4_text_attr(validator, counts_path, "kind")
+        scope = _v4_text_attr(validator, counts_path, "scope")
+        scalar_names = (
+            {
+                "input_packet_count",
+                "claimed_packet_count",
+                "unclaimed_packet_count",
+                "fpga_input_packet_count",
+                "fpga_output_record_count",
+                "fpga_dropped_packet_count",
+                "encoder_input_packet_count",
+                "encoder_output_record_count",
+                "encoder_rejected_packet_count",
+            }
+            if kind == "b01"
+            else {
+                "input_byte_count",
+                "complete_record_count",
+                "trailing_byte_count",
+                "output_record_count",
+                "dropped_record_count",
+            }
+        )
+        if set(counts_group.attrs) != {"kind", "scope", *scalar_names}:
+            raise LayoutV4ValidationError(
+                "layout-v4 telemetry count attributes disagree"
+            )
+        if scope != _v4_text_attr(validator, path, "counts_scope"):
+            raise LayoutV4ValidationError(
+                "layout-v4 telemetry count scopes disagree"
+            )
+        scalars = tuple(
+            (
+                name,
+                int(
+                    _v4_scalar_attr(
+                        validator,
+                        counts_path,
+                        name,
+                        np.uint64,
+                    )
+                ),
+            )
+            for name in scalar_names
+        )
+
+        def appid_counts(name: str):
+            appid_path = f"{counts_path}/{name}"
+            appid_group = validator.group(appid_path)
+            if set(appid_group.attrs) != {"count"} or set(
+                appid_group.children
+            ) != {"appid", "packet_count"}:
+                raise LayoutV4ValidationError(
+                    "layout-v4 telemetry AppID-count tree disagrees"
+                )
+            count = int(
+                _v4_scalar_attr(validator, appid_path, "count", np.uint64)
+            )
+            appids = validator.dataset(
+                f"{appid_path}/appid",
+                dtype=np.uint16,
+                utf8=False,
+                shape=(count,),
+            ).data
+            packet_counts = validator.dataset(
+                f"{appid_path}/packet_count",
+                dtype=np.uint64,
+                utf8=False,
+                shape=(count,),
+            ).data
+            return tuple(
+                (int(appid), int(packet_count))
+                for appid, packet_count in zip(
+                    appids,
+                    packet_counts,
+                    strict=True,
+                )
+            )
+
+        if kind == "b01":
+            if set(counts_group.children) != {
+                "claimed_appids",
+                "unclaimed_appids",
+            }:
+                raise LayoutV4ValidationError(
+                    "layout-v4 b01 count children disagree"
+                )
+            claimed = appid_counts("claimed_appids")
+            unclaimed = appid_counts("unclaimed_appids")
+        else:
+            if kind != "legacy_sidecar" or counts_group.children:
+                raise LayoutV4ValidationError(
+                    "layout-v4 sidecar count children disagree"
+                )
+            claimed = ()
+            unclaimed = ()
+        try:
+            counts = TelemetryCounts(
+                source=kind,
+                scalar_counts=scalars,
+                claimed_appid_counts=claimed,
+                unclaimed_appid_counts=unclaimed,
+            )
+        except (TypeError, ValueError) as exc:
+            raise LayoutV4ValidationError(
+                f"layout-v4 telemetry counts are invalid: {exc}"
+            ) from exc
+
+    blocks = {}
+    metadata_by_name = {}
+    for name in ("fpga", "unassigned_fpga", "encoder"):
+        block_path = f"{path}/{name}"
+        if validator.has(block_path):
+            blocks[name], metadata_by_name[name] = _v4_telemetry_block(
+                validator,
+                block_path,
+                clock_reference_set=clock_reference_set,
+                encoder=name == "encoder",
+            )
+    for name in ("fpga", "unassigned_fpga"):
+        if name in metadata_by_name and metadata_by_name[name] != metadata:
+            raise LayoutV4ValidationError(
+                "layout-v4 telemetry block metadata disagrees with decoder metadata"
+            )
+    if metadata_by_name.get("encoder", ()):
+        raise LayoutV4ValidationError(
+            "layout-v4 encoder field metadata must remain empty"
+        )
+    stored_fpga_indices = np.concatenate([
+        blocks[name].input_indices
+        for name in ("fpga", "unassigned_fpga")
+        if name in blocks
+    ]) if any(name in blocks for name in ("fpga", "unassigned_fpga")) else (
+        np.empty(0, dtype=np.int64)
+    )
+    if len(set(stored_fpga_indices.tolist())) != stored_fpga_indices.size:
+        raise LayoutV4ValidationError(
+            "layout-v4 assigned and unassigned telemetry rows overlap"
+        )
+    if counts is not None and counts.source == "b01":
+        input_count = counts.scalar("input_packet_count")
+        claimed = counts.scalar("claimed_packet_count")
+        unclaimed = counts.scalar("unclaimed_packet_count")
+        if (
+            claimed + unclaimed != input_count
+            or sum(value for _, value in counts.claimed_appid_counts) != claimed
+            or sum(value for _, value in counts.unclaimed_appid_counts)
+            != unclaimed
+            or counts.scalar("fpga_input_packet_count")
+            + counts.scalar("encoder_input_packet_count")
+            != claimed
+            or counts.scalar("fpga_input_packet_count")
+            != counts.scalar("fpga_output_record_count")
+            + counts.scalar("fpga_dropped_packet_count")
+            or counts.scalar("encoder_input_packet_count")
+            != counts.scalar("encoder_output_record_count")
+            + counts.scalar("encoder_rejected_packet_count")
+            or counts.scalar("fpga_output_record_count")
+            < stored_fpga_indices.size
+            or (
+                stored_fpga_indices.size
+                and np.any(stored_fpga_indices >= input_count)
+            )
+        ):
+            raise LayoutV4ValidationError(
+                "layout-v4 b01 telemetry counts are inconsistent"
+            )
+        encoder_rows = blocks["encoder"].row_count if "encoder" in blocks else 0
+        if counts.scalar("encoder_output_record_count") != encoder_rows:
+            raise LayoutV4ValidationError(
+                "layout-v4 encoder output count disagrees"
+            )
+        if decoder_info is not None and not {
+            appid for appid, _ in counts.claimed_appid_counts
+        }.issubset(decoder_info.claimed_appids):
+            raise LayoutV4ValidationError(
+                "layout-v4 claimed AppID counts disagree with the decoder"
+            )
+    elif counts is not None:
+        complete = counts.scalar("complete_record_count")
+        if (
+            counts.scalar("output_record_count")
+            + counts.scalar("dropped_record_count")
+            != complete
+            or counts.scalar("output_record_count") < stored_fpga_indices.size
+            or counts.scalar("trailing_byte_count")
+            > counts.scalar("input_byte_count")
+            or (
+                stored_fpga_indices.size
+                and np.any(stored_fpga_indices >= complete)
+            )
+        ):
+            raise LayoutV4ValidationError(
+                "layout-v4 sidecar telemetry counts are inconsistent"
+            )
+    expected_children = {"issue_refs"}
+    expected_children.update(
+        name
+        for name, present in (
+            ("decoder", decoder_info is not None),
+            ("field_metadata", decoder_info is not None),
+            ("counts", counts is not None),
+            ("fpga", "fpga" in blocks),
+            ("unassigned_fpga", "unassigned_fpga" in blocks),
+            ("encoder", "encoder" in blocks),
+        )
+        if present
+    )
+    if set(group.children) != expected_children:
+        raise LayoutV4ValidationError(
+            "layout-v4 telemetry group children disagree"
+        )
+    try:
+        return TelemetryDecodeResult(
+            input_source=selected_source,
+            input_state=_v4_text_attr(validator, path, "input_state"),
+            decoder_status=_v4_text_attr(validator, path, "decoder_status"),
+            coverage=_v4_text_attr(validator, path, "coverage"),
+            decoder_info=decoder_info,
+            field_metadata=metadata,
+            fpga=blocks.get("fpga"),
+            unassigned_fpga=blocks.get("unassigned_fpga"),
+            encoder=blocks.get("encoder"),
+            counts=counts,
+            counts_scope=_v4_text_attr(validator, path, "counts_scope"),
+            issues=issues,
+        )
+    except (TypeError, ValueError) as exc:
+        raise LayoutV4ValidationError(
+            f"layout-v4 telemetry bundle is invalid: {exc}"
+        ) from exc
+
+
 def _v4_parse_family_status(
     validator,
     family_counts: Dict[str, int],
@@ -2593,6 +3187,20 @@ def _load_layout_v4_tree(root, path: Path) -> SessionBundle:
     bundle.decoder_provenance = _v4_parse_decoder_provenance(validator)
     bundle.issues = _v4_parse_issues(validator)
     bundle.product_provenance = _v4_parse_product_provenance(validator)
+    bundle.telemetry = _v4_parse_telemetry(
+        validator,
+        issue_ids=bundle.issues["issue_id"],
+        issue_records=bundle.issues["records"],
+        clock_reference_set=bundle.clock_reference_set,
+    )
+    bundle.telemetry_sessions = (bundle.telemetry,)
+    bundle.telemetry_session_sources = (path,)
+    bundle.telemetry_fpga = TelemetryCollection(
+        bundle.telemetry_sessions,
+        session_sources=bundle.telemetry_session_sources,
+        session_input_identities=(_bundle_input_identity(bundle),),
+    )
+    bundle.dcb_fpga = bundle.telemetry_fpga.engineering_values()
 
     parsers = (
         ("/spectra", "spectra", _v4_parse_spectra),
@@ -2609,6 +3217,18 @@ def _load_layout_v4_tree(root, path: Path) -> SessionBundle:
             family_counts[family] = int(
                 _v4_scalar_attr(validator, family_path, "count", np.uint64)
             )
+    family_counts["dcb_telemetry"] = (
+        (
+            bundle.telemetry.fpga.row_count
+            if bundle.telemetry.fpga is not None
+            else 0
+        )
+        + (
+            bundle.telemetry.unassigned_fpga.row_count
+            if bundle.telemetry.unassigned_fpga is not None
+            else 0
+        )
+    )
     _v4_parse_calibrator(validator, bundle, bundle.product_provenance)
     for public_name, family in (
         ("metadata", "calibrator_metadata"),
@@ -2625,6 +3245,16 @@ def _load_layout_v4_tree(root, path: Path) -> SessionBundle:
         family_counts,
         bundle.issues["issue_id"],
     )
+    assert bundle.telemetry is not None
+    stored_telemetry_status = next(
+        status
+        for status in bundle.family_status["records"]
+        if status.family == "dcb_telemetry"
+    )
+    if stored_telemetry_status != family_status_for_telemetry(bundle.telemetry):
+        raise LayoutV4ValidationError(
+            "layout-v4 DCB family status contradicts typed telemetry"
+        )
     if bundle.quality_status == DataQuality.PARTIAL.value and not bundle.issues[
         "records"
     ]:
@@ -2638,15 +3268,24 @@ def _load_layout_v4_tree(root, path: Path) -> SessionBundle:
         raise LayoutV4ValidationError(
             "layout-v4 clean root quality contains a degraded supported family"
         )
+    if bundle.quality_status == DataQuality.CLEAN.value and bundle.telemetry.issues:
+        raise LayoutV4ValidationError(
+            "layout-v4 clean root quality contains telemetry issues"
+        )
 
     product_rows = bundle.product_provenance["product_rows"]
-    if len(product_rows["family"]) != sum(family_counts.values()):
+    if len(product_rows["family"]) != sum(
+        count
+        for family, count in family_counts.items()
+        if family != "dcb_telemetry"
+    ):
         raise LayoutV4ValidationError(
             "layout-v4 product provenance row total disagrees"
         )
     for family, count in zip(
         bundle.family_status["family"],
         bundle.family_status["persisted_rows"],
+        strict=True,
     ):
         decoded_attr = f"decoded_{family}_rows"
         persisted_attr = f"persisted_{family}_rows"
@@ -2953,6 +3592,12 @@ def _mark_legacy_auxiliary(bundle: SessionBundle, path: Path) -> None:
         families.append("housekeeping")
     if bundle.grimm_spectra is not None:
         families.append("grimm_spectra")
+    if bundle.dcb_fpga:
+        families.append("dcb_telemetry")
+    if bundle.dcb_encoder:
+        families.append("encoder_telemetry")
+    if bundle.interp_telemetry:
+        families.append("interpolated_telemetry")
     bundle.legacy_unverified_families = tuple(families)
     if families:
         warnings.warn(
@@ -3406,7 +4051,24 @@ def _load_one(path: Path) -> SessionBundle:
     return bundle
 
 
-def _bundle_sort_key(bundle: SessionBundle) -> tuple[float, int, str]:
+def _bundle_input_identity(bundle: SessionBundle) -> tuple[str, str] | None:
+    record = bundle.run_provenance.get("record")
+    if not isinstance(record, RunProvenance):
+        return None
+    if record.input_identity is None or record.input_identity_kind is None:
+        return None
+    return record.input_identity_kind, record.input_identity
+
+
+def _first_finite(values: object) -> float | None:
+    if values is None:
+        return None
+    finite = np.asarray(values, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    return float(finite[0]) if finite.size else None
+
+
+def _bundle_sort_key(bundle: SessionBundle) -> tuple[int, float, int, str]:
     source = str(
         bundle.source_path
         or next(iter(bundle.source_paths), "")
@@ -3417,8 +4079,43 @@ def _bundle_sort_key(bundle: SessionBundle) -> tuple[float, int, str]:
             session_start = float(session_start)
         except (TypeError, ValueError):
             session_start = None
-        if session_start is not None and np.isfinite(session_start):
-            return session_start, 0, source
+    clock_reference_set = bundle.clock_reference_set
+    if (
+        bundle.layout_version == INGEST_LAYOUT_VERSION
+        and isinstance(clock_reference_set, ClockReferenceSet)
+    ):
+        if (
+            session_start is not None
+            and np.isfinite(session_start)
+            and clock_reference_set.reference_for(ClockSource.SPECTROMETER)
+            is not None
+        ):
+            start_mjd = clock_reference_set.to_mjd(
+                np.asarray([session_start], dtype=np.float64),
+                clock_source=ClockSource.SPECTROMETER,
+            )
+            return 0, float(start_mjd[0]), 0, source
+        for values in (
+            bundle.spectra_mjd_times,
+            bundle.tr_mjd_times,
+            bundle.zoom_mjd_times,
+            bundle.grimm_mjd_times,
+            bundle.waveform_mjd_times,
+            bundle.housekeeping_mjd_times,
+        ):
+            first = _first_finite(values)
+            if first is not None:
+                return 0, first, 1, source
+        if bundle.telemetry_fpga is not None:
+            first = _first_finite(bundle.telemetry_fpga.mjd_times)
+            if first is not None:
+                return 0, first, 2, source
+            for block in bundle.telemetry_fpga.unassigned_fpga_blocks:
+                first = _first_finite(None if block is None else block.mjd_times)
+                if first is not None:
+                    return 0, first, 2, source
+    if session_start is not None and np.isfinite(session_start):
+        return 1, float(session_start), 0, source
     for values in (
         bundle.spectra_raw_times,
         bundle.tr_raw_times,
@@ -3429,11 +4126,10 @@ def _bundle_sort_key(bundle: SessionBundle) -> tuple[float, int, str]:
     ):
         if values is None:
             continue
-        finite = np.asarray(values, dtype=np.float64)
-        finite = finite[np.isfinite(finite)]
-        if finite.size:
-            return float(finite[0]), 1, source
-    return float("inf"), 2, source
+        first = _first_finite(values)
+        if first is not None:
+            return 1, first, 1, source
+    return 2, float("inf"), 0, source
 
 
 # ---------------------------------------------------------------------------
@@ -3616,6 +4312,7 @@ def _concat_bundles(bundles: Sequence[SessionBundle]) -> SessionBundle:
 
     out = SessionBundle()
     out.source_path = None  # multi-source
+    out.telemetry = None
     out.layout_version = next(iter(layout_versions))
     out.source_paths = tuple(
         path
@@ -4070,23 +4767,67 @@ def _concat_bundles(bundles: Sequence[SessionBundle]) -> SessionBundle:
         "sessions": tuple(bundle.family_status for bundle in bundles)
     }
 
-    # DCB telemetry
-    n_fpga = [
-        (b.dcb_fpga["mission_seconds"].size
-         if "mission_seconds" in b.dcb_fpga else 0)
-        for b in bundles
-    ]
-    out.dcb_fpga = _concat_dict_arrays(
-        [b.dcb_fpga for b in bundles], n_per_source=n_fpga,
-    )
-    n_enc = [
-        (b.dcb_encoder["mission_seconds"].size
-         if "mission_seconds" in b.dcb_encoder else 0)
-        for b in bundles
-    ]
-    out.dcb_encoder = _concat_dict_arrays(
-        [b.dcb_encoder for b in bundles], n_per_source=n_enc,
-    )
+    # Typed v4 telemetry keeps input-scoped counts/issues/unassigned rows on
+    # each session. Only assigned FPGA rows form a concatenated convenience
+    # view, with source-local indices disambiguated by TelemetryCollection.
+    if out.layout_version == INGEST_LAYOUT_VERSION:
+        telemetry_sessions = []
+        telemetry_sources = []
+        telemetry_input_identities = []
+        for bundle in bundles:
+            if bundle.telemetry_sessions:
+                results = bundle.telemetry_sessions
+            elif bundle.telemetry is not None:
+                results = (bundle.telemetry,)
+            else:
+                raise ValueError("layout-v4 bundle has no typed telemetry state")
+            sources = bundle.telemetry_session_sources
+            if not sources:
+                if len(bundle.source_paths) == len(results):
+                    sources = tuple(bundle.source_paths)
+                else:
+                    sources = (bundle.source_path,) * len(results)
+            if len(results) != len(sources):
+                raise ValueError(
+                    "telemetry session source provenance is inconsistent"
+                )
+            identities = (
+                bundle.telemetry_fpga.session_input_identities
+                if bundle.telemetry_fpga is not None
+                else (_bundle_input_identity(bundle),) * len(results)
+            )
+            if len(identities) != len(results):
+                raise ValueError(
+                    "telemetry session input identities are inconsistent"
+                )
+            telemetry_sessions.extend(results)
+            telemetry_sources.extend(sources)
+            telemetry_input_identities.extend(identities)
+        out.telemetry_sessions = tuple(telemetry_sessions)
+        out.telemetry_session_sources = tuple(telemetry_sources)
+        out.telemetry_fpga = TelemetryCollection(
+            out.telemetry_sessions,
+            session_sources=out.telemetry_session_sources,
+            session_input_identities=tuple(telemetry_input_identities),
+        )
+        out.dcb_fpga = out.telemetry_fpga.engineering_values()
+    else:
+        n_fpga = [
+            (b.dcb_fpga["mission_seconds"].size
+             if "mission_seconds" in b.dcb_fpga else 0)
+            for b in bundles
+        ]
+        out.dcb_fpga = _concat_dict_arrays(
+            [b.dcb_fpga for b in bundles], n_per_source=n_fpga,
+        )
+        n_enc = [
+            (b.dcb_encoder["mission_seconds"].size
+             if "mission_seconds" in b.dcb_encoder else 0)
+            for b in bundles
+        ]
+        out.dcb_encoder = _concat_dict_arrays(
+            [b.dcb_encoder for b in bundles], n_per_source=n_enc,
+        )
 
     out.interp_telemetry = _concat_dict_arrays(
         [b.interp_telemetry for b in bundles], n_per_source=n_per,
@@ -4572,8 +5313,36 @@ class IngestData(Observation):
         self.housekeeping_fields = bundle.housekeeping_fields
         self.housekeeping_field_present = bundle.housekeeping_field_present
         self.calibrator = bundle.calibrator
-        self.dcb_telemetry = bundle.dcb_fpga
-        self.encoder_telemetry = bundle.dcb_encoder
+        if bundle.layout_version == INGEST_LAYOUT_VERSION:
+            if bundle.telemetry_sessions:
+                telemetry_sessions = bundle.telemetry_sessions
+            elif bundle.telemetry is not None:
+                telemetry_sessions = (bundle.telemetry,)
+            else:
+                raise ValueError("layout-v4 bundle has no typed telemetry state")
+            telemetry_sources = bundle.telemetry_session_sources or (
+                bundle.source_path,
+            )
+            self.telemetry_fpga = (
+                bundle.telemetry_fpga
+                or TelemetryCollection(
+                    telemetry_sessions,
+                    session_sources=telemetry_sources,
+                    session_input_identities=(
+                        (_bundle_input_identity(bundle),) * len(telemetry_sessions)
+                    ),
+                )
+            )
+            self.telemetry = self.telemetry_fpga
+            self.telemetry_sessions = telemetry_sessions
+            self.dcb_telemetry = self.telemetry_fpga.engineering_values()
+            self.encoder_telemetry = {}
+        else:
+            self.telemetry = None
+            self.telemetry_fpga = None
+            self.telemetry_sessions = ()
+            self.dcb_telemetry = bundle.dcb_fpga
+            self.encoder_telemetry = bundle.dcb_encoder
         self.interp_telemetry = bundle.interp_telemetry
         self.session_invariants = bundle.session_invariants
         self.run_provenance = bundle.run_provenance
@@ -4945,7 +5714,12 @@ class IngestData(Observation):
         n_tr = self.tr_spectra.shape[0] if self.tr_spectra is not None else 0
         n_zm = self.zoom_spectra.shape[0] if self.zoom_spectra is not None else 0
         n_src = len(self.source_paths)
-        has_tlm = bool(self.dcb_telemetry)
+        has_tlm = (
+            self.telemetry_fpga.row_count > 0
+            or any(self.telemetry_fpga.session_unassigned_row_counts)
+            if self.telemetry_fpga is not None
+            else bool(self.dcb_telemetry)
+        )
         return (f"IngestData(N_spectra={n_sp}, N_tr={n_tr}, "
                 f"N_zoom={n_zm}, sources={n_src}, telemetry={has_tlm})")
 
@@ -5017,28 +5791,57 @@ class IngestData(Observation):
 
     def plot_dcb(self, channels=None, *, ax=None):
         """Plot one or more DCB telemetry channels vs mission time."""
-        import matplotlib.pyplot as plt
-        if not self.dcb_telemetry:
+        telemetry = self.dcb_telemetry
+        unassigned_only = False
+        if not telemetry or not any(
+            np.asarray(value).size for value in telemetry.values()
+        ):
+            collection = getattr(self, "telemetry_fpga", None)
+            if collection is not None:
+                unassigned = collection.unassigned_engineering_values()
+                if unassigned:
+                    telemetry = unassigned
+                    unassigned_only = True
+        if not telemetry:
             raise ValueError("no DCB telemetry available")
         if ax is None:
+            import matplotlib.pyplot as plt
+
             _, ax = plt.subplots(figsize=(10, 5))
-        ms = self.dcb_telemetry.get("mission_seconds")
-        if ms is None or ms.size == 0:
+        raw_seconds = telemetry.get("raw_seconds")
+        if raw_seconds is not None:
+            t = np.asarray(raw_seconds, dtype=np.float64)
+        else:
+            ms = telemetry.get("mission_seconds")
+            if ms is None:
+                raise ValueError("DCB telemetry has no time axis")
+            ss = telemetry.get("lusee_subsecs")
+            if ss is None:
+                ss = np.zeros_like(ms)
+            t = (
+                np.asarray(ms, dtype=np.float64)
+                + np.asarray(ss, dtype=np.float64) / 65536.0
+            )
+        if t.size == 0:
             raise ValueError("DCB telemetry has no time axis")
-        ss = self.dcb_telemetry.get("lusee_subsecs")
-        if ss is None:
-            ss = np.zeros_like(ms)
-        t = ms + ss * (1.0 / 65536.0)
         t = t - t[0]
         if channels is None:
-            channels = ["THERM_FPGA", "THERM_DCB", "VMON_6V"]
+            collection = getattr(self, "telemetry_fpga", None)
+            channels = (
+                list(collection.field_names)
+                if collection is not None and collection.field_names
+                else ["THERM_FPGA", "THERM_DCB", "VMON_6V"]
+            )
         for ch in channels:
-            if ch in self.dcb_telemetry:
-                ax.plot(t, self.dcb_telemetry[ch], label=ch, lw=0.9)
+            if ch in telemetry:
+                ax.plot(t, telemetry[ch], label=ch, lw=0.9)
             else:
                 log.info("dcb channel %s not present", ch)
-        ax.set_xlabel("seconds since first telemetry sample")
+        sample_kind = "unassigned telemetry" if unassigned_only else "telemetry"
+        ax.set_xlabel(f"seconds since first {sample_kind} sample")
         ax.set_ylabel("value")
+        if unassigned_only:
+            ax.set_title("Unassigned DCB telemetry")
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
         return ax

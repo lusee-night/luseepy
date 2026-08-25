@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from types import MappingProxyType
 
 import numpy as np
 
@@ -29,6 +28,11 @@ from .products import (
     WaveformSample,
     ZoomSample,
 )
+from .telemetry import (
+    TelemetryCoverage,
+    TelemetryDecodeResult,
+    TelemetryDecoderStatus,
+)
 
 FAMILY_TYPES = (
     ("spectra", SpectrumSample),
@@ -45,12 +49,15 @@ FAMILY_TYPES = (
 UNSUPPORTED_FAMILIES = (
     "fw_direct_spectra",
     "legacy_cal_data",
-    "dcb_telemetry",
     "encoder_telemetry",
-    "legacy_sidecar_telemetry",
     "interpolated_telemetry",
 )
-ALL_FAMILIES = tuple(name for name, _ in FAMILY_TYPES) + UNSUPPORTED_FAMILIES
+TELEMETRY_FAMILY = "dcb_telemetry"
+ALL_FAMILIES = (
+    tuple(name for name, _ in FAMILY_TYPES)
+    + (TELEMETRY_FAMILY,)
+    + UNSUPPORTED_FAMILIES
+)
 
 
 class FamilyCoverage(StrEnum):
@@ -58,6 +65,7 @@ class FamilyCoverage(StrEnum):
 
     PERSISTED = "persisted"
     ABSENT_IN_INPUT = "absent_in_input"
+    PRESENT_EMPTY = "present_empty"
     INVALID_OR_DROPPED = "invalid_or_dropped"
     UNSUPPORTED = "unsupported"
 
@@ -447,6 +455,14 @@ class FamilyStatus:
                 and quality is not DataQuality.CLEAN
             ):
                 raise ValueError("an absent input family must be clean")
+            if coverage is FamilyCoverage.PRESENT_EMPTY and (
+                quality is not DataQuality.CLEAN
+                or self.decoded_rows != 0
+                or issue_ids
+            ):
+                raise ValueError(
+                    "a present-empty family must be clean with zero rows"
+                )
             if (
                 coverage is FamilyCoverage.INVALID_OR_DROPPED
                 and quality is not DataQuality.FAILED
@@ -472,10 +488,60 @@ class FamilyStatus:
         object.__setattr__(self, "reason", reason)
 
 
+def family_status_for_telemetry(
+    telemetry: TelemetryDecodeResult,
+) -> FamilyStatus:
+    """Return the sole canonical DCB family status for typed telemetry."""
+    if not isinstance(telemetry, TelemetryDecodeResult):
+        raise TypeError("telemetry must be a TelemetryDecodeResult")
+    telemetry_rows = (
+        (telemetry.fpga.row_count if telemetry.fpga is not None else 0)
+        + (
+            telemetry.unassigned_fpga.row_count
+            if telemetry.unassigned_fpga is not None
+            else 0
+        )
+    )
+    dcb_issue_ids = tuple(
+        issue.issue_id
+        for issue in telemetry.issues
+        if issue.code != "telemetry_decoder.encoder_layout_unvalidated"
+    )
+    if telemetry.input_source is None:
+        dcb_coverage = FamilyCoverage.ABSENT_IN_INPUT
+        dcb_quality = DataQuality.CLEAN
+    elif telemetry.decoder_status is not TelemetryDecoderStatus.AVAILABLE:
+        dcb_coverage = FamilyCoverage.INVALID_OR_DROPPED
+        dcb_quality = DataQuality.FAILED
+    elif telemetry.coverage is TelemetryCoverage.PRESENT_EMPTY:
+        dcb_coverage = FamilyCoverage.PRESENT_EMPTY
+        dcb_quality = DataQuality.CLEAN
+    elif telemetry_rows:
+        dcb_coverage = FamilyCoverage.PERSISTED
+        dcb_quality = (
+            DataQuality.PARTIAL if dcb_issue_ids else DataQuality.CLEAN
+        )
+    elif dcb_issue_ids:
+        dcb_coverage = FamilyCoverage.INVALID_OR_DROPPED
+        dcb_quality = DataQuality.FAILED
+    else:
+        dcb_coverage = FamilyCoverage.ABSENT_IN_INPUT
+        dcb_quality = DataQuality.CLEAN
+    return FamilyStatus(
+        family=TELEMETRY_FAMILY,
+        supported=True,
+        coverage=dcb_coverage,
+        quality=dcb_quality,
+        decoded_rows=telemetry_rows,
+        issue_ids=dcb_issue_ids,
+    )
+
+
 def family_statuses_for_products(
     products: Products,
     *,
     family_issue_ids: Mapping[str, tuple[str, ...]],
+    telemetry: TelemetryDecodeResult | None = None,
 ) -> tuple[FamilyStatus, ...]:
     """Build complete statuses from explicit per-family issue attribution."""
     unknown = set(family_issue_ids) - {family for family, _ in FAMILY_TYPES}
@@ -507,7 +573,15 @@ def family_statuses_for_products(
                 issue_ids=issue_ids,
             )
         )
+    statuses.append(family_status_for_telemetry(
+        telemetry or TelemetryDecodeResult.absent()
+    ))
     for family in UNSUPPORTED_FAMILIES:
+        reason = (
+            "encoder_layout_unvalidated"
+            if family == "encoder_telemetry"
+            else "not_implemented_in_layout_v4"
+        )
         statuses.append(
             FamilyStatus(
                 family=family,
@@ -515,46 +589,10 @@ def family_statuses_for_products(
                 coverage=FamilyCoverage.UNSUPPORTED,
                 quality=DataQuality.FAILED,
                 decoded_rows=0,
-                reason="not_implemented_in_layout_v4",
+                reason=reason,
             )
         )
     return tuple(sorted(statuses, key=lambda status: status.family))
-
-
-def _empty_array_mapping() -> Mapping[str, np.ndarray]:
-    return MappingProxyType({})
-
-
-def _freeze_array_mapping(
-    value: Mapping[str, np.ndarray] | None,
-    name: str,
-) -> Mapping[str, np.ndarray]:
-    if value is None:
-        return _empty_array_mapping()
-    if not isinstance(value, Mapping):
-        raise TypeError(f"{name} must be a mapping or None")
-    normalized: dict[str, np.ndarray] = {}
-    lengths = set()
-    for key, raw in sorted(value.items()):
-        if (
-            not isinstance(key, str)
-            or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", key) is None
-        ):
-            raise ValueError(f"{name} keys must be identifiers")
-        if type(raw) is not np.ndarray:
-            raise TypeError(f"{name}.{key} must be a numpy.ndarray")
-        if raw.ndim == 0:
-            raise ValueError(f"{name}.{key} must have a row axis")
-        if raw.dtype.hasobject:
-            raise TypeError(f"{name}.{key} must not have object dtype")
-        immutable = np.frombuffer(raw.tobytes(order="C"), dtype=raw.dtype).reshape(
-            raw.shape
-        )
-        normalized[key] = immutable
-        lengths.add(raw.shape[0])
-    if len(lengths) > 1:
-        raise ValueError(f"{name} arrays must have one row count")
-    return MappingProxyType(normalized)
 
 
 @dataclass(frozen=True, slots=True)
@@ -568,11 +606,8 @@ class WriteRequest:
     run_provenance: RunProvenance
     issues: tuple[IngestIssue, ...]
     family_statuses: tuple[FamilyStatus, ...]
-    fpga_telemetry: Mapping[str, np.ndarray] = field(
-        default_factory=_empty_array_mapping
-    )
-    encoder_telemetry: Mapping[str, np.ndarray] = field(
-        default_factory=_empty_array_mapping
+    telemetry: TelemetryDecodeResult = field(
+        default_factory=TelemetryDecodeResult.absent
     )
     interpolation_policy: InterpolationPolicy = field(
         default_factory=InterpolationPolicy
@@ -619,6 +654,21 @@ class WriteRequest:
         if len({issue.issue_id for issue in issues}) != len(issues):
             raise ValueError("issues must not contain duplicate issue IDs")
         object.__setattr__(self, "issues", issues)
+        if not isinstance(self.telemetry, TelemetryDecodeResult):
+            raise TypeError("telemetry must be a TelemetryDecodeResult")
+        expected_issues: dict[str, IngestIssue] = {}
+        for issue in (*self.products.issues, *self.telemetry.issues):
+            existing = expected_issues.get(issue.issue_id)
+            if existing is not None and existing != issue:
+                raise ValueError(
+                    "science and telemetry issues reuse an ID with different records"
+                )
+            expected_issues[issue.issue_id] = issue
+        supplied_issues = {issue.issue_id: issue for issue in issues}
+        if supplied_issues != expected_issues:
+            raise ValueError(
+                "WriteRequest issues must be the exact science/telemetry union"
+            )
         family_statuses = tuple(self.family_statuses)
         if any(not isinstance(status, FamilyStatus) for status in family_statuses):
             raise TypeError("family_statuses must contain FamilyStatus records")
@@ -629,21 +679,10 @@ class WriteRequest:
                 "family_statuses must contain every known family in sorted order"
             )
         object.__setattr__(self, "family_statuses", family_statuses)
-        if self.fpga_telemetry or self.encoder_telemetry:
-            raise ValueError(
-                "layout-v4 telemetry persistence requires the reviewed typed "
-                "telemetry boundary"
-            )
-        object.__setattr__(
-            self,
-            "fpga_telemetry",
-            _freeze_array_mapping(self.fpga_telemetry, "fpga_telemetry"),
-        )
-        object.__setattr__(
-            self,
-            "encoder_telemetry",
-            _freeze_array_mapping(self.encoder_telemetry, "encoder_telemetry"),
-        )
+        issue_ids = {issue.issue_id for issue in issues}
+        for status in family_statuses:
+            if not set(status.issue_ids).issubset(issue_ids):
+                raise ValueError("family status references an unknown issue")
         if not isinstance(self.interpolation_policy, InterpolationPolicy):
             raise TypeError("interpolation_policy must be an InterpolationPolicy")
         if type(self.overwrite) is not bool:
@@ -674,6 +713,8 @@ class WriteRequest:
             )
         if products.quality_status is DataQuality.PARTIAL and not self.issues:
             raise ValueError("partial product quality requires a recorded issue")
+        if self.quality_status is DataQuality.PARTIAL and not self.issues:
+            raise ValueError("partial output quality requires a recorded issue")
         if products.decode_provenance.unavailable_reason is not None:
             raise ValueError("layout-v4 output requires concrete decoder provenance")
         for name in (
@@ -687,17 +728,15 @@ class WriteRequest:
                 getattr(products.decode_provenance, name),
                 f"decoder provenance {name}",
             )
-        if products.issues != self.issues:
-            raise ValueError("WriteRequest issues must exactly match Products.issues")
+        if not {issue.issue_id for issue in products.issues}.issubset(
+            issue.issue_id for issue in self.issues
+        ):
+            raise ValueError("WriteRequest is missing a Products issue")
         if products.cal_data:
             raise ValueError(
                 "legacy anonymous cal_data rows are unsupported in layout v4"
             )
-        if self.fpga_telemetry or self.encoder_telemetry:
-            raise ValueError(
-                "layout-v4 telemetry persistence requires the reviewed typed "
-                "telemetry boundary"
-            )
+        self._validate_telemetry_time()
 
         product_rows = []
         issue_ids = {issue.issue_id for issue in self.issues}
@@ -812,15 +851,79 @@ class WriteRequest:
             if status_by_family[family].supported:
                 raise ValueError(f"family {family} is not implemented in layout v4")
 
+        telemetry_status = status_by_family[TELEMETRY_FAMILY]
+        expected_telemetry_status = family_status_for_telemetry(self.telemetry)
+        if telemetry_status != expected_telemetry_status:
+            raise ValueError("DCB telemetry family status disagrees with telemetry")
+
+    def _validate_telemetry_time(self) -> None:
+        """Require the sole DCB raw-to-absolute-time equation."""
+        blocks = tuple(
+            block
+            for block in (
+                self.telemetry.fpga,
+                self.telemetry.unassigned_fpga,
+            )
+            if block is not None and block.row_count
+        )
+        if not blocks:
+            return
+        dcb_reference = (
+            self.clock_reference_set.reference_for(ClockSource.DCB)
+            if self.clock_reference_set is not None
+            else None
+        )
+        if dcb_reference is None:
+            if any(block.mjd_time_valid.any() for block in blocks):
+                raise ValueError(
+                    "telemetry absolute time requires a DCB clock reference"
+                )
+            return
+        for block in blocks:
+            if not block.mjd_time_valid.all():
+                raise ValueError(
+                    "a DCB clock reference requires every telemetry MJD time"
+                )
+            expected = np.asarray(
+                self.clock_reference_set.to_mjd(
+                    block.raw_seconds,
+                    clock_source=ClockSource.DCB,
+                ),
+                dtype=np.float64,
+            )
+            if not np.array_equal(block.mjd_times, expected):
+                raise ValueError(
+                    "telemetry MJD times contradict the DCB clock reference"
+                )
+
+    @property
+    def quality_status(self) -> DataQuality:
+        """Combine usable science quality with optional telemetry quality."""
+        if (
+            self.products.quality_status is DataQuality.PARTIAL
+            or self.telemetry.issues
+            or self.telemetry.decoder_status
+            in (
+                TelemetryDecoderStatus.UNAVAILABLE,
+                TelemetryDecoderStatus.BROKEN,
+                TelemetryDecoderStatus.INCOMPATIBLE,
+            )
+            or self.telemetry.coverage is TelemetryCoverage.PARTIAL
+        ):
+            return DataQuality.PARTIAL
+        return DataQuality.CLEAN
+
 
 __all__ = [
     "ALL_FAMILIES",
     "FAMILY_TYPES",
+    "TELEMETRY_FAMILY",
     "FamilyCoverage",
     "FamilyStatus",
     "InterpolationPolicy",
     "LunarLocation",
     "RunProvenance",
     "WriteRequest",
+    "family_status_for_telemetry",
     "family_statuses_for_products",
 ]

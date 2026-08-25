@@ -26,6 +26,7 @@ from lusee.ingest.obs_factory import (
     IngestData,
     MixedFrequencyGridError,
     SessionBundle,
+    _bundle_sort_key,
     _concat_bundles,
     load,
     load_bundle,
@@ -485,3 +486,39 @@ def test_multi_session_order_uses_recorded_session_start(tmp_path: Path):
     )
     assert merged.session_sources == paths
     assert merged.session_spectra_counts == (1, 1)
+
+
+def test_bundle_sort_uses_first_stored_science_time_not_minimum(tmp_path: Path):
+    first = SessionBundle(
+        spectra_raw_times=np.asarray([20.0, 10.0]),
+        source_path=tmp_path / "first.h5",
+    )
+    second = SessionBundle(
+        spectra_raw_times=np.asarray([15.0]),
+        source_path=tmp_path / "second.h5",
+    )
+
+    ordered = sorted((first, second), key=_bundle_sort_key)
+
+    assert ordered == [second, first]
+
+
+def test_legacy_sort_ignores_unverified_finite_mjd(tmp_path: Path):
+    first = SessionBundle(
+        spectra_raw_times=np.asarray([20.0]),
+        spectra_mjd_times=np.asarray([10.0]),
+        clock_reference_set=None,
+        source_path=tmp_path / "first.h5",
+        layout_version=3,
+    )
+    second = SessionBundle(
+        spectra_raw_times=np.asarray([15.0]),
+        spectra_mjd_times=np.asarray([25.0]),
+        clock_reference_set=None,
+        source_path=tmp_path / "second.h5",
+        layout_version=3,
+    )
+
+    ordered = sorted((first, second), key=_bundle_sort_key)
+
+    assert ordered == [second, first]

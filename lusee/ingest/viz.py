@@ -19,6 +19,7 @@ from typing import List, Optional, Sequence
 
 import numpy as np
 
+from .constants import INGEST_LAYOUT_VERSION
 from .obs_factory import LegacyIngestWarning, SessionBundle, load_bundle
 
 log = logging.getLogger(__name__)
@@ -385,31 +386,60 @@ def plot_adc_stats(source, out_path: Path | str) -> Path:
 # Plot: DCB telemetry summary
 # ---------------------------------------------------------------------------
 
+def _telemetry_field_groups(bundle: SessionBundle) -> dict[str, tuple[str, ...]]:
+    if bundle.layout_version == INGEST_LAYOUT_VERSION:
+        collection = bundle.telemetry_fpga
+        if collection is None:
+            return {}
+        grouped: dict[str, list[str]] = {}
+        for item in collection.field_metadata:
+            grouped.setdefault(item.display_group or "other", []).append(item.name)
+        return {name: tuple(fields) for name, fields in grouped.items()}
+    from . import telemetry as telemetry_mod
+
+    return telemetry_mod.field_groups()
+
+
+def _unassigned_telemetry_values(bundle: SessionBundle) -> dict[str, np.ndarray]:
+    collection = bundle.telemetry_fpga
+    if bundle.layout_version != INGEST_LAYOUT_VERSION or collection is None:
+        return {}
+    return collection.unassigned_engineering_values()
+
+
 def plot_dcb_telemetry(source, out_path: Path | str) -> Path:
     """Summary plot of representative DCB telemetry channels.
 
-    Channel names and panel grouping come from the private
-    ``lusee_telemetry`` decoder (via :func:`lusee.ingest.telemetry.field_groups`).
-    Without a decoder, every ``fpga_*`` channel found in the file is
-    plotted on a single panel.
+    Layout-v4 panel grouping comes from persisted field metadata. Legacy
+    layouts use the optional decoder's compatibility grouping when available.
 
     Raises ``FileNotFoundError`` if ``/DCB_telemetry`` is missing.
     """
-    plt = _require_matplotlib()
     out_path = Path(out_path)
-    from . import telemetry as _telemetry_mod
-    panel_groups = _telemetry_mod.field_groups()    # may be empty
-    telemetry = _as_bundle(source).dcb_fpga
+    bundle = _as_bundle(source)
+    panel_groups = _telemetry_field_groups(bundle)
+    telemetry = bundle.dcb_fpga
+    unassigned_only = False
+    if not telemetry or not any(np.asarray(value).size for value in telemetry.values()):
+        unassigned = _unassigned_telemetry_values(bundle)
+        if unassigned:
+            telemetry = unassigned
+            unassigned_only = True
     if not telemetry:
         raise FileNotFoundError("DCB telemetry is absent")
-    if "mission_seconds" not in telemetry or "lusee_subsecs" not in telemetry:
-        raise FileNotFoundError("FPGA telemetry time axis is absent")
-    ms = np.asarray(telemetry["mission_seconds"])
-    ss = np.asarray(telemetry["lusee_subsecs"])
-    t = ms + ss * (1.0 / 65536.0)
+    if "raw_seconds" in telemetry:
+        t = np.asarray(telemetry["raw_seconds"], dtype=np.float64)
+    else:
+        if (
+            "mission_seconds" not in telemetry
+            or "lusee_subsecs" not in telemetry
+        ):
+            raise FileNotFoundError("FPGA telemetry time axis is absent")
+        ms = np.asarray(telemetry["mission_seconds"], dtype=np.float64)
+        ss = np.asarray(telemetry["lusee_subsecs"], dtype=np.float64)
+        t = ms + ss / 65536.0
     if t.size == 0:
-        log.warning("FPGA telemetry has zero samples; not plotting")
-        return out_path
+        raise FileNotFoundError("FPGA telemetry has zero samples")
     t = t - t[0]
     if panel_groups:
         groups = []
@@ -419,19 +449,22 @@ def plot_dcb_telemetry(source, out_path: Path | str) -> Path:
                 if name in telemetry:
                     present.append((name, np.asarray(telemetry[name])))
             if present:
-                groups.append((title, present))
+                groups.append(
+                    (f"{title} (unassigned)" if unassigned_only else title, present)
+                )
     else:
         present = [
             (name, np.asarray(telemetry[name]))
             for name in sorted(telemetry)
-            if name not in ("mission_seconds", "lusee_subsecs")
+            if name not in ("mission_seconds", "lusee_subsecs", "raw_seconds")
         ]
-        groups = [("FPGA telemetry", present)] if present else []
+        title = "FPGA telemetry (unassigned)" if unassigned_only else "FPGA telemetry"
+        groups = [(title, present)] if present else []
 
     if not groups:
-        log.warning("no DCB telemetry channels found; not plotting")
-        return out_path
+        raise FileNotFoundError("no DCB telemetry channels found")
 
+    plt = _require_matplotlib()
     n_panels = len(groups)
     fig, axes = plt.subplots(n_panels, 1, figsize=(10, 2.5 * n_panels), sharex=True)
     if n_panels == 1:
@@ -441,7 +474,8 @@ def plot_dcb_telemetry(source, out_path: Path | str) -> Path:
             ax.plot(t, arr, lw=0.8, label=fname)
         ax.set_title(title)
         ax.legend(fontsize=7, ncol=3, loc="upper right")
-    axes[-1].set_xlabel("seconds since first telemetry sample")
+    sample_kind = "unassigned telemetry" if unassigned_only else "telemetry"
+    axes[-1].set_xlabel(f"seconds since first {sample_kind} sample")
     fig.tight_layout()
     fig.savefig(out_path, dpi=110, bbox_inches="tight")
     plt.close(fig)

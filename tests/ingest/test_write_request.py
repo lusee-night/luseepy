@@ -19,6 +19,12 @@ from lusee.ingest.products import (
     SourcePacketProvenance,
     ValidatedCounts,
 )
+from lusee.ingest.telemetry import (
+    TelemetryCoverage,
+    TelemetryDecodeResult,
+    TelemetryDecoderStatus,
+    TelemetryInputState,
+)
 from lusee.ingest.write_request import (
     ALL_FAMILIES,
     UNSUPPORTED_FAMILIES,
@@ -274,7 +280,7 @@ def test_write_request_rejects_untyped_telemetry(telemetry_field: str):
     values = request_values(products)
     values[telemetry_field] = {"raw_seconds": np.array([1.0], dtype=np.float64)}
 
-    with pytest.raises(ValueError, match="reviewed typed telemetry boundary"):
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
         WriteRequest(**values)
 
 
@@ -283,7 +289,32 @@ def test_write_request_rejects_issue_mismatch():
     values = request_values(products)
     values["issues"] = (make_issue(),)
 
-    with pytest.raises(ValueError, match="exactly match Products.issues"):
+    with pytest.raises(ValueError, match="exact science/telemetry union"):
+        WriteRequest(**values)
+
+
+def test_write_request_rejects_conflicting_issue_records_with_same_id():
+    products = make_products()
+    science_issue = make_issue()
+    products.issues = (science_issue,)
+    telemetry_issue = replace(science_issue, message="different issue body")
+    telemetry = TelemetryDecodeResult(
+        input_source="b01",
+        input_state=TelemetryInputState.PRESENT,
+        decoder_status=TelemetryDecoderStatus.UNAVAILABLE,
+        coverage=TelemetryCoverage.UNAVAILABLE,
+        issues=(telemetry_issue,),
+    )
+    values = request_values(products)
+    values["telemetry"] = telemetry
+    values["issues"] = (science_issue,)
+    values["family_statuses"] = family_statuses_for_products(
+        products,
+        family_issue_ids={},
+        telemetry=telemetry,
+    )
+
+    with pytest.raises(ValueError, match="reuse an ID with different records"):
         WriteRequest(**values)
 
 
@@ -317,7 +348,26 @@ def test_write_request_rejects_unknown_family_issue_reference():
         family_issue_ids={"spectra": ("issue-unknown",)},
     )
 
-    with pytest.raises(ValueError, match="references unknown issues"):
+    with pytest.raises(ValueError, match="references an unknown issue"):
+        WriteRequest(**values)
+
+
+def test_write_request_rejects_noncanonical_telemetry_family_status():
+    products = make_products()
+    values = request_values(products)
+    statuses = list(values["family_statuses"])
+    index = next(
+        index
+        for index, status in enumerate(statuses)
+        if status.family == "dcb_telemetry"
+    )
+    statuses[index] = replace(
+        statuses[index],
+        coverage=FamilyCoverage.PRESENT_EMPTY,
+    )
+    values["family_statuses"] = tuple(statuses)
+
+    with pytest.raises(ValueError, match="family status disagrees"):
         WriteRequest(**values)
 
 

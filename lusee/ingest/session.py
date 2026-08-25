@@ -22,10 +22,11 @@ import tempfile
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 import numpy as np
 
+from .clock_reference import ClockReferenceSet, ClockSource
 from .constants import (
     FILENAME_APID_HEX_WIDTH,
     FILENAME_PACKET_INDEX_DEFAULT_WIDTH,
@@ -33,6 +34,7 @@ from .constants import (
     MISSION_TIME_FRACT_DIVISOR,
     MISSION_TIME_FRACT_SHIFT,
 )
+from .issues import IssueAction, IssueCollector, IssueSeverity
 from .packet_map import (
     PACKET_MAP_FILENAME,
     PacketMapError,
@@ -41,6 +43,12 @@ from .packet_map import (
     write_packet_map,
 )
 from .reassembly import LogicalPacket
+from .telemetry import (
+    TelemetryCoverage,
+    TelemetryDecodeResult,
+    TelemetryDecoderStatus,
+    map_dcb_absolute_time,
+)
 from .uncrater_adapter import load_uncrater, read_packet
 
 log = logging.getLogger(__name__)
@@ -63,11 +71,7 @@ class Session:
     fw_time: Optional[int] = None
     start_time_32: Optional[int] = None
     start_time_16: Optional[int] = None
-    # Per-field arrays produced by the private telemetry decoder, then
-    # sliced to this session's mission-time window. Empty when no decoder
-    # is loaded or no records fell into the window.
-    fpga_telemetry: Dict[str, np.ndarray] = field(default_factory=dict)
-    encoder_telemetry: Dict[str, np.ndarray] = field(default_factory=dict)
+    telemetry: TelemetryDecodeResult | None = None
 
     @property
     def has_startup(self) -> bool:
@@ -176,48 +180,171 @@ def split_sessions(packets: Sequence[LogicalPacket]) -> List[Session]:
 
 def assign_telemetry_to_sessions(
     sessions: List[Session],
-    fpga_arrays: Dict[str, np.ndarray],
-    encoder_arrays: Dict[str, np.ndarray],
+    telemetry: TelemetryDecodeResult,
     *,
-    time_key: str = "mission_seconds",
-) -> None:
-    """Distribute per-field telemetry arrays across sessions by mission time.
+    clock_reference_set: ClockReferenceSet,
+    issue_collector: IssueCollector,
+) -> TelemetryDecodeResult | None:
+    """Assign b01 rows using shared elapsed DCB/spectrometer coordinates.
 
-    Each row of ``fpga_arrays[time_key]`` is assigned to the most recent
-    preceding session (``bisect_right(starts, t) - 1``, with rows before
-    the first session bumped to it). The per-session slices are stored
-    on ``session.fpga_telemetry`` / ``session.encoder_telemetry`` as
-    sub-dicts of arrays.
+    Rows that cannot be associated remain in ``unassigned_fpga``. The same
+    explicitly unassigned block is carried by each session result so a
+    per-session output cannot silently lose source telemetry.
     """
-    if not sessions:
-        return
+    if not isinstance(telemetry, TelemetryDecodeResult):
+        raise TypeError("telemetry must be a TelemetryDecodeResult")
+    if not isinstance(clock_reference_set, ClockReferenceSet):
+        raise TypeError("clock_reference_set must be a ClockReferenceSet")
+    if not isinstance(issue_collector, IssueCollector):
+        raise TypeError("issue_collector must be an IssueCollector")
+    if telemetry.input_source not in (None, "b01"):
+        raise ValueError("session-boundary assignment accepts only b01 telemetry")
+    if telemetry.input_source is None:
+        return None
+    if telemetry.decoder_status is not TelemetryDecoderStatus.AVAILABLE:
+        for session in sessions:
+            session.telemetry = telemetry
+        return None
+    if telemetry.fpga is None:
+        raise ValueError("available telemetry has no FPGA block")
 
-    indexed = sorted(enumerate(sessions),
-                     key=lambda e: e[1].start_raw_seconds or 0.0)
-    sorted_starts = np.array(
-        [s.start_raw_seconds or 0.0 for _, s in indexed], dtype=np.float64
+    full_block = telemetry.fpga
+    empty = np.zeros(full_block.row_count, dtype=np.bool_)
+    if full_block.row_count == 0:
+        for session in sessions:
+            session.telemetry = telemetry.with_blocks(
+                fpga=full_block.slice_rows(empty),
+            )
+        return None
+
+    def keep_unassigned(code: str, message: str, details: dict[str, object]):
+        issue = issue_collector.record(
+            code=code,
+            severity=IssueSeverity.WARNING,
+            stage="telemetry_assignment",
+            message=message,
+            action=IssueAction.KEPT,
+            details=details,
+        )
+        issues = (*telemetry.issues, issue)
+        unassigned = telemetry.with_blocks(
+            fpga=full_block.slice_rows(empty),
+            unassigned_fpga=full_block,
+            issues=issues,
+            coverage=TelemetryCoverage.PARTIAL,
+        )
+        for session in sessions:
+            session.telemetry = unassigned
+        return unassigned
+
+    spectrometer_reference = clock_reference_set.reference_for(
+        ClockSource.SPECTROMETER
     )
-    sorted_to_orig = [orig for orig, _ in indexed]
+    dcb_reference = clock_reference_set.reference_for(ClockSource.DCB)
+    if dcb_reference is not None:
+        telemetry = map_dcb_absolute_time(
+            telemetry,
+            clock_reference_set=clock_reference_set,
+            issue_collector=issue_collector,
+        )
+        assert telemetry.fpga is not None
+        full_block = telemetry.fpga
+    missing_clocks = [
+        name
+        for name, reference in (
+            (ClockSource.SPECTROMETER.value, spectrometer_reference),
+            (ClockSource.DCB.value, dcb_reference),
+        )
+        if reference is None
+    ]
+    if missing_clocks:
+        return keep_unassigned(
+            "telemetry_assignment.missing_clock_reference",
+            "b01 telemetry was retained unassigned because a clock reference "
+            "is missing",
+            {"missing_clock_sources": missing_clocks},
+        )
 
-    def assign(arrays: Dict[str, np.ndarray], target_attr: str) -> None:
-        if not arrays or time_key not in arrays:
-            return
-        times = np.asarray(arrays[time_key], dtype=np.float64)
-        if times.size == 0:
-            return
-        # bisect_right(starts, t) - 1, with -1 bumped to 0.
-        idxs = np.searchsorted(sorted_starts, times, side="right") - 1
-        idxs = np.maximum(idxs, 0)
-        for sorted_i in range(len(sorted_to_orig)):
-            mask = idxs == sorted_i
-            if not mask.any():
-                continue
-            sess = sessions[sorted_to_orig[sorted_i]]
-            sess_arrays = {k: v[mask] for k, v in arrays.items()}
-            setattr(sess, target_attr, sess_arrays)
+    if not sessions:
+        return keep_unassigned(
+            "telemetry_assignment.no_sessions",
+            "b01 telemetry was retained unassigned because no science session exists",
+            {"row_count": full_block.row_count},
+        )
+    ordinals = [session.ordinal for session in sessions]
+    if len(set(ordinals)) != len(ordinals):
+        return keep_unassigned(
+            "telemetry_assignment.invalid_session_boundaries",
+            "b01 telemetry was retained unassigned because session ordinals repeat",
+            {"session_ordinals": ordinals},
+        )
+    ordered_sessions = sorted(sessions, key=lambda session: session.ordinal)
+    starts = [session.start_raw_seconds for session in ordered_sessions]
+    if any(start is None for start in starts):
+        return keep_unassigned(
+            "telemetry_assignment.invalid_session_boundaries",
+            "b01 telemetry was retained unassigned because a session start is missing",
+            {"session_ordinals": [session.ordinal for session in ordered_sessions]},
+        )
+    start_values = np.asarray(starts, dtype=np.float64)
+    if not np.all(np.isfinite(start_values)) or (
+        start_values.size > 1 and np.any(np.diff(start_values) <= 0.0)
+    ):
+        return keep_unassigned(
+            "telemetry_assignment.invalid_session_boundaries",
+            "b01 telemetry was retained unassigned because session starts "
+            "are not monotone",
+            {"session_ordinals": [session.ordinal for session in ordered_sessions]},
+        )
 
-    assign(fpga_arrays, "fpga_telemetry")
-    assign(encoder_arrays, "encoder_telemetry")
+    assert spectrometer_reference is not None
+    assert dcb_reference is not None
+    mapped_block = full_block
+    session_elapsed = (
+        start_values - spectrometer_reference.clock_reference_raw_seconds
+    )
+    telemetry_elapsed = (
+        mapped_block.raw_seconds - dcb_reference.clock_reference_raw_seconds
+    )
+    assignments = np.searchsorted(
+        session_elapsed,
+        telemetry_elapsed,
+        side="right",
+    ) - 1
+    pre_session = assignments < 0
+    issues = telemetry.issues
+    coverage = telemetry.coverage
+    unassigned_block = None
+    if np.any(pre_session):
+        issue = issue_collector.record(
+            code="telemetry_assignment.pre_session_rows",
+            severity=IssueSeverity.WARNING,
+            stage="telemetry_assignment",
+            message=(
+                "b01 telemetry rows before the first session were retained "
+                "unassigned"
+            ),
+            action=IssueAction.KEPT,
+            details={"row_count": int(np.count_nonzero(pre_session))},
+        )
+        issues = (*issues, issue)
+        coverage = TelemetryCoverage.PARTIAL
+        unassigned_block = mapped_block.slice_rows(pre_session)
+    for index, session in enumerate(ordered_sessions):
+        session.telemetry = telemetry.with_blocks(
+            fpga=mapped_block.slice_rows(assignments == index),
+            unassigned_fpga=unassigned_block,
+            issues=issues,
+            coverage=coverage,
+        )
+    if unassigned_block is None:
+        return None
+    return telemetry.with_blocks(
+        fpga=mapped_block.slice_rows(empty),
+        unassigned_fpga=unassigned_block,
+        issues=issues,
+        coverage=coverage,
+    )
 
 
 # ---------------------------------------------------------------------------
