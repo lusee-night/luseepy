@@ -346,14 +346,16 @@ def _process_one_session(
     decoder_strict: bool = False,
     diagnostic_override: bool = False,
     schema_variant: str | None = None,
+    products: Products | None = None,
 ) -> SessionResult:
-    products = read_uncrater_session(
-        session_dir,
-        issue_collector=issue_collector,
-        strict=decoder_strict,
-        diagnostic_override=diagnostic_override,
-        schema_variant=schema_variant,
-    )
+    if products is None:
+        products = read_uncrater_session(
+            session_dir,
+            issue_collector=issue_collector,
+            strict=decoder_strict,
+            diagnostic_override=diagnostic_override,
+            schema_variant=schema_variant,
+        )
     constants_kwargs = dict(constants_kwargs or {})
 
     has_telemetry = bool(fpga_arrays) or bool(encoder_arrays)
@@ -437,6 +439,23 @@ def _process_one_session(
         result.manifest_path = str(mpath.resolve())
 
     return result
+
+
+def _binding_identity(products: Products) -> tuple[object, ...]:
+    """Return only the selected frozen binding identity."""
+    provenance = products.decode_provenance
+    if provenance.unavailable_reason is not None:
+        raise RuntimeError(
+            "FLASH binding preflight requires concrete decoder provenance"
+        )
+    return (
+        provenance.selected_schema_id,
+        provenance.binding_key,
+        provenance.schema_variant,
+        provenance.binding_source_release,
+        provenance.binding_source_commit,
+        provenance.abi_fingerprint,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -696,11 +715,30 @@ def process_flash(
         win_lower[s.ordinal] = None if i == 0 else s.start_raw_seconds
         win_upper[s.ordinal] = (nxt.start_raw_seconds if nxt is not None else None)
 
+    prepared: list[tuple[Session, str, Path, Products, list[str]]] = []
+    expected_binding: tuple[object, ...] | None = None
     for session in sessions:
         name = session_name(session.ordinal, session.start_raw_seconds)
         session_dir = sessions_root / name
         write_uncrater_session(session, session_dir)
 
+        with _WarningCapture() as cap:
+            products = read_uncrater_session(
+                session_dir,
+                issue_collector=issue_collector,
+            )
+        binding = _binding_identity(products)
+        if expected_binding is None:
+            expected_binding = binding
+        elif binding != expected_binding:
+            raise RuntimeError(
+                "derived FLASH sessions selected different decoder bindings; "
+                "refusing all product writes. This is a conservative guard, "
+                "not a forced input-wide binding"
+            )
+        prepared.append((session, name, session_dir, products, cap.records))
+
+    for session, name, session_dir, products, decode_warnings in prepared:
         # Per-session arrays were already produced by parse_flash and
         # sliced onto the Session via assign_telemetry_to_sessions.
         fpga_arrays = session.fpga_telemetry or None
@@ -725,9 +763,10 @@ def process_flash(
                 interpolation_mode=interpolation_mode,
                 plot_names=plot_names,
                 constants_kwargs=constants_kwargs,
+                products=products,
             )
-        result.warnings_summary = cap.records
-        result.n_warnings = len(cap.records)
+        result.warnings_summary = [*decode_warnings, *cap.records]
+        result.n_warnings = len(result.warnings_summary)
 
         # Backreference to the source flash dir + the time window for
         # this session, so a later process_session run can re-derive the

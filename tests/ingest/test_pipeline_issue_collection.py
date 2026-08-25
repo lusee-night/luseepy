@@ -58,6 +58,7 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
     flash_dir.mkdir()
     collector = IssueCollector()
     parse_seen = []
+    decode_seen = []
     worker_seen = []
 
     def fake_parse_flash(path, *, issue_collector=None):
@@ -73,12 +74,18 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
             source_kind=kwargs["source_kind"],
         )
 
+    def fake_read(path, *, issue_collector=None, **kwargs):
+        decode_seen.append((path, issue_collector))
+        return Products()
+
     monkeypatch.setattr(pipeline, "parse_flash", fake_parse_flash)
     monkeypatch.setattr(
         pipeline,
         "write_uncrater_session",
         lambda session, session_dir: session_dir,
     )
+    monkeypatch.setattr(pipeline, "read_uncrater_session", fake_read)
+    monkeypatch.setattr(pipeline, "_binding_identity", lambda products: ("307",))
     monkeypatch.setattr(pipeline, "_process_one_session", fake_process_one_session)
 
     result = pipeline.process_flash(
@@ -89,6 +96,7 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
 
     assert len(result) == 1
     assert parse_seen == [(flash_dir.resolve(), collector)]
+    assert decode_seen == [(sessions_root / "session_000", collector)]
     assert len(worker_seen) == 1
     assert worker_seen[0]["issue_collector"] is collector
 
