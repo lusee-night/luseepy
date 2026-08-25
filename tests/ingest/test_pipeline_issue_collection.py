@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 
-from lusee.ingest import pipeline
+import pytest
+
+from lusee.ingest import collation, pipeline
 from lusee.ingest.constants import BANK_FILENAME, SCIENCE_BANKS, TELEMETRY_BANK
 from lusee.ingest.decode import Products
 from lusee.ingest.issues import IssueCollector
+from lusee.ingest.reassembly import LogicalPacket
 
 
 def write_landing_reference(tmp_path):
@@ -30,6 +33,65 @@ def make_bank(flash_dir, bank):
     (bank_dir / BANK_FILENAME).write_bytes(b"")
 
 
+def test_failed_hello_sw_version_is_recorded_once(tmp_path, monkeypatch):
+    class SyntheticDecoder:
+        @staticmethod
+        def appid_is_hello(appid):
+            return appid == 0x100
+
+        @staticmethod
+        def Packet(appid, *, blob):
+            raise ValueError("synthetic failed Hello")
+
+    source = LogicalPacket(
+        appid=0x100,
+        start_seq=4,
+        seq=4,
+        blob=(41).to_bytes(4, "little"),
+        single_packet=True,
+        bank=SCIENCE_BANKS[0],
+        file_index=8,
+    )
+    make_bank(tmp_path, SCIENCE_BANKS[0])
+    monkeypatch.setattr(
+        pipeline,
+        "parse_bank_file",
+        lambda *args, **kwargs: iter(()),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "reassemble_logical_packets",
+        lambda *args, **kwargs: iter((source,)),
+    )
+    monkeypatch.setattr(
+        collation,
+        "load_uncrater",
+        lambda: SyntheticDecoder(),
+    )
+    monkeypatch.setattr(collation, "is_dropped_appid", lambda appid: False)
+    monkeypatch.setattr(collation, "is_uid_prefixed", lambda appid: True)
+    monkeypatch.setattr(pipeline, "is_dropped_appid", lambda appid: False)
+    monkeypatch.setattr(
+        pipeline,
+        "split_sessions",
+        lambda packets, *, issue_collector=None: [],
+    )
+    collector = IssueCollector()
+
+    with pytest.warns(RuntimeWarning, match="failed to read SW_version") as seen:
+        sessions, _telemetry, _unassigned = pipeline.parse_flash(
+            tmp_path,
+            landing_time_file=write_landing_reference(tmp_path),
+            issue_collector=collector,
+        )
+
+    assert len(seen) == 1
+    assert sessions == []
+    assert [issue.code for issue in collector.issues] == [
+        "identity.hello_sw_version_decode_failed",
+    ]
+
+
 def test_parse_flash_threads_one_collector_through_science_and_telemetry(
     tmp_path,
     monkeypatch,
@@ -45,13 +107,21 @@ def test_parse_flash_threads_one_collector_through_science_and_telemetry(
         return iter(())
 
     monkeypatch.setattr(pipeline, "parse_bank_file", fake_parse_bank_file)
-    monkeypatch.setattr(pipeline, "detect_sw_version", lambda packets: None)
+    monkeypatch.setattr(
+        pipeline,
+        "detect_sw_version",
+        lambda packets, *, issue_collector=None: None,
+    )
     monkeypatch.setattr(
         pipeline,
         "assign_identities",
-        lambda packets, *, sw_version: packets,
+        lambda packets, **kwargs: packets,
     )
-    monkeypatch.setattr(pipeline, "split_sessions", lambda packets: [])
+    monkeypatch.setattr(
+        pipeline,
+        "split_sessions",
+        lambda packets, *, issue_collector=None: [],
+    )
     telemetry_seen = []
 
     def fake_decode(packets, *, issue_collector=None):
@@ -118,13 +188,21 @@ def test_b01_framing_issues_are_attached_to_typed_telemetry(
         )
 
     monkeypatch.setattr(pipeline, "parse_bank_file", fake_parse_bank_file)
-    monkeypatch.setattr(pipeline, "detect_sw_version", lambda packets: None)
+    monkeypatch.setattr(
+        pipeline,
+        "detect_sw_version",
+        lambda packets, *, issue_collector=None: None,
+    )
     monkeypatch.setattr(
         pipeline,
         "assign_identities",
-        lambda packets, *, sw_version: packets,
+        lambda packets, **kwargs: packets,
     )
-    monkeypatch.setattr(pipeline, "split_sessions", lambda packets: [])
+    monkeypatch.setattr(
+        pipeline,
+        "split_sessions",
+        lambda packets, *, issue_collector=None: [],
+    )
     monkeypatch.setattr(pipeline.telemetry_mod, "decode_b01_packets", fake_decode)
 
     _, telemetry, _ = pipeline.parse_flash(
@@ -143,13 +221,21 @@ def test_dangling_b01_source_is_broken_not_absent(tmp_path, monkeypatch):
     bank_dir = tmp_path / TELEMETRY_BANK
     bank_dir.mkdir()
     (bank_dir / BANK_FILENAME).symlink_to("missing-bank")
-    monkeypatch.setattr(pipeline, "detect_sw_version", lambda packets: None)
+    monkeypatch.setattr(
+        pipeline,
+        "detect_sw_version",
+        lambda packets, *, issue_collector=None: None,
+    )
     monkeypatch.setattr(
         pipeline,
         "assign_identities",
-        lambda packets, *, sw_version: packets,
+        lambda packets, **kwargs: packets,
     )
-    monkeypatch.setattr(pipeline, "split_sessions", lambda packets: [])
+    monkeypatch.setattr(
+        pipeline,
+        "split_sessions",
+        lambda packets, *, issue_collector=None: [],
+    )
 
     _, telemetry, _ = pipeline.parse_flash(
         tmp_path,
@@ -178,6 +264,7 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
         *,
         clock_reference_set=None,
         issue_collector=None,
+        capture=None,
     ):
         parse_seen.append((path, issue_collector))
         return (

@@ -136,19 +136,64 @@ def test_write_uncrater_session_refuses_and_preserves_existing_destination(
     assert staging_paths(dest) == []
 
 
-def test_write_uncrater_session_cleans_staging_after_install_failure(
+def test_write_uncrater_session_explicitly_replaces_complete_tree(tmp_path):
+    dest = tmp_path / "session"
+    old_cdi = dest / "cdi_output"
+    old_cdi.mkdir(parents=True)
+    stale = old_cdi / "99999_0001.bin"
+    stale.write_bytes(b"stale data")
+    (dest / "stale-sidecar.json").write_text("stale", encoding="ascii")
+
+    cdi = write_uncrater_session(make_session(), dest, overwrite=True)
+
+    assert cdi == dest / "cdi_output"
+    assert sorted(path.name for path in dest.iterdir()) == [
+        "cdi_output",
+        "packet_map.json",
+    ]
+    assert sorted(path.name for path in cdi.iterdir()) == [
+        "00000_0001.bin",
+        "00001_020f.bin",
+        "00002_07ff.bin",
+    ]
+    assert not stale.exists()
+    assert staging_paths(dest) == []
+
+
+@pytest.mark.parametrize("target_kind", ["file", "symlink"])
+def test_write_uncrater_session_overwrite_rejects_non_directory_target(
     tmp_path,
-    monkeypatch,
+    target_kind,
+):
+    dest = tmp_path / "session"
+    if target_kind == "file":
+        dest.write_bytes(b"old file")
+    else:
+        target = tmp_path / "symlink-target"
+        target.mkdir()
+        (target / "sentinel").write_bytes(b"old directory")
+        dest.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(NotADirectoryError):
+        write_uncrater_session(make_session(), dest, overwrite=True)
+
+    if target_kind == "file":
+        assert dest.read_bytes() == b"old file"
+    else:
+        assert dest.is_symlink()
+        assert (dest / "sentinel").read_bytes() == b"old directory"
+    assert staging_paths(dest) == []
+
+
+@pytest.mark.parametrize("overwrite", [None, 0, 1, "true"])
+def test_write_uncrater_session_requires_exact_bool_overwrite(
+    tmp_path,
+    overwrite,
 ):
     dest = tmp_path / "session"
 
-    def fail_rename(source, target):
-        raise OSError("injected install failure")
-
-    monkeypatch.setattr(session_mod, "_rename_noreplace", fail_rename)
-
-    with pytest.raises(OSError, match="injected install failure"):
-        write_uncrater_session(make_session(), dest)
+    with pytest.raises(TypeError, match="overwrite must be bool"):
+        write_uncrater_session(make_session(), dest, overwrite=overwrite)
 
     assert not dest.exists()
     assert staging_paths(dest) == []
@@ -182,27 +227,6 @@ def test_write_uncrater_session_validates_map_before_install(
         write_uncrater_session(make_session(), dest)
 
     assert not dest.exists()
-    assert staging_paths(dest) == []
-
-
-def test_write_uncrater_session_does_not_replace_raced_destination(
-    tmp_path,
-    monkeypatch,
-):
-    dest = tmp_path / "session"
-    real_rename = session_mod._rename_noreplace
-
-    def race_rename(source, target):
-        target.mkdir()
-        real_rename(source, target)
-
-    monkeypatch.setattr(session_mod, "_rename_noreplace", race_rename)
-
-    with pytest.raises(FileExistsError):
-        write_uncrater_session(make_session(), dest)
-
-    assert dest.is_dir()
-    assert list(dest.iterdir()) == []
     assert staging_paths(dest) == []
 
 

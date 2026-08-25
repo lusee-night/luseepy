@@ -14,7 +14,7 @@ import numpy as np
 from .clock_reference import ClockReferenceSet, ClockSource
 from .constants import MISSION_TIME_FRACT_DIVISOR, MISSION_TIME_FRACT_SHIFT
 from .decode import Products
-from .issues import IngestIssue
+from .issues import IngestIssue, IssueSeverity
 from .products import (
     CalibratorDataSample,
     CalibratorDebugSample,
@@ -615,6 +615,7 @@ class WriteRequest:
     overwrite: bool = False
     hdf5_compression: str | None = "gzip"
     hdf5_compression_level: int | None = 1
+    context_issues: tuple[IngestIssue, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.products, Products):
@@ -656,18 +657,26 @@ class WriteRequest:
         object.__setattr__(self, "issues", issues)
         if not isinstance(self.telemetry, TelemetryDecodeResult):
             raise TypeError("telemetry must be a TelemetryDecodeResult")
+        context_issues = tuple(self.context_issues)
+        if any(not isinstance(issue, IngestIssue) for issue in context_issues):
+            raise TypeError("context_issues must contain IngestIssue records")
+        object.__setattr__(self, "context_issues", context_issues)
         expected_issues: dict[str, IngestIssue] = {}
-        for issue in (*self.products.issues, *self.telemetry.issues):
+        for issue in (
+            *self.products.issues,
+            *self.telemetry.issues,
+            *context_issues,
+        ):
             existing = expected_issues.get(issue.issue_id)
             if existing is not None and existing != issue:
                 raise ValueError(
-                    "science and telemetry issues reuse an ID with different records"
+                    "ingest issue sources reuse an ID with different records"
                 )
             expected_issues[issue.issue_id] = issue
         supplied_issues = {issue.issue_id: issue for issue in issues}
         if supplied_issues != expected_issues:
             raise ValueError(
-                "WriteRequest issues must be the exact science/telemetry union"
+                "WriteRequest issues must be the exact source/context union"
             )
         family_statuses = tuple(self.family_statuses)
         if any(not isinstance(status, FamilyStatus) for status in family_statuses):
@@ -901,6 +910,10 @@ class WriteRequest:
         """Combine usable science quality with optional telemetry quality."""
         if (
             self.products.quality_status is DataQuality.PARTIAL
+            or any(
+                issue.severity is not IssueSeverity.INFO
+                for issue in self.context_issues
+            )
             or self.telemetry.issues
             or self.telemetry.decoder_status
             in (

@@ -21,7 +21,7 @@ Public API:
     write_hdf5                           -- validated WriteRequest -> layout-v4 HDF5
 
   Manifest
-    SessionResult, write_manifest
+    FlashResult, SessionResult, write_flash_manifest, write_manifest
 
   Visualization
     plot_session, plot_spectra_waterfall, plot_spectra_mean,
@@ -158,10 +158,12 @@ _LAZY_EXPORTS = {
     # Writers and orchestration
     "write_hdf5": ("hdf5_writer", "write_hdf5"),
     "write_fits": ("fits_writer", "write_fits"),
+    "FlashResult": ("pipeline", "FlashResult"),
     "SessionResult": ("pipeline", "SessionResult"),
     "parse_flash": ("pipeline", "parse_flash"),
     "process_flash": ("pipeline", "process_flash"),
     "process_session": ("pipeline", "process_session"),
+    "write_flash_manifest": ("pipeline", "write_flash_manifest"),
     "write_manifest": ("pipeline", "write_manifest"),
     # Visualization
     "plot_adc_stats": ("viz", "plot_adc_stats"),
@@ -254,8 +256,8 @@ __all__ = [
     # fits
     "write_fits",
     # pipeline
-    "SessionResult", "parse_flash", "process_flash", "process_session",
-    "write_manifest",
+    "FlashResult", "SessionResult", "parse_flash", "process_flash",
+    "process_session", "write_flash_manifest", "write_manifest",
     # viz
     "plot_session", "plot_spectra_waterfall", "plot_spectra_mean",
     "plot_adc_stats", "plot_dcb_telemetry",

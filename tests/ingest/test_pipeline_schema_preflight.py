@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import warnings
+from types import SimpleNamespace
 
 import pytest
 
@@ -137,10 +138,9 @@ def test_flash_preflight_accepts_same_binding_with_different_evidence(
     )
     assert worker_products == products
     assert len(captured) == 4
-    assert results[0].n_warnings == 2
-    assert "decode warning 0" in results[0].warnings_summary[0]
-    assert "writer warning 0" in results[0].warnings_summary[1]
-    assert results[1].n_warnings == 2
+    assert results[0].n_warnings == 0
+    assert results[0].warnings_summary == []
+    assert results[1].n_warnings == 0
     manifest = json.loads((
         tmp_path / "sessions" / "session_000" / "session.json"
     ).read_text("ascii"))
@@ -163,14 +163,25 @@ def test_flash_preflight_mismatch_refuses_all_product_writes(
         ),
         make_products(),
     ]
+    products[0].housekeeping = [
+        SimpleNamespace(
+            provenance=SimpleNamespace(decoder_issue_ids=()),
+        ),
+    ]
     reads = install_synthetic_flash(monkeypatch, products)
     worker_calls = []
     manifest_calls = []
-    monkeypatch.setattr(
-        pipeline,
-        "_process_one_session",
-        lambda **kwargs: worker_calls.append(kwargs),
-    )
+    process_one_session = pipeline._process_one_session
+
+    def track_product_writes(**kwargs):
+        if any(
+            kwargs[directory] is not None
+            for directory in ("h5_dir", "fits_dir", "plots_dir")
+        ):
+            worker_calls.append(kwargs)
+        return process_one_session(**kwargs)
+
+    monkeypatch.setattr(pipeline, "_process_one_session", track_product_writes)
     monkeypatch.setattr(
         pipeline,
         "write_manifest",
@@ -197,4 +208,34 @@ def test_flash_preflight_mismatch_refuses_all_product_writes(
     assert not (tmp_path / "h5").exists()
     assert not (tmp_path / "fits").exists()
     assert not (tmp_path / "plots").exists()
-    assert not (tmp_path / "manifests").exists()
+    failure_manifest = json.loads(
+        (tmp_path / "manifests" / "flash.json").read_text("ascii")
+    )
+    assert failure_manifest["status"] == "failed"
+    assert failure_manifest["failure"]["stage"] == "decoder_preflight"
+    assert failure_manifest["status_issue_codes"] == [
+        "pipeline.flash_failed"
+    ]
+    assert len(failure_manifest["sessions"]) == 2
+    for index, session in enumerate(failure_manifest["sessions"]):
+        assert session["status"] == "failed"
+        assert session["status_issue_codes"] == ["pipeline.flash_failed"]
+        assert session["issue_counts"] == {"pipeline.flash_failed": 1}
+        assert session["issues"][0]["code"] == "pipeline.flash_failed"
+        assert set(session["stage_counts"]) == {
+            "decode",
+            "persistence",
+            "products",
+            "session_input",
+        }
+        assert session["family_statuses"]
+        assert session["contracts"]["output_layout_version"] == 4
+        if index == 0:
+            housekeeping = next(
+                status
+                for status in session["family_statuses"]
+                if status["family"] == "housekeeping"
+            )
+            assert housekeeping["coverage"] == "decoded_not_persisted"
+            assert housekeeping["decoded_rows"] == 1
+            assert housekeeping["persisted_rows"] == 0

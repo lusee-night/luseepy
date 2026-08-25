@@ -8,7 +8,7 @@ import pytest
 from astropy.io import fits
 from test_layout_v4_hdf5 import make_request
 
-from lusee.ingest import fits_writer, viz
+from lusee.ingest import fits_writer, pipeline, viz
 from lusee.ingest import telemetry as telemetry_module
 from lusee.ingest.clock_reference import (
     ClockReference,
@@ -34,7 +34,10 @@ from lusee.ingest.telemetry import (
     TelemetryFieldMetadata,
     TelemetryInputState,
 )
-from lusee.ingest.write_request import family_statuses_for_products
+from lusee.ingest.write_request import (
+    InterpolationPolicy,
+    family_statuses_for_products,
+)
 
 
 def telemetry_request(raw_second=1000.25):
@@ -148,6 +151,49 @@ def telemetry_request(raw_second=1000.25):
         ),
         telemetry=telemetry,
     )
+
+
+def test_manifest_telemetry_provenance_preserves_typed_policy_and_counts():
+    telemetry = telemetry_request().telemetry
+
+    record = pipeline._telemetry_provenance_manifest(
+        telemetry,
+        InterpolationPolicy(),
+    )
+
+    assert record["decoder"] == {
+        "api_version": 1,
+        "decoder_name": "generic-test-decoder",
+        "decoder_version": "test-1",
+        "claimed_appids": [0x314, 0x325],
+    }
+    assert record["counts"]["kind"] == "b01"
+    assert record["counts"]["scalar_counts"]["input_packet_count"] == 2
+    assert record["counts"]["claimed_appid_counts"] == [
+        {"appid": 0x314, "packet_count": 1},
+        {"appid": 0x325, "packet_count": 1},
+    ]
+    assert record["field_metadata"] == [
+        {
+            "name": "temperature",
+            "unit": "K",
+            "kind": "continuous",
+            "interpolation": "linear",
+            "display_group": "thermal",
+        },
+        {
+            "name": "raw_adc",
+            "unit": "count",
+            "kind": "uncalibrated_raw_count",
+            "interpolation": "none",
+            "display_group": None,
+        },
+    ]
+    assert record["interpolation_policy"] == {
+        "mode": "none",
+        "maximum_gap_seconds": None,
+        "extrapolate": False,
+    }
 
 
 def present_empty_telemetry_request():

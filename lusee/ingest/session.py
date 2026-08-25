@@ -92,7 +92,15 @@ def raw_seconds_from_split_time(time_32: int, time_16: int) -> float:
     return (combined >> MISSION_TIME_FRACT_SHIFT) / MISSION_TIME_FRACT_DIVISOR
 
 
-def _read_hello(blob: bytes, sw_version: Optional[int] = None) -> Optional[dict]:
+def _read_hello(
+    blob: bytes,
+    sw_version: Optional[int] = None,
+    *,
+    issue_collector: IssueCollector | None = None,
+    packet: LogicalPacket | None = None,
+    packet_index: int | None = None,
+    session_ordinal: int | None = None,
+) -> Optional[dict]:
     """Decode a Hello packet's identity / time fields. Returns None on failure."""
     decoder = load_uncrater()
     try:
@@ -101,7 +109,35 @@ def _read_hello(blob: bytes, sw_version: Optional[int] = None) -> Optional[dict]
         )
         read_packet(pkt)
     except Exception as exc:    # noqa: BLE001
-        warnings.warn(f"failed to decode Hello: {exc}", RuntimeWarning, stacklevel=2)
+        message = f"failed to decode Hello: {exc}"
+        if issue_collector is not None:
+            issue_collector.record(
+                code="session_start.hello_decode_failed",
+                severity=IssueSeverity.WARNING,
+                stage="session_start",
+                message=message,
+                action=IssueAction.KEPT,
+                bank=None if packet is None else packet.bank,
+                packet_index=packet_index,
+                appid=(
+                    int(decoder.id.AppID_uC_Start)
+                    if packet is None
+                    else packet.appid
+                ),
+                sequence_count=None if packet is None else packet.seq,
+                uid=None if packet is None else packet.unique_packet_id,
+                session=(
+                    None
+                    if session_ordinal is None
+                    else f"ordinal:{session_ordinal}"
+                ),
+                details={
+                    "exception_type": type(exc).__name__,
+                    "session_ordinal": session_ordinal,
+                    "sw_version": sw_version,
+                },
+            )
+        warnings.warn(message, RuntimeWarning, stacklevel=2)
         return None
 
     out = {}
@@ -113,12 +149,28 @@ def _read_hello(blob: bytes, sw_version: Optional[int] = None) -> Optional[dict]
     return out
 
 
-def _populate_session_start(session: Session) -> None:
+def _populate_session_start(
+    session: Session,
+    *,
+    issue_collector: IssueCollector | None = None,
+) -> None:
     """If the session has a first Hello, read it and fill start-* fields."""
     decoder = load_uncrater()
-    for p in session.packets:
+    for fallback_index, p in enumerate(session.packets):
         if decoder.appid_is_hello(p.appid):
-            fields = _read_hello(p.blob, sw_version=session.sw_version)
+            packet_index = (
+                p.file_index
+                if type(p.file_index) is int and p.file_index >= 0
+                else fallback_index
+            )
+            fields = _read_hello(
+                p.blob,
+                sw_version=session.sw_version,
+                issue_collector=issue_collector,
+                packet=p,
+                packet_index=packet_index,
+                session_ordinal=session.ordinal,
+            )
             if fields is None:
                 return
             session.sw_version = fields.get("SW_version")
@@ -141,7 +193,11 @@ def _populate_session_start(session: Session) -> None:
 # Stage 4a: session splitting
 # ---------------------------------------------------------------------------
 
-def split_sessions(packets: Sequence[LogicalPacket]) -> List[Session]:
+def split_sessions(
+    packets: Sequence[LogicalPacket],
+    *,
+    issue_collector: IssueCollector | None = None,
+) -> List[Session]:
     """Split a sorted, identity-assigned packet stream into sessions.
 
     Rules (spec section 6.1):
@@ -150,6 +206,10 @@ def split_sessions(packets: Sequence[LogicalPacket]) -> List[Session]:
       * Consecutive Hellos fold into the current session.
       * Packets preceding any Hello form session 0 with no startup metadata.
     """
+    if issue_collector is not None and not isinstance(
+        issue_collector, IssueCollector
+    ):
+        raise TypeError("issue_collector must be an IssueCollector or None")
     sessions: List[Session] = []
     current: Optional[Session] = None
     seen_non_hello = False
@@ -170,7 +230,7 @@ def split_sessions(packets: Sequence[LogicalPacket]) -> List[Session]:
             seen_non_hello = True
 
     for s in sessions:
-        _populate_session_start(s)
+        _populate_session_start(s, issue_collector=issue_collector)
     return sessions
 
 
@@ -411,21 +471,32 @@ def _rename_noreplace(source: Path, target: Path) -> None:
         raise OSError(error, os.strerror(error), target)
 
 
-def write_uncrater_session(session: Session, dest_dir: Path | str) -> Path:
+def write_uncrater_session(
+    session: Session,
+    dest_dir: Path | str,
+    *,
+    overwrite: bool = False,
+) -> Path:
     """Write a Session to disk in uncrater session format.
 
     The directory layout produced is "Layout B" (cdi_output/ subdirectory)
     -- ``dest_dir/cdi_output/NNNNN_XXXX.bin`` plus a versioned
     ``dest_dir/packet_map.json``. The complete tree is first written to a
-    sibling staging directory, then atomically installed. An existing
-    ``dest_dir`` is refused and left untouched. No telemetry sidecar is
-    written.
+    sibling staging directory, then installed. An existing ``dest_dir`` is
+    refused and left untouched unless ``overwrite=True``;
+    replacement removes that directory only after the complete staged tree is
+    validated. No telemetry sidecar is written.
 
     Returns the path of the cdi_output/ subdirectory.
     """
+    if type(overwrite) is not bool:
+        raise TypeError("overwrite must be bool")
     dest = Path(dest_dir)
     if dest.exists() or dest.is_symlink():
-        raise FileExistsError(dest)
+        if not overwrite:
+            raise FileExistsError(dest)
+        if dest.is_symlink() or not dest.is_dir():
+            raise NotADirectoryError(dest)
     width = _index_width(len(session.packets))
     filenames = [
         packet_filename(index, packet.appid, width=width)
@@ -463,7 +534,11 @@ def write_uncrater_session(session: Session, dest_dir: Path | str) -> Path:
                 "staged packet map disagrees with retained packet provenance"
             )
         if dest.exists() or dest.is_symlink():
-            raise FileExistsError(dest)
+            if not overwrite:
+                raise FileExistsError(dest)
+            if dest.is_symlink() or not dest.is_dir():
+                raise NotADirectoryError(dest)
+            shutil.rmtree(dest)
         _rename_noreplace(staging, dest)
     finally:
         shutil.rmtree(staging_root, ignore_errors=True)

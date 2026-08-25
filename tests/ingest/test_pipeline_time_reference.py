@@ -1042,6 +1042,7 @@ def test_manifest_v3_records_clock_digest_and_packet_map_state(tmp_path):
         telemetry_decoder_status="unavailable",
         products=valid_products(),
     )
+    pipeline.write_manifest(result, result.manifest_path)
 
     manifest = json.loads((
         tmp_path / "manifests" / f"{result.session_name}.json"

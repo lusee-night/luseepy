@@ -30,6 +30,7 @@ from lusee.ingest.write_request import (
     UNSUPPORTED_FAMILIES,
     FamilyCoverage,
     FamilyStatus,
+    InterpolationPolicy,
     LunarLocation,
     RunProvenance,
     WriteRequest,
@@ -146,6 +147,65 @@ def make_issue() -> IngestIssue:
         message="fixture issue",
         action=IssueAction.DROPPED,
     )
+
+
+def test_write_request_retains_early_context_issues():
+    products = make_products()
+    issue = IngestIssue(
+        issue_id="issue-early-0001",
+        code="framing.synthetic_damage",
+        severity=IssueSeverity.WARNING,
+        stage="framing",
+        message="one source frame was dropped",
+        action=IssueAction.DROPPED,
+    )
+    values = request_values(products)
+    values["issues"] = (issue,)
+    values["context_issues"] = (issue,)
+
+    request = WriteRequest(**values)
+
+    assert request.issues == (issue,)
+    assert request.context_issues == (issue,)
+    assert request.quality_status is DataQuality.PARTIAL
+
+
+def test_write_request_requires_context_issues_in_exact_union():
+    products = make_products()
+    issue = IngestIssue(
+        issue_id="issue-early-0001",
+        code="framing.synthetic_damage",
+        severity=IssueSeverity.WARNING,
+        stage="framing",
+        message="one source frame was dropped",
+        action=IssueAction.DROPPED,
+    )
+    values = request_values(products)
+    values["issues"] = (issue,)
+
+    with pytest.raises(ValueError, match="exact source/context union"):
+        WriteRequest(**values)
+
+
+def test_write_request_preserves_existing_positional_constructor_order():
+    products = make_products()
+    values = request_values(products)
+    request = WriteRequest(
+        products,
+        None,
+        values["clock_reference_unavailable_reason"],
+        values["location"],
+        values["run_provenance"],
+        values["issues"],
+        values["family_statuses"],
+        TelemetryDecodeResult.absent(),
+        InterpolationPolicy(),
+        False,
+        "gzip",
+        1,
+    )
+
+    assert request.context_issues == ()
 
 
 def test_minimal_strict_products_make_valid_write_request():
@@ -289,7 +349,7 @@ def test_write_request_rejects_issue_mismatch():
     values = request_values(products)
     values["issues"] = (make_issue(),)
 
-    with pytest.raises(ValueError, match="exact science/telemetry union"):
+    with pytest.raises(ValueError, match="exact source/context union"):
         WriteRequest(**values)
 
 

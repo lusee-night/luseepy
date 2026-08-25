@@ -23,6 +23,7 @@ import logging
 import warnings
 from typing import Callable, Iterable, List, Optional
 
+from .issues import IssueAction, IssueCollector, IssueSeverity
 from .reassembly import LogicalPacket, reassemble_logical_packets
 from .uncrater_adapter import load_uncrater, read_packet
 
@@ -123,37 +124,119 @@ TypedUidExtractor = Callable[[int, bytes, Optional[int]], Optional[int]]
 """Signature: (appid, blob, sw_version) -> unique_packet_id or None."""
 
 
-def _uncrater_typed_uid_extractor(appid: int, blob: bytes, sw_version: Optional[int]) -> Optional[int]:
+def _packet_index(packet: LogicalPacket, fallback: int) -> int:
+    if type(packet.file_index) is int and packet.file_index >= 0:
+        return packet.file_index
+    return fallback
+
+
+def _record_identity_issue(
+    issue_collector: IssueCollector | None,
+    *,
+    code: str,
+    severity: IssueSeverity,
+    message: str,
+    action: IssueAction,
+    packet: LogicalPacket | None = None,
+    packet_index: int | None = None,
+    appid: int | None = None,
+    sequence_count: int | None = None,
+    details: dict[str, object] | None = None,
+) -> None:
+    if issue_collector is None:
+        return
+    issue_collector.record(
+        code=code,
+        severity=severity,
+        stage="identity",
+        message=message,
+        action=action,
+        bank=None if packet is None else packet.bank,
+        packet_index=packet_index,
+        appid=appid if packet is None else packet.appid,
+        sequence_count=(
+            sequence_count if packet is None else packet.seq
+        ),
+        uid=None if packet is None else packet.unique_packet_id,
+        details=details,
+    )
+
+
+def _uncrater_typed_uid_extractor(
+    appid: int,
+    blob: bytes,
+    sw_version: Optional[int],
+    *,
+    issue_collector: IssueCollector | None = None,
+    packet: LogicalPacket | None = None,
+    packet_index: int | None = None,
+) -> Optional[int]:
     """Default uid-typed extractor; reads the typed C-struct via uncrater."""
     try:
         pkt = load_uncrater().Packet(appid, blob=blob, version=sw_version)
         read_packet(pkt)
         return int(getattr(pkt, "unique_packet_id"))
     except Exception as exc:    # noqa: BLE001
-        warnings.warn(
+        message = (
             f"failed to extract unique_packet_id from uid-typed packet "
-            f"(appid=0x{appid:03x}): {exc}",
+            f"(appid=0x{appid:03x}): {exc}"
+        )
+        _record_identity_issue(
+            issue_collector,
+            code="identity.typed_uid_extraction_failed",
+            severity=IssueSeverity.WARNING,
+            message=message,
+            action=IssueAction.REJECTED,
+            packet=packet,
+            packet_index=packet_index,
+            appid=appid,
+            details={
+                "exception_type": type(exc).__name__,
+                "sw_version": sw_version,
+            },
+        )
+        warnings.warn(
+            message,
             RuntimeWarning,
             stacklevel=2,
         )
         return None
 
 
-def detect_sw_version(packets: Iterable[LogicalPacket]) -> Optional[int]:
+def detect_sw_version(
+    packets: Iterable[LogicalPacket],
+    *,
+    issue_collector: IssueCollector | None = None,
+) -> Optional[int]:
     """Scan packets for the first Hello and report its SW_version.
 
     Used to seed uid-typed extraction. Returns None if no Hello is present.
     """
+    if issue_collector is not None and not isinstance(
+        issue_collector, IssueCollector
+    ):
+        raise TypeError("issue_collector must be an IssueCollector or None")
     decoder = load_uncrater()
-    for p in packets:
+    for fallback_index, p in enumerate(packets):
         if decoder.appid_is_hello(p.appid):
             try:
                 hello = decoder.Packet(p.appid, blob=p.blob)
                 read_packet(hello)
                 return int(getattr(hello, "SW_version"))
             except Exception as exc:    # noqa: BLE001
+                message = f"failed to read SW_version from Hello: {exc}"
+                _record_identity_issue(
+                    issue_collector,
+                    code="identity.hello_sw_version_decode_failed",
+                    severity=IssueSeverity.WARNING,
+                    message=message,
+                    action=IssueAction.KEPT,
+                    packet=p,
+                    packet_index=_packet_index(p, fallback_index),
+                    details={"exception_type": type(exc).__name__},
+                )
                 warnings.warn(
-                    f"failed to read SW_version from Hello: {exc}",
+                    message,
                     RuntimeWarning,
                     stacklevel=2,
                 )
@@ -165,8 +248,10 @@ def assign_identities(
     packets: List[LogicalPacket],
     *,
     sw_version: Optional[int] = None,
+    auto_detect_sw_version: bool = True,
     typed_uid_extractor: Optional[TypedUidExtractor] = None,
     sort: bool = True,
+    issue_collector: IssueCollector | None = None,
 ) -> List[LogicalPacket]:
     """Stage 3: assign ``unique_packet_id`` to each logical packet.
 
@@ -179,43 +264,125 @@ def assign_identities(
     With ``sort=True`` (default), the returned list is sorted by
     ``(unique_packet_id, seq)`` using the existing deterministic heuristic.
     This is not a canonical or global chronological order.
+
+    Set ``auto_detect_sw_version=False`` when detection was already attempted
+    and returned ``None``.
     """
-    if typed_uid_extractor is None:
-        typed_uid_extractor = _uncrater_typed_uid_extractor
-    if sw_version is None:
-        sw_version = detect_sw_version(packets)
+    if issue_collector is not None and not isinstance(
+        issue_collector, IssueCollector
+    ):
+        raise TypeError("issue_collector must be an IssueCollector or None")
+    use_default_typed_extractor = typed_uid_extractor is None
+    if sw_version is None and auto_detect_sw_version:
+        sw_version = detect_sw_version(
+            packets,
+            issue_collector=issue_collector,
+        )
+
+    drop_reasons: list[str | None] = [None] * len(packets)
 
     # Pass 1: explicit extraction
-    for pkt in packets:
+    for fallback_index, pkt in enumerate(packets):
+        packet_index = _packet_index(pkt, fallback_index)
         if is_dropped_appid(pkt.appid):
             pkt.unique_packet_id = None
+            drop_reasons[fallback_index] = "intentionally_filtered_appid"
             continue
         if is_uid_prefixed(pkt.appid):
             if len(pkt.blob) < 4:
-                warnings.warn(
+                message = (
                     f"uid-prefixed packet too short for u32 uid "
-                    f"(appid=0x{pkt.appid:03x}, len={len(pkt.blob)})",
+                    f"(appid=0x{pkt.appid:03x}, len={len(pkt.blob)})"
+                )
+                _record_identity_issue(
+                    issue_collector,
+                    code="identity.uid_prefix_too_short",
+                    severity=IssueSeverity.WARNING,
+                    message=message,
+                    action=IssueAction.REJECTED,
+                    packet=pkt,
+                    packet_index=packet_index,
+                    details={"blob_length": len(pkt.blob), "required_length": 4},
+                )
+                warnings.warn(
+                    message,
                     RuntimeWarning,
                     stacklevel=2,
                 )
+                drop_reasons[fallback_index] = "invalid_uid_prefix"
                 continue
             pkt.unique_packet_id = int.from_bytes(pkt.blob[0:4], "little")
         elif is_uid_typed(pkt.appid):
-            pkt.unique_packet_id = typed_uid_extractor(pkt.appid, pkt.blob, sw_version)
+            if use_default_typed_extractor:
+                pkt.unique_packet_id = _uncrater_typed_uid_extractor(
+                    pkt.appid,
+                    pkt.blob,
+                    sw_version,
+                    issue_collector=issue_collector,
+                    packet=pkt,
+                    packet_index=packet_index,
+                )
+            else:
+                assert typed_uid_extractor is not None
+                pkt.unique_packet_id = typed_uid_extractor(
+                    pkt.appid, pkt.blob, sw_version
+                )
+            if pkt.unique_packet_id is None:
+                drop_reasons[fallback_index] = "typed_uid_unavailable"
 
     # Pass 2: derive uid for uid-derived packets
     last_id: Optional[int] = None
-    for pkt in packets:
+    for fallback_index, pkt in enumerate(packets):
         if pkt.unique_packet_id is not None:
             last_id = pkt.unique_packet_id
-        elif is_uid_derived(pkt.appid) and last_id is not None:
-            pkt.unique_packet_id = last_id
+        elif is_uid_derived(pkt.appid):
+            if last_id is not None:
+                pkt.unique_packet_id = last_id
+                drop_reasons[fallback_index] = None
+            else:
+                drop_reasons[fallback_index] = "no_preceding_unique_packet_id"
+        elif drop_reasons[fallback_index] is None:
+            drop_reasons[fallback_index] = "unrecognized_appid"
         # otherwise leave None -> filtered below
 
     kept = [p for p in packets if p.unique_packet_id is not None]
     n_dropped = len(packets) - len(kept)
     if n_dropped:
         log.info("dropped %d packet(s) with no extractable unique_packet_id", n_dropped)
+    for fallback_index, (pkt, reason) in enumerate(
+        zip(packets, drop_reasons, strict=True)
+    ):
+        if pkt.unique_packet_id is not None:
+            continue
+        packet_index = _packet_index(pkt, fallback_index)
+        if reason == "intentionally_filtered_appid":
+            _record_identity_issue(
+                issue_collector,
+                code="identity.appid_intentionally_dropped",
+                severity=IssueSeverity.INFO,
+                message=(
+                    f"packet AppID 0x{pkt.appid:03x} was intentionally dropped "
+                    "from the science stream"
+                ),
+                action=IssueAction.DROPPED,
+                packet=pkt,
+                packet_index=packet_index,
+                details={"reason": reason},
+            )
+            continue
+        _record_identity_issue(
+            issue_collector,
+            code="identity.packet_without_uid_dropped",
+            severity=IssueSeverity.WARNING,
+            message=(
+                f"packet AppID 0x{pkt.appid:03x} was dropped because no "
+                "unique_packet_id could be assigned"
+            ),
+            action=IssueAction.DROPPED,
+            packet=pkt,
+            packet_index=packet_index,
+            details={"reason": reason},
+        )
 
     if sort:
         kept.sort(key=lambda p: (p.unique_packet_id, p.seq))
