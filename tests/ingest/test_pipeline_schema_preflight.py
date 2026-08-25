@@ -191,7 +191,7 @@ def test_flash_preflight_mismatch_refuses_all_product_writes(
     with pytest.warns(RuntimeWarning), pytest.raises(
         RuntimeError,
         match="conservative guard, not a forced input-wide binding",
-    ):
+    ) as error:
         pipeline.process_flash(
             flash_dir,
             landing_time_file=write_landing_reference(tmp_path),
@@ -201,6 +201,12 @@ def test_flash_preflight_mismatch_refuses_all_product_writes(
             plots_dir=tmp_path / "plots",
             manifest_dir=tmp_path / "manifests",
         )
+
+    assert isinstance(error.value.ingest_result, pipeline.FlashResult)
+    assert error.value.ingest_result.status == "failed"
+    assert error.value.ingest_result.issue_counts == {
+        "pipeline.flash_failed": 1
+    }
 
     assert [index for index, _ in reads] == [0, 1]
     assert worker_calls == []

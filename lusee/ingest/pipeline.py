@@ -2867,6 +2867,7 @@ def process_session(
             result_sink=partial_results,
         )
     except Exception as exc:
+        failure_result = partial_results[-1] if partial_results else None
         failure_issue = None
         try:
             failure_issue = collector.record(
@@ -2888,11 +2889,7 @@ def process_session(
                 )
             except ValueError:
                 failure_name = f"session_{ordinal:03d}"
-            failed = (
-                partial_results[-1]
-                if partial_results
-                else None
-            )
+            failed = failure_result
             if failed is None:
                 family_issue_ids = (
                     {
@@ -2961,6 +2958,8 @@ def process_session(
                 if failed.manifest_path is not None
                 else Path(manifest_dir) / f"{failed.session_name}.json"
             )
+            failed.manifest_path = str(failure_path.resolve())
+            failure_result = failed
             try:
                 _write_bytes_atomic(
                     _canonical_manifest_bytes(
@@ -2974,6 +2973,8 @@ def process_session(
                 )
             except Exception:  # noqa: BLE001
                 log.exception("failed to write session failure manifest")
+        if failure_result is not None:
+            setattr(exc, "ingest_result", failure_result)
         raise
 
 
@@ -3250,6 +3251,8 @@ def process_flash(
     plot_names: Optional[Sequence[str]] = None,
     overwrite: bool = False,
     issue_collector: IssueCollector | None = None,
+    decoder_strict: bool = False,
+    schema_variant: str | None = None,
 ) -> FlashResult:
     """Run the single-pass FLASH pipeline and return its run-level result."""
     _validate_overwrite(overwrite)
@@ -3282,6 +3285,8 @@ def process_flash(
         plot_names=plot_names,
         overwrite=overwrite,
         issue_collector=collector,
+        decoder_strict=decoder_strict,
+        schema_variant=schema_variant,
     )
 
 
@@ -3471,6 +3476,8 @@ def _process_flash_run(
     plot_names: Sequence[str] | None,
     overwrite: bool,
     issue_collector: IssueCollector,
+    decoder_strict: bool,
+    schema_variant: str | None,
 ) -> FlashResult:
     run_marker = issue_collector.mark()
     capture = _FlashParseCapture()
@@ -3593,6 +3600,8 @@ def _process_flash_run(
             extracted.append((session, name, session_dir))
             products = read_uncrater_session(
                 session_dir,
+                strict=decoder_strict,
+                schema_variant=schema_variant,
                 issue_collector=issue_collector,
             )
             prepared.append((session, name, session_dir, products))
@@ -3955,6 +3964,7 @@ def _process_flash_run(
         ).hexdigest()
         for result in results:
             result.flash_manifest_sha256 = failed_result.manifest_sha256
+        setattr(exc, "ingest_result", failed_result)
         if outputs_preflighted:
             _write_flash_failure_manifests(
                 failed_result,

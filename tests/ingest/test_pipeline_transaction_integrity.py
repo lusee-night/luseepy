@@ -496,6 +496,40 @@ def test_session_decode_failure_manifest_has_complete_status_contracts(
     )
 
 
+def test_session_failure_exposes_resolved_result_to_caller(
+    tmp_path,
+    monkeypatch,
+):
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    resolved_name = "20270501T010203"
+
+    def fail_session(path, *, result_sink, **kwargs):
+        result_sink.append(pipeline.SessionResult(
+            session_ordinal=0,
+            session_name=resolved_name,
+            source_path=str(path),
+            source_kind="session",
+        ))
+        raise RuntimeError("synthetic writer failure")
+
+    monkeypatch.setattr(pipeline, "_process_session_impl", fail_session)
+    with pytest.raises(RuntimeError, match="synthetic writer failure") as error:
+        pipeline.process_session(
+            session_dir,
+            manifest_dir=tmp_path / "manifests",
+        )
+
+    result = error.value.ingest_result
+    expected_manifest = tmp_path / "manifests" / f"{resolved_name}.json"
+    assert isinstance(result, pipeline.SessionResult)
+    assert result.session_name == resolved_name
+    assert result.status == "failed"
+    assert result.issue_counts == {"pipeline.session_failed": 1}
+    assert result.manifest_path == str(expected_manifest.resolve())
+    assert expected_manifest.is_file()
+
+
 def test_flash_explicit_overwrite_replaces_existing_session_coherently(
     tmp_path,
     monkeypatch,

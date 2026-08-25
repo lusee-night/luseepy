@@ -283,7 +283,7 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
         )
 
     def fake_read(path, *, issue_collector=None, **kwargs):
-        decode_seen.append((path, issue_collector))
+        decode_seen.append((path, issue_collector, kwargs))
         return Products()
 
     monkeypatch.setattr(pipeline, "_parse_flash_loaded", fake_parse_flash)
@@ -301,11 +301,17 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
         landing_time_file=write_landing_reference(tmp_path),
         sessions_root=sessions_root,
         issue_collector=collector,
+        decoder_strict=True,
+        schema_variant="early",
     )
 
     assert len(result) == 1
     assert parse_seen == [(flash_dir.resolve(), collector)]
-    assert decode_seen == [(sessions_root / "session_000", collector)]
+    assert decode_seen == [(
+        sessions_root / "session_000",
+        collector,
+        {"strict": True, "schema_variant": "early"},
+    )]
     assert len(worker_seen) == 1
     assert worker_seen[0]["issue_collector"] is collector
 

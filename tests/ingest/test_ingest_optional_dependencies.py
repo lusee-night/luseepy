@@ -52,8 +52,10 @@ def test_light_imports_and_stage2_work_without_ingest_extras():
         sys.meta_path.insert(0, BlockFinder())
 
         import lusee.ingest as ingest
+        from lusee.ingest.cli import build_parser
 
         assert not blocked.intersection(sys.modules)
+        assert "process-flash" in build_parser().format_help()
         payload = b"stage2"
         appid = 0x234
         sequence = 17

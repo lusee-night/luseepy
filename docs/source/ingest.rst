@@ -6,8 +6,96 @@ The ``lusee.ingest`` package decodes raw CCSDS downlinks or extracted
 packet provenance records. Compatibility rows produced by the older adapters
 are marked ``legacy_adapter_provenance_pending`` and are not counted as
 validated product rows. The layout-v4 HDF5 and FITS writers accept only the
-strict, family-specific ``WriteRequest`` boundary. Operational pipeline call
-sites migrate to that boundary in the later session-persistence phase.
+strict, family-specific ``WriteRequest`` boundary. ``process_session`` and
+``process_flash`` use that boundary and write manifest-v3 run results.
+
+Installation and command line
+-----------------------------
+
+Install the ingestion dependencies from the checkout:
+
+.. code-block:: console
+
+   pip install ".[ingest]"
+
+The ingest extra carries the reviewed ``uncrater`` revision pinned in
+``pyproject.toml``. That exact pin is authoritative until a compatible release
+is reviewed. The production command has three operations:
+
+.. code-block:: console
+
+   lusee-ingest process-session extracted/session_000 --landing-time-file landing.json --h5-dir products/h5 --fits-dir products/fits --manifest-dir products/manifests
+   lusee-ingest process-flash FLASH_TLMFS --landing-time-file landing.json --sessions-root extracted --h5-dir products/h5 --fits-dir products/fits
+   lusee-ingest validate products/h5/session_000.h5
+
+``process-session`` requires an explicit external manifest directory.
+Successful raw FLASH processing writes the canonical
+``sessions_root/flash.json``. A failure before output preflight writes no
+manifest because no output destination has been accepted yet.
+``--overwrite`` is required to replace an existing destination. Plot output
+requires both ``--plots-dir`` and ``--h5-dir``; plots use the persisted v4
+masks and preserve separate frequency grids.
+
+``--issue-policy`` controls whether the shared issue collector accumulates
+findings or stops at the first one. ``--decoder-strict`` separately controls
+the repaired decoder's execution mode. ``--schema-variant`` is an explicit
+decoder override, including the reviewed early/final 306 distinction. One raw
+FLASH input must select one binding across all derived sessions; a mismatch is
+reported before any science product is written.
+
+Pipeline, manifests, and manual operation
+-----------------------------------------
+
+Raw FLASH processing uses the existing legacy frame recovery and logical
+packet reassembly, then the established UID/order heuristic, session split,
+repaired decoder, and layout-v4 writers. The CLI does not activate an
+alternate CCSDS profile or comparison path. Extracted-session processing
+starts at the repaired-decoder stage.
+
+Session and FLASH manifests record the source identity, decoder binding,
+issues, stage and family counts, timing reference, output locations, and final
+``clean|partial|failed`` status. A decoded family in a manifest-only run uses
+``decoded_not_persisted`` and never claims persisted rows.
+
+Operation assumes one ingestion process and an ordinary local filesystem.
+There is no daemon, worker pool, lock, resume protocol, or automatic retry.
+After a failure, inspect the emitted manifest when present, correct the input
+or command, and rerun manually; use ``--overwrite`` when replacing the failed
+run's destinations.
+
+Missing private telemetry does not invalidate independent science products.
+It remains explicitly absent, with no invented values and no extrapolation.
+For an extracted session, ``--no-rederive-telemetry`` skips lookup through the
+raw FLASH backreference; an existing historical JSON sidecar remains a legacy
+fallback.
+
+Status, issues, and exits
+-------------------------
+
+Packet- or product-local damage removes only the smallest affected unit.
+Independent products continue, and fixed-shape spectral storage receives NaN
+where a product plane is absent or rejected. Issue policy is independent of
+the aggregate quality status.
+
+The command prints the final status, available artifact and manifest paths,
+and sorted issue counts. When processing constructs a failure result, the same
+summary reports its partial artifacts and actual manifest name. An earlier
+preflight or command-line failure prints a concise error only. Processing and
+validation return ``0`` for clean, ``2`` for usable partial data, and ``1``
+for failed, invalid, or command-line input.
+
+Validation and compatibility
+----------------------------
+
+``lusee-ingest validate`` applies the full reader contract to one layout-v4
+HDF5 or FITS product. For manifests it accepts the canonical in-session
+``session.json`` or canonical ``flash.json`` and checks current schema and
+run/session linkage. Manifest validation does not replay raw banks or
+revalidate a referenced HDF5/FITS file; validate each product separately.
+
+Layout v2 and v3 remain read-only compatibility inputs. Validation does not
+upgrade them. Re-ingest the original raw FLASH or extracted packet tree to
+produce a current v4 product and manifest-v3 provenance.
 
 Quality and execution mode
 --------------------------
@@ -190,3 +278,8 @@ source-file SHA-256. For each covered clock, conversion is
 Spectrometer and DCB clocks have separate anchors. ADC hardware timestamps
 remain independent and unmapped in format 1. Missing coverage leaves a product
 on raw time; it never borrows another clock's anchor.
+
+Raw FLASH CLI processing always requires ``--landing-time-file``. An extracted
+session may instead reuse a verified embedded clock-reference set. The CLI has
+no loose epoch, scale, or offset flags: ``assume_scale`` alone never authorizes
+absolute time.

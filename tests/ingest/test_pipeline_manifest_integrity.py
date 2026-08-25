@@ -861,7 +861,13 @@ def test_flash_manifests_are_final_once_portable_and_digest_linked(
         destination.mkdir(parents=True)
         return destination
 
-    def read_session(path, *, issue_collector):
+    def read_session(
+        path,
+        *,
+        strict=False,
+        schema_variant=None,
+        issue_collector,
+    ):
         return concrete_products()
 
     monkeypatch.setattr(pipeline, "_parse_flash_loaded", parse_flash)

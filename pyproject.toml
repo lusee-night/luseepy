@@ -26,6 +26,10 @@ dependencies = [
     "croissant-sim @ git+https://github.com/christianhbye/croissant.git@v5.3.0.dev1",
     "pytest>=9.0.2",
 ]
+
+[project.scripts]
+lusee-ingest = "lusee.ingest.cli:main"
+
 [project.optional-dependencies]
 cuda12 = [
     "jax[cuda12]; sys_platform == 'linux'",
