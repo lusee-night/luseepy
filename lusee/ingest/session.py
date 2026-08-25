@@ -12,7 +12,13 @@ session" format).
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import logging
+import os
+import shutil
+import sys
+import tempfile
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -221,23 +227,91 @@ def packet_filename(index: int, appid: int, *, width: int = FILENAME_PACKET_INDE
     return f"{index:0{width}d}_{appid:0{FILENAME_APID_HEX_WIDTH}x}.bin"
 
 
+def _rename_noreplace(source: Path, target: Path) -> None:
+    """Atomically rename one directory without replacing an existing target."""
+    if sys.platform == "darwin":
+        libc = ctypes.CDLL(None, use_errno=True)
+        renamex_np = libc.renamex_np
+        renamex_np.argtypes = (
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        renamex_np.restype = ctypes.c_int
+        result = renamex_np(os.fsencode(source), os.fsencode(target), 0x4)
+    elif sys.platform.startswith("linux"):
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = getattr(libc, "renameat2", None)
+        if renameat2 is None:
+            raise OSError(
+                errno.ENOTSUP,
+                "atomic no-replace directory installation is unavailable",
+                target,
+            )
+        renameat2.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        renameat2.restype = ctypes.c_int
+        result = renameat2(
+            -100,
+            os.fsencode(source),
+            -100,
+            os.fsencode(target),
+            0x1,
+        )
+    elif os.name == "nt":
+        os.rename(source, target)
+        return
+    else:
+        raise OSError(
+            errno.ENOTSUP,
+            "atomic no-replace directory installation is unavailable",
+            target,
+        )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), target)
+
+
 def write_uncrater_session(session: Session, dest_dir: Path | str) -> Path:
     """Write a Session to disk in uncrater session format.
 
     The directory layout produced is "Layout B" (cdi_output/ subdirectory)
-    -- ``dest_dir/cdi_output/NNNNN_XXXX.bin``. ``dest_dir`` is created if
-    it does not exist. No telemetry sidecar is written.
+    -- ``dest_dir/cdi_output/NNNNN_XXXX.bin``. The complete tree is first
+    written to a sibling staging directory, then atomically installed.
+    An existing ``dest_dir`` is refused and left untouched. No telemetry
+    sidecar is written.
 
     Returns the path of the cdi_output/ subdirectory.
     """
     dest = Path(dest_dir)
-    cdi = dest / "cdi_output"
-    cdi.mkdir(parents=True, exist_ok=True)
-
-    width = _index_width(len(session.packets))
-    for i, p in enumerate(session.packets):
-        fn = cdi / packet_filename(i, p.appid, width=width)
-        with fn.open("wb") as fh:
-            fh.write(p.blob)
-    log.info("wrote %d packets to %s", len(session.packets), cdi)
-    return cdi
+    if dest.exists() or dest.is_symlink():
+        raise FileExistsError(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(tempfile.mkdtemp(
+        prefix=f".{dest.name}.",
+        suffix=".tmp",
+        dir=dest.parent,
+    ))
+    try:
+        staging = staging_root / dest.name
+        staging.mkdir()
+        cdi = staging / "cdi_output"
+        cdi.mkdir()
+        width = _index_width(len(session.packets))
+        for i, p in enumerate(session.packets):
+            fn = cdi / packet_filename(i, p.appid, width=width)
+            with fn.open("wb") as fh:
+                fh.write(p.blob)
+        if dest.exists() or dest.is_symlink():
+            raise FileExistsError(dest)
+        _rename_noreplace(staging, dest)
+    finally:
+        shutil.rmtree(staging_root, ignore_errors=True)
+    installed_cdi = dest / "cdi_output"
+    log.info("wrote %d packets to %s", len(session.packets), installed_cdi)
+    return installed_cdi
