@@ -794,6 +794,12 @@ def test_real_empty_collection_matches_pinned_decoder(tmp_path):
 
     products = read_uncrater_session(tmp_path, strict=False)
     assert products.decode_provenance.unavailable_reason is None
+    assert products.packet_map_status == "unavailable"
+    assert products.packet_map_format_version is None
+    assert (
+        products.raw_flash_provenance_unavailable_reason
+        == "packet_map_missing_legacy_session"
+    )
     assert products.decode_provenance.canonical_report()["packet_count"] == 0
     assert products.validated_counts.input_packets == 0
     assert products.validated_counts.valid_packets == 0

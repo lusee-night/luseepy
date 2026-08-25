@@ -177,7 +177,8 @@ def assign_identities(
     returned list.
 
     With ``sort=True`` (default), the returned list is sorted by
-    ``(unique_packet_id, seq)`` -- the canonical chronological order.
+    ``(unique_packet_id, seq)`` using the existing deterministic heuristic.
+    This is not a canonical or global chronological order.
     """
     if typed_uid_extractor is None:
         typed_uid_extractor = _uncrater_typed_uid_extractor

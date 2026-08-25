@@ -33,6 +33,13 @@ from .constants import (
     MISSION_TIME_FRACT_DIVISOR,
     MISSION_TIME_FRACT_SHIFT,
 )
+from .packet_map import (
+    PACKET_MAP_FILENAME,
+    PacketMapError,
+    build_packet_map,
+    read_packet_map,
+    write_packet_map,
+)
 from .reassembly import LogicalPacket
 from .uncrater_adapter import load_uncrater, read_packet
 
@@ -281,16 +288,28 @@ def write_uncrater_session(session: Session, dest_dir: Path | str) -> Path:
     """Write a Session to disk in uncrater session format.
 
     The directory layout produced is "Layout B" (cdi_output/ subdirectory)
-    -- ``dest_dir/cdi_output/NNNNN_XXXX.bin``. The complete tree is first
-    written to a sibling staging directory, then atomically installed.
-    An existing ``dest_dir`` is refused and left untouched. No telemetry
-    sidecar is written.
+    -- ``dest_dir/cdi_output/NNNNN_XXXX.bin`` plus a versioned
+    ``dest_dir/packet_map.json``. The complete tree is first written to a
+    sibling staging directory, then atomically installed. An existing
+    ``dest_dir`` is refused and left untouched. No telemetry sidecar is
+    written.
 
     Returns the path of the cdi_output/ subdirectory.
     """
     dest = Path(dest_dir)
     if dest.exists() or dest.is_symlink():
         raise FileExistsError(dest)
+    width = _index_width(len(session.packets))
+    filenames = [
+        packet_filename(index, packet.appid, width=width)
+        for index, packet in enumerate(session.packets)
+    ]
+    normalize_appid = load_uncrater().normalize_dcb_appid
+    packet_map = build_packet_map(
+        session.packets,
+        filenames,
+        normalize_appid=normalize_appid,
+    )
     dest.parent.mkdir(parents=True, exist_ok=True)
     staging_root = Path(tempfile.mkdtemp(
         prefix=f".{dest.name}.",
@@ -302,11 +321,20 @@ def write_uncrater_session(session: Session, dest_dir: Path | str) -> Path:
         staging.mkdir()
         cdi = staging / "cdi_output"
         cdi.mkdir()
-        width = _index_width(len(session.packets))
-        for i, p in enumerate(session.packets):
-            fn = cdi / packet_filename(i, p.appid, width=width)
+        for p, filename in zip(session.packets, filenames):
+            fn = cdi / filename
             with fn.open("wb") as fh:
                 fh.write(p.blob)
+        write_packet_map(packet_map, staging / PACKET_MAP_FILENAME)
+        installed_map = read_packet_map(
+            staging,
+            cdi,
+            normalize_appid=normalize_appid,
+        )
+        if installed_map != packet_map:
+            raise PacketMapError(
+                "staged packet map disagrees with retained packet provenance"
+            )
         if dest.exists() or dest.is_symlink():
             raise FileExistsError(dest)
         _rename_noreplace(staging, dest)

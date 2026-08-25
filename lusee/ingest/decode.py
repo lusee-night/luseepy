@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
@@ -31,6 +31,12 @@ from .issues import (
     IssueAction,
     IssueCollector,
     IssueSeverity,
+)
+from .packet_map import (
+    PACKET_MAP_FORMAT_VERSION,
+    PacketMap,
+    PacketMapError,
+    read_packet_map,
 )
 from .products import (
     CalibratorDataSample,
@@ -287,6 +293,9 @@ class Products:
     decode_provenance: DecodeProvenance = field(
         default_factory=DecodeProvenance.unavailable
     )
+    packet_map_status: str = "unavailable"
+    packet_map_format_version: int | None = None
+    raw_flash_provenance_unavailable_reason: str | None = "packet_map_not_loaded"
     quality_status: DataQuality | None = None
     validated_counts: ValidatedCounts = field(default_factory=ValidatedCounts)
     issues: tuple[IngestIssue, ...] = ()
@@ -294,6 +303,25 @@ class Products:
     def __post_init__(self) -> None:
         if not isinstance(self.decode_provenance, DecodeProvenance):
             raise TypeError("decode_provenance must be a DecodeProvenance record")
+        if self.packet_map_status not in ("verified", "unavailable"):
+            raise ValueError("packet_map_status must be verified or unavailable")
+        if self.packet_map_status == "verified":
+            if self.packet_map_format_version != PACKET_MAP_FORMAT_VERSION:
+                raise ValueError("verified packet map has the wrong format version")
+            if self.raw_flash_provenance_unavailable_reason is not None:
+                raise ValueError(
+                    "verified packet map cannot have an unavailable reason"
+                )
+        else:
+            if self.packet_map_format_version is not None:
+                raise ValueError("unavailable packet map cannot have a format version")
+            if not isinstance(
+                self.raw_flash_provenance_unavailable_reason,
+                str,
+            ) or not (
+                self.raw_flash_provenance_unavailable_reason
+            ):
+                raise ValueError("unavailable packet map requires a reason")
         if self.quality_status is not None:
             self.quality_status = DataQuality(self.quality_status)
         if not isinstance(self.validated_counts, ValidatedCounts):
@@ -3375,6 +3403,85 @@ def _adapt_calibrator_debug_group(
 # Top-level decoder
 # ---------------------------------------------------------------------------
 
+_PRODUCT_LISTS_WITH_PROVENANCE = (
+    "spectra",
+    "tr_spectra",
+    "zoom_spectra",
+    "grimm_spectra",
+    "waveforms",
+    "housekeeping",
+    "cal_data",
+    "calibrator_metadata",
+    "calibrator_data",
+    "calibrator_raw_pfb",
+    "calibrator_debug",
+)
+
+
+def _enrich_products_from_packet_map(
+    products: Products,
+    packet_map: PacketMap,
+) -> None:
+    """Attach verified extracted-file identity without reconstructing frames."""
+    lookup = packet_map.by_output_index
+    for list_name in _PRODUCT_LISTS_WITH_PROVENANCE:
+        rows = getattr(products, list_name)
+        for row_index, row in enumerate(rows):
+            provenance = getattr(row, "provenance", None)
+            if not isinstance(provenance, ProductProvenance):
+                continue
+            if not provenance.source_packets:
+                continue
+            enriched_packets = []
+            for source in provenance.source_packets:
+                if source.packet_index is None:
+                    raise PacketMapError(
+                        "decoded source packet lacks the packet-map output index"
+                    )
+                entry = lookup.get(source.packet_index)
+                if entry is None:
+                    raise PacketMapError(
+                        "decoded source packet is absent from packet_map.json"
+                    )
+                if source.original_appid != entry.original_appid:
+                    raise PacketMapError(
+                        "decoded source packet original AppID disagrees with packet map"
+                    )
+                if entry.unique_packet_id != provenance.uid:
+                    raise PacketMapError(
+                        "decoded product UID disagrees with packet map"
+                    )
+                if (
+                    source.normalized_appid is not None
+                    and source.normalized_appid != entry.normalized_appid
+                ):
+                    raise PacketMapError(
+                        "decoded source packet normalized AppID disagrees "
+                        "with packet map"
+                    )
+                if source.filename not in (None, entry.output_filename):
+                    raise PacketMapError(
+                        "decoded source packet filename disagrees with packet map"
+                    )
+                if source.bank not in (None, entry.source_bank):
+                    raise PacketMapError(
+                        "decoded source packet bank disagrees with packet map"
+                    )
+                enriched_packets.append(replace(
+                    source,
+                    filename=entry.output_filename,
+                    bank=entry.source_bank,
+                    original_appid=entry.original_appid,
+                    normalized_appid=entry.normalized_appid,
+                ))
+            rows[row_index] = replace(
+                row,
+                provenance=replace(
+                    provenance,
+                    source_packets=tuple(enriched_packets),
+                ),
+            )
+
 def read_uncrater_session(
     session_dir: Path | str,
     *,
@@ -3394,6 +3501,12 @@ def read_uncrater_session(
     if not cdi.is_dir():
         cdi = session_dir   # Layout A: bare directory of *.bin files
 
+    decoder = load_uncrater()
+    packet_map = read_packet_map(
+        session_dir,
+        cdi,
+        normalize_appid=decoder.normalize_dcb_appid,
+    )
     coll = make_collection(
         cdi,
         strict=strict,
@@ -3411,6 +3524,13 @@ def read_uncrater_session(
     decode_provenance = collection_provenance(coll, strict=strict)
     products = Products(
         decode_provenance=decode_provenance,
+        packet_map_status="verified" if packet_map is not None else "unavailable",
+        packet_map_format_version=(
+            PACKET_MAP_FORMAT_VERSION if packet_map is not None else None
+        ),
+        raw_flash_provenance_unavailable_reason=(
+            None if packet_map is not None else "packet_map_missing_legacy_session"
+        ),
     )
     imported_issues = import_decode_issues(
         coll,
@@ -3419,7 +3539,6 @@ def read_uncrater_session(
     )
 
     # ---- Hello / session-invariants ----
-    decoder = load_uncrater()
     for pkt in coll.cont:
         if not isinstance(pkt, decoder.Packet_Hello):
             continue
@@ -3737,6 +3856,9 @@ def read_uncrater_session(
         )
         if sample is not None:
             products.grimm_spectra.append(sample)
+
+    if packet_map is not None:
+        _enrich_products_from_packet_map(products, packet_map)
 
     log.info(
         (

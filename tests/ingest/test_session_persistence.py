@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import stat
 from pathlib import Path
@@ -7,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from lusee.ingest import session as session_mod
+from lusee.ingest.packet_map import PacketMapError
 from lusee.ingest.reassembly import LogicalPacket
 from lusee.ingest.session import Session, write_uncrater_session
 
@@ -18,6 +21,8 @@ def make_packet(appid: int, blob: bytes, index: int) -> LogicalPacket:
         seq=index,
         blob=blob,
         single_packet=True,
+        unique_packet_id=100 + index,
+        bank="b05",
     )
 
 
@@ -55,6 +60,7 @@ def test_write_uncrater_session_atomically_installs_complete_tree(
             "00001_020f.bin",
             "00002_07ff.bin",
         ]
+        assert (source / "packet_map.json").is_file()
         observed.append((source, target))
         real_rename(source, target)
 
@@ -67,8 +73,49 @@ def test_write_uncrater_session_atomically_installs_complete_tree(
     assert (cdi / "00000_0001.bin").read_bytes() == b"first"
     assert (cdi / "00001_020f.bin").read_bytes() == b"second"
     assert (cdi / "00002_07ff.bin").read_bytes() == b"third"
-    assert list(dest.iterdir()) == [cdi]
+    assert sorted(path.name for path in dest.iterdir()) == [
+        "cdi_output",
+        "packet_map.json",
+    ]
     assert staging_paths(dest) == []
+
+
+def test_packet_map_records_only_retained_packet_provenance(tmp_path):
+    session = make_session()
+    session.packets[0].single_packet = False
+    cdi = write_uncrater_session(session, tmp_path / "session")
+
+    document = json.loads((cdi.parent / "packet_map.json").read_text("ascii"))
+
+    assert document["format_version"] == 1
+    assert document["reassembly_profile"] == "legacy"
+    assert document["packet_order"] == {
+        "chronological": False,
+        "key": ["unique_packet_id", "last_sequence_count"],
+        "kind": "uid_sequence_heuristic",
+    }
+    assert set(document["provenance_limits"]) == {
+        "contributing_frame_byte_offsets",
+        "contributing_frame_flags",
+        "contributing_frame_ordinals",
+        "packet_issue_references",
+        "pre_sort_packet_ordinal",
+        "uid_source",
+    }
+    first = document["packets"][0]
+    assert first == {
+        "content_sha256": hashlib.sha256(b"first").hexdigest(),
+        "last_sequence_count": 0,
+        "normalized_appid": 0x001,
+        "original_appid": 0x001,
+        "output_filename": "00000_0001.bin",
+        "output_index": 0,
+        "source_bank": "b05",
+        "start_sequence_count": 0,
+        "terminal_groupflag": 1,
+        "unavailable_fields": {},
+        "unique_packet_id": 100,
+    }
 
 
 def test_write_uncrater_session_refuses_and_preserves_existing_destination(
@@ -101,6 +148,37 @@ def test_write_uncrater_session_cleans_staging_after_install_failure(
     monkeypatch.setattr(session_mod, "_rename_noreplace", fail_rename)
 
     with pytest.raises(OSError, match="injected install failure"):
+        write_uncrater_session(make_session(), dest)
+
+    assert not dest.exists()
+    assert staging_paths(dest) == []
+
+
+@pytest.mark.parametrize("damage", ["invalid", "semantic"])
+def test_write_uncrater_session_validates_map_before_install(
+    tmp_path,
+    monkeypatch,
+    damage,
+):
+    dest = tmp_path / "session"
+    real_write = session_mod.write_packet_map
+
+    def write_corrupt_map(packet_map, path):
+        result = real_write(packet_map, path)
+        if damage == "invalid":
+            result.write_text("{}", encoding="ascii")
+        else:
+            document = json.loads(result.read_text("ascii"))
+            document["packets"][0]["source_bank"] = "b06"
+            result.write_text(
+                json.dumps(document, indent=2, sort_keys=True) + "\n",
+                encoding="ascii",
+            )
+        return result
+
+    monkeypatch.setattr(session_mod, "write_packet_map", write_corrupt_map)
+
+    with pytest.raises(PacketMapError):
         write_uncrater_session(make_session(), dest)
 
     assert not dest.exists()
@@ -150,3 +228,6 @@ def test_write_uncrater_session_filenames_are_deterministic(tmp_path):
         "00001_020f.bin",
         "00002_07ff.bin",
     ]
+    assert (first.parent / "packet_map.json").read_bytes() == (
+        second.parent / "packet_map.json"
+    ).read_bytes()
