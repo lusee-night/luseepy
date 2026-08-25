@@ -15,6 +15,7 @@ from lusee.ingest.clock_reference import (
     ClockReferenceUnavailableError,
     ClockSource,
     UnsupportedClockSourceError,
+    clock_reference_set_from_record,
     load_clock_reference_set,
 )
 
@@ -107,6 +108,46 @@ def test_semantic_canonicalization_is_independent_of_source_bytes(tmp_path: Path
         first.source = "changed"
     with pytest.raises(FrozenInstanceError):
         first.clocks[0].clock_reference_raw_seconds = 0.0
+
+
+def test_embedded_record_round_trips_exactly(tmp_path: Path):
+    path = tmp_path / "landing.json"
+    write_payload(path, clock_payload())
+    references = load_clock_reference_set(path)
+
+    restored = clock_reference_set_from_record(references.as_record())
+
+    assert restored == references
+    assert restored.as_record() == references.as_record()
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda record: record.pop("source_sha256"), "missing required"),
+        (lambda record: record.update(extra=True), "unknown field"),
+        (lambda record: record.update(source_sha256="invalid"), "source_sha256"),
+        (
+            lambda record: record["clocks"]["spectrometer"].update(
+                clock_reference_raw_seconds=1234
+            ),
+            "not normalized",
+        ),
+    ],
+)
+def test_rejects_malformed_embedded_record(tmp_path: Path, mutate, message: str):
+    path = tmp_path / "landing.json"
+    write_payload(path, clock_payload())
+    record = load_clock_reference_set(path).as_record()
+    mutate(record)
+
+    with pytest.raises(ClockReferenceFormatError, match=message):
+        clock_reference_set_from_record(record)
+
+
+def test_embedded_record_requires_an_object():
+    with pytest.raises(ClockReferenceFormatError, match="expected an object"):
+        clock_reference_set_from_record([])
 
 
 def test_negative_zero_anchor_is_canonicalized(tmp_path: Path):

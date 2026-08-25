@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import lusee.ingest.decode as decode
 from lusee.ingest.decode import (
     _extract_spectrum_metadata,
     read_uncrater_session,
@@ -18,8 +19,13 @@ from lusee.ingest.issues import (
     IssuePolicy,
 )
 from lusee.ingest.products import (
+    DataQuality,
     SpectrumSample,
     TRSpectrumSample,
+)
+from lusee.ingest.write_request import (
+    FamilyCoverage,
+    family_statuses_for_products,
 )
 
 uncrater = pytest.importorskip("uncrater")
@@ -337,6 +343,82 @@ def test_fatal_tr_candidate_does_not_suppress_valid_sibling(tmp_path):
         and issue.packet_index == 1
     )
     assert fatal.issue_id in row.provenance.decoder_issue_ids
+
+
+@pytest.mark.parametrize("dropped_family", ("spectra", "tr_spectra"))
+def test_invalid_spectrum_metadata_is_attributed_to_affected_family(
+    tmp_path,
+    monkeypatch,
+    dropped_family,
+):
+    binding = schema_registry.LATEST_BINDING
+    tr_values = np.array([0x8019, 0x8039, 0x8019, 0x8039])
+    if dropped_family == "spectra":
+        dropped_packet = (
+            binding.appids.AppID_SpectraHigh,
+            spectrum_blob(42, np.full(512, 1, dtype="<u4")),
+        )
+        surviving_packet = (
+            binding.appids.AppID_SpectraTRHigh,
+            tr_blob(43, tr_values),
+        )
+        surviving_family = "tr_spectra"
+    else:
+        dropped_packet = (
+            binding.appids.AppID_SpectraTRHigh,
+            tr_blob(42, tr_values),
+        )
+        surviving_packet = (
+            binding.appids.AppID_SpectraHigh,
+            spectrum_blob(43, np.full(512, 1, dtype="<u4")),
+        )
+        surviving_family = "spectra"
+    write_packet(
+        tmp_path,
+        0,
+        binding.appids.AppID_MetaData,
+        metadata_blob(binding, uid=42),
+    )
+    write_packet(tmp_path, 1, *dropped_packet)
+    write_packet(
+        tmp_path,
+        2,
+        binding.appids.AppID_MetaData,
+        metadata_blob(binding, uid=43),
+    )
+    write_packet(tmp_path, 3, *surviving_packet)
+    original = decode._extract_spectrum_metadata
+
+    def extract(meta, *, binding_key):
+        if meta.unique_packet_id == 42:
+            raise ValueError("synthetic normal metadata damage")
+        return original(meta, binding_key=binding_key)
+
+    monkeypatch.setattr(decode, "_extract_spectrum_metadata", extract)
+
+    products = read_uncrater_session(tmp_path)
+
+    assert getattr(products, dropped_family) == []
+    assert len(getattr(products, surviving_family)) == 1
+    issue = next(
+        issue
+        for issue in products.issues
+        if issue.code == "decode_adapter.invalid_spectrum_metadata"
+    )
+    assert products.family_issue_ids[dropped_family] == (issue.issue_id,)
+    assert surviving_family not in products.family_issue_ids
+    assert products.quality_status.value == "partial"
+    statuses = {
+        status.family: status
+        for status in family_statuses_for_products(
+            products,
+            family_issue_ids=products.family_issue_ids,
+        )
+    }
+    assert statuses[dropped_family].coverage is FamilyCoverage.INVALID_OR_DROPPED
+    assert statuses[dropped_family].quality is DataQuality.FAILED
+    assert statuses[surviving_family].coverage is FamilyCoverage.PERSISTED
+    assert statuses[surviving_family].quality is DataQuality.CLEAN
 
 
 def test_strict_issue_collector_raises_on_adapter_duplicate(tmp_path):

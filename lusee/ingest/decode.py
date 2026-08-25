@@ -296,6 +296,7 @@ class Products:
     packet_map_status: str = "unavailable"
     packet_map_format_version: int | None = None
     raw_flash_provenance_unavailable_reason: str | None = "packet_map_not_loaded"
+    family_issue_ids: Dict[str, tuple[str, ...]] = field(default_factory=dict)
     quality_status: DataQuality | None = None
     validated_counts: ValidatedCounts = field(default_factory=ValidatedCounts)
     issues: tuple[IngestIssue, ...] = ()
@@ -322,6 +323,32 @@ class Products:
                 self.raw_flash_provenance_unavailable_reason
             ):
                 raise ValueError("unavailable packet map requires a reason")
+        known_families = {
+            "spectra",
+            "tr_spectra",
+            "zoom_spectra",
+            "waveforms",
+            "housekeeping",
+            "grimm_spectra",
+            "calibrator_metadata",
+            "calibrator_data",
+            "calibrator_raw_pfb",
+            "calibrator_debug",
+        }
+        normalized_family_issues = {}
+        for family, issue_ids in self.family_issue_ids.items():
+            if family not in known_families:
+                raise ValueError(f"unknown product family {family!r}")
+            issue_ids = tuple(issue_ids)
+            if any(
+                not isinstance(issue_id, str) or not issue_id
+                for issue_id in issue_ids
+            ):
+                raise ValueError("family issue IDs must be nonempty strings")
+            if len(set(issue_ids)) != len(issue_ids):
+                raise ValueError("family issue IDs must not contain duplicates")
+            normalized_family_issues[family] = issue_ids
+        self.family_issue_ids = normalized_family_issues
         if self.quality_status is not None:
             self.quality_status = DataQuality(self.quality_status)
         if not isinstance(self.validated_counts, ValidatedCounts):
@@ -3416,6 +3443,48 @@ _PRODUCT_LISTS_WITH_PROVENANCE = (
     "calibrator_raw_pfb",
     "calibrator_debug",
 )
+_DROPPED_ADAPTER_ISSUE_FAMILY = {
+    "decode_adapter.invalid_normal_product": "spectra",
+    "decode_adapter.duplicate_normal_product": "spectra",
+    "decode_adapter.invalid_tr_geometry": "tr_spectra",
+    "decode_adapter.invalid_tr_product": "tr_spectra",
+    "decode_adapter.duplicate_tr_product": "tr_spectra",
+    "decode_adapter.invalid_zoom": "zoom_spectra",
+    "decode_adapter.invalid_waveform_metadata": "waveforms",
+    "decode_adapter.invalid_waveform": "waveforms",
+    "decode_adapter.invalid_grimm": "grimm_spectra",
+    "decode_adapter.invalid_housekeeping": "housekeeping",
+    "decode_adapter.invalid_calibrator_metadata": "calibrator_metadata",
+    "decode_adapter.invalid_calibrator_data": "calibrator_data",
+    "decode_adapter.invalid_calibrator_raw_pfb": "calibrator_raw_pfb",
+    "decode_adapter.invalid_calibrator_debug": "calibrator_debug",
+}
+
+
+def _dropped_family_issue_ids(
+    issues: Sequence[IngestIssue],
+    *,
+    contextual_issue_ids: Mapping[str, Sequence[str]] | None = None,
+) -> Dict[str, tuple[str, ...]]:
+    by_family: dict[str, set[str]] = defaultdict(set)
+    for issue in issues:
+        family = _DROPPED_ADAPTER_ISSUE_FAMILY.get(issue.code)
+        if family is not None:
+            by_family[family].add(issue.issue_id)
+    for family, issue_ids in (contextual_issue_ids or {}).items():
+        by_family[family].update(issue_ids)
+    known_issue_ids = {issue.issue_id for issue in issues}
+    referenced_issue_ids = set().union(*by_family.values()) if by_family else set()
+    if not referenced_issue_ids <= known_issue_ids:
+        raise ValueError("family issue attribution references an unknown issue")
+    return {
+        family: tuple(
+            issue.issue_id
+            for issue in issues
+            if issue.issue_id in issue_ids
+        )
+        for family, issue_ids in sorted(by_family.items())
+    }
 
 
 def _enrich_products_from_packet_map(
@@ -3537,6 +3606,35 @@ def read_uncrater_session(
         issue_collector,
         selected_binding,
     )
+    contextual_family_issue_ids: dict[str, list[str]] = defaultdict(list)
+
+    def record_packet_issues(family: str, packets: Sequence[object]) -> None:
+        issue_ids = _issue_ids_for_packets(
+            packets,
+            imported_issues.issue_ids_by_packet_index,
+        )
+        if issue_ids:
+            contextual_family_issue_ids[family].extend(issue_ids)
+
+    fatal_packet_families = (
+        (decoder.Packet_Spectrum, "spectra"),
+        (decoder.Packet_TR_Spectrum, "tr_spectra"),
+        (decoder.Packet_Cal_ZoomSpectra, "zoom_spectra"),
+        (decoder.Packet_Waveform_Meta, "waveforms"),
+        (decoder.Packet_Waveform, "waveforms"),
+        (decoder.Packet_Housekeep, "housekeeping"),
+        (decoder.Packet_Grimm, "grimm_spectra"),
+        (decoder.Packet_Cal_Metadata, "calibrator_metadata"),
+        (decoder.Packet_Cal_Data, "calibrator_data"),
+        (decoder.Packet_Cal_RawPFB, "calibrator_raw_pfb"),
+        (decoder.Packet_Cal_Debug, "calibrator_debug"),
+    )
+    for packet in _required_public_attribute(coll, "cont"):
+        if not _packet_has_fatal_issue(packet):
+            continue
+        for packet_class, family in fatal_packet_families:
+            if isinstance(packet, packet_class):
+                record_packet_issues(family, (packet,))
 
     # ---- Hello / session-invariants ----
     for pkt in coll.cont:
@@ -3656,7 +3754,7 @@ def read_uncrater_session(
                 and 0 <= int(uid_value) <= 0xFFFFFFFF
                 else None
             )
-            _record_adapter_issue(
+            issue_id = _record_adapter_issue(
                 issue_collector,
                 code="decode_adapter.invalid_spectrum_metadata",
                 message=f"spectrum metadata was dropped: {exc}",
@@ -3664,6 +3762,10 @@ def read_uncrater_session(
                 uid=uid,
                 details={"error": str(exc)},
             )
+            if normal_candidates.get(id(meta)):
+                contextual_family_issue_ids["spectra"].append(issue_id)
+            if tr_candidates.get(id(meta)):
+                contextual_family_issue_ids["tr_spectra"].append(issue_id)
             normalized_metadata[id(meta)] = None
 
     for meta in normal_metadata:
@@ -3879,6 +3981,10 @@ def read_uncrater_session(
         len(products.calibrator_debug),
     )
     products.issues = issue_collector.since(issue_marker)
+    products.family_issue_ids = _dropped_family_issue_ids(
+        products.issues,
+        contextual_issue_ids=contextual_family_issue_ids,
+    )
     product_rows = [
         (name, len(rows))
         for name, rows in (

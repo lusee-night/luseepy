@@ -22,12 +22,18 @@ import logging
 import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 from . import telemetry as telemetry_mod
 from .ccsds import parse_bank_file
+from .clock_reference import (
+    ClockReferenceSet,
+    ClockSource,
+    clock_reference_set_from_record,
+    load_clock_reference_set,
+)
 from .collation import (
     assign_identities,
     detect_sw_version,
@@ -38,8 +44,6 @@ from .constants import (
     DEFAULT_LUN_HEIGHT_M,
     DEFAULT_LUN_LAT_DEG,
     DEFAULT_LUN_LONG_DEG,
-    DEFAULT_MJD_EPOCH_OFFSET_DAYS,
-    DEFAULT_RAW_TIME_SUBTRACT_SECONDS,
     DEFAULT_SESSION_NAME_FMT,
     SCIENCE_BANKS,
     SESSION_NAME_NO_TIME_FMT,
@@ -55,14 +59,23 @@ from .session import (
     split_sessions,
     write_uncrater_session,
 )
+from .write_request import (
+    FAMILY_TYPES,
+    InterpolationPolicy,
+    LunarLocation,
+    RunProvenance,
+    WriteRequest,
+    family_statuses_for_products,
+)
 
 log = logging.getLogger(__name__)
 
 # Schema version of session.json -- bump when the manifest layout changes.
-MANIFEST_SCHEMA_VERSION = 2
+MANIFEST_SCHEMA_VERSION = 3
 
 # Filename of the in-session manifest written into each session directory.
 IN_SESSION_MANIFEST_NAME = "session.json"
+LEGACY_TELEMETRY_SIDECAR_NAME = "DCB_telemetry.json"
 
 
 def _fingerprint_flash(flash_dir: Path) -> Dict[str, Dict[str, float]]:
@@ -165,23 +178,37 @@ class SessionResult:
 
     processed_at_utc: str = ""
     pipeline_version: str = ""
+    clock_reference: Optional[Dict[str, object]] = None
+    packet_map_status: str = "unavailable"
+    packet_map_format_version: Optional[int] = None
+    raw_flash_provenance_unavailable_reason: Optional[str] = None
+    overwrite: bool = False
+    telemetry_input_sources: List[str] = field(default_factory=list)
+    telemetry_decoder_status: str = "not_needed"
 
 
 # ---------------------------------------------------------------------------
 # Naming
 # ---------------------------------------------------------------------------
 
-def default_session_name(ordinal: int, start_raw_seconds: Optional[float]) -> str:
-    """Default ``session_NNN_YYYYMMDD_HHMMSS`` (UTC) or ``session_NNN``."""
-    if start_raw_seconds is None or start_raw_seconds <= 0:
+def default_session_name(
+    ordinal: int,
+    start_raw_seconds: Optional[float],
+    clock_reference_set: ClockReferenceSet | None = None,
+) -> str:
+    """Default UTC session name when its spectrometer mapping is known."""
+    if start_raw_seconds is None or clock_reference_set is None:
         return SESSION_NAME_NO_TIME_FMT.format(ord=ordinal)
-    ts = _dt.datetime.fromtimestamp(start_raw_seconds, tz=_dt.timezone.utc).strftime(
-        SESSION_TIMESTAMP_FMT
+    ts = clock_reference_set.to_time(
+        start_raw_seconds,
+        clock_source=ClockSource.SPECTROMETER,
+    ).utc.strftime(
+        SESSION_TIMESTAMP_FMT,
     )
     return DEFAULT_SESSION_NAME_FMT.format(ord=ordinal, ts=ts)
 
 
-SessionNamer = Callable[[int, Optional[float]], str]
+SessionNamer = Callable[[int, Optional[float], ClockReferenceSet], str]
 
 
 # ---------------------------------------------------------------------------
@@ -192,9 +219,39 @@ def _bank_path(flash_dir: Path, bank: str) -> Path:
     return flash_dir / bank / BANK_FILENAME
 
 
+def _input_path_present(path: Path) -> bool:
+    return path.is_symlink() or path.exists()
+
+
+def _recorded_telemetry_sources(
+    manifest: Dict[str, Any] | None,
+) -> set[str]:
+    if manifest is None:
+        return set()
+    value = manifest.get("telemetry_input_sources", [])
+    if not isinstance(value, list) or any(
+        source not in ("b01", "legacy_sidecar") for source in value
+    ):
+        raise ValueError("session manifest has invalid telemetry_input_sources")
+    sources = set(value)
+    fingerprint = manifest.get("flash_source_fingerprint", {})
+    if isinstance(fingerprint, dict) and (
+        f"{TELEMETRY_BANK}/{BANK_FILENAME}" in fingerprint
+    ):
+        sources.add("b01")
+    return sources
+
+
+def _load_landing_reference(path: Path | str) -> ClockReferenceSet:
+    reference_set = load_clock_reference_set(path)
+    reference_set.require_reference(ClockSource.SPECTROMETER)
+    return reference_set
+
+
 def parse_flash(
     flash_dir: Path | str,
     *,
+    landing_time_file: Path | str,
     issue_collector: IssueCollector | None = None,
 ) -> Tuple[List[Session], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
     """Parse a FLASH_TLMFS directory through Stage 4.
@@ -205,6 +262,19 @@ def parse_flash(
     slices are also already stored on each Session via
     ``assign_telemetry_to_sessions``.
     """
+    _load_landing_reference(landing_time_file)
+    return _parse_flash_loaded(
+        Path(flash_dir),
+        issue_collector=issue_collector,
+    )
+
+
+def _parse_flash_loaded(
+    flash_dir: Path,
+    *,
+    issue_collector: IssueCollector | None,
+) -> Tuple[List[Session], Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+    """Parse a flash after the public entry point validates mission time."""
     flash_dir = Path(flash_dir)
     if issue_collector is None:
         issue_collector = IssueCollector()
@@ -274,12 +344,18 @@ def _now_utc_iso() -> str:
     return _dt.datetime.now(tz=_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _start_utc_iso(raw_seconds: Optional[float]) -> Optional[str]:
-    if raw_seconds is None or raw_seconds <= 0:
+def _start_utc_iso(
+    raw_seconds: Optional[float],
+    clock_reference_set: ClockReferenceSet | None,
+) -> Optional[str]:
+    if raw_seconds is None or clock_reference_set is None:
         return None
-    return _dt.datetime.fromtimestamp(raw_seconds, tz=_dt.timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    utc = clock_reference_set.to_time(
+        raw_seconds,
+        clock_source=ClockSource.SPECTROMETER,
+    ).utc
+    utc.precision = 9
+    return f"{utc.isot}Z"
 
 
 def _pipeline_version_string() -> str:
@@ -327,22 +403,23 @@ class _WarningCapture:
 def _process_one_session(
     *,
     session_dir: Path,
-    name: str,
+    name: str | None,
     ordinal: int,
     h5_dir: Optional[Path],
     plots_dir: Optional[Path],
     manifest_dir: Optional[Path],
     issue_collector: IssueCollector,
+    clock_reference_set: ClockReferenceSet | None = None,
     fits_dir: Optional[Path] = None,
     fpga_arrays: Optional[Dict[str, np.ndarray]] = None,
     encoder_arrays: Optional[Dict[str, np.ndarray]] = None,
     has_legacy_sidecar: bool = False,
+    telemetry_input_sources: Sequence[str] = (),
+    telemetry_decoder_status: str = "not_needed",
     source_path: Optional[Path] = None,
     source_kind: str = "session",
-    interpolate_telemetry: bool = False,
-    interpolation_mode: str = "normalized",
     plot_names: Optional[Sequence[str]] = None,
-    constants_kwargs: Optional[Dict[str, object]] = None,
+    overwrite: bool = False,
     decoder_strict: bool = False,
     diagnostic_override: bool = False,
     schema_variant: str | None = None,
@@ -356,16 +433,34 @@ def _process_one_session(
             diagnostic_override=diagnostic_override,
             schema_variant=schema_variant,
         )
-    constants_kwargs = dict(constants_kwargs or {})
 
     has_telemetry = bool(fpga_arrays) or bool(encoder_arrays)
+    telemetry_input_sources = tuple(sorted(set(telemetry_input_sources)))
+    if any(
+        source not in ("b01", "legacy_sidecar")
+        for source in telemetry_input_sources
+    ):
+        raise ValueError("unknown telemetry input source")
+    if telemetry_decoder_status not in ("available", "unavailable", "not_needed"):
+        raise ValueError("invalid telemetry decoder status")
+    if telemetry_input_sources and telemetry_decoder_status == "not_needed":
+        raise ValueError("present telemetry requires an explicit decoder status")
+    name = name or default_session_name(
+        ordinal,
+        products.start_raw_seconds,
+        clock_reference_set,
+    )
+    resolved_source = (source_path or session_dir).resolve()
 
     result = SessionResult(
         session_ordinal=ordinal,
         session_name=name,
-        source_path=str((source_path or session_dir).resolve()),
+        source_path=str(resolved_source),
         source_kind=source_kind,
-        start_time_utc=_start_utc_iso(products.start_raw_seconds),
+        start_time_utc=_start_utc_iso(
+            products.start_raw_seconds,
+            clock_reference_set,
+        ),
         start_unique_packet_id=products.start_unique_packet_id,
         software_version=products.sw_version,
         firmware_version=products.fw_version,
@@ -386,42 +481,86 @@ def _process_one_session(
         session_dir=str(session_dir.resolve()),
         processed_at_utc=_now_utc_iso(),
         pipeline_version=_pipeline_version_string(),
+        clock_reference=(
+            clock_reference_set.as_record()
+            if clock_reference_set is not None
+            else None
+        ),
+        packet_map_status=products.packet_map_status,
+        packet_map_format_version=products.packet_map_format_version,
+        raw_flash_provenance_unavailable_reason=(
+            products.raw_flash_provenance_unavailable_reason
+        ),
+        overwrite=overwrite,
+        telemetry_input_sources=list(telemetry_input_sources),
+        telemetry_decoder_status=telemetry_decoder_status,
     )
 
-    if h5_dir is not None:
+    h5_path = h5_dir / f"{name}.h5" if h5_dir is not None else None
+    fits_path = fits_dir / f"{name}.fits" if fits_dir is not None else None
+    if not overwrite:
+        for destination in (h5_path, fits_path):
+            if destination is not None and destination.exists():
+                raise FileExistsError(destination)
+
+    request = None
+    if h5_path is not None or fits_path is not None:
+        if clock_reference_set is None:
+            raise ValueError(
+                "layout-v4 output requires a verified landing-time reference"
+            )
+        if telemetry_input_sources or has_telemetry or has_legacy_sidecar:
+            raise ValueError(
+                "layout-v4 output cannot omit or persist unreviewed telemetry; "
+                "the reviewed private telemetry boundary is required"
+            )
+        family_issue_ids = {}
+        for family, _ in FAMILY_TYPES:
+            issue_ids = set(products.family_issue_ids.get(family, ()))
+            issue_ids.update(
+                issue_id
+                for row in getattr(products, family)
+                for issue_id in row.provenance.decoder_issue_ids
+            )
+            family_issue_ids[family] = tuple(sorted(issue_ids))
+        request = WriteRequest(
+            products=products,
+            clock_reference_set=clock_reference_set,
+            clock_reference_unavailable_reason=None,
+            location=LunarLocation(
+                latitude_deg=DEFAULT_LUN_LAT_DEG,
+                longitude_deg=DEFAULT_LUN_LONG_DEG,
+                height_m=DEFAULT_LUN_HEIGHT_M,
+            ),
+            run_provenance=RunProvenance(
+                input_identity=None,
+                input_identity_kind=None,
+                input_identity_unavailable_reason=(
+                    "portable_input_identity_not_available"
+                ),
+                source_kind=source_kind,
+                source_path=str(resolved_source),
+                pipeline_version=_pipeline_version_string(),
+            ),
+            issues=products.issues,
+            family_statuses=family_statuses_for_products(
+                products,
+                family_issue_ids=family_issue_ids,
+            ),
+            interpolation_policy=InterpolationPolicy(),
+            overwrite=overwrite,
+        )
+
+    if h5_path is not None:
         from .hdf5_writer import write_hdf5
 
-        h5_dir.mkdir(parents=True, exist_ok=True)
-        h5_path = h5_dir / f"{name}.h5"
-        write_hdf5(
-            products,
-            h5_path,
-            cdi_directory=session_dir,
-            fpga_telemetry=fpga_arrays,
-            encoder_telemetry=encoder_arrays,
-            interpolate_telemetry=interpolate_telemetry,
-            interpolation_mode=interpolation_mode,
-            **constants_kwargs,
-        )
+        write_hdf5(request, h5_path)
         result.h5_path = str(h5_path.resolve())
-    else:
-        h5_path = None
 
-    if fits_dir is not None:
+    if fits_path is not None:
         from .fits_writer import write_fits
 
-        fits_dir.mkdir(parents=True, exist_ok=True)
-        fits_path = fits_dir / f"{name}.fits"
-        write_fits(
-            products,
-            fits_path,
-            cdi_directory=session_dir,
-            fpga_telemetry=fpga_arrays,
-            encoder_telemetry=encoder_arrays,
-            interpolate_telemetry=interpolate_telemetry,
-            interpolation_mode=interpolation_mode,
-            **constants_kwargs,
-        )
+        write_fits(request, fits_path)
         result.fits_path = str(fits_path.resolve())
 
     if plots_dir is not None and h5_path is not None:
@@ -433,10 +572,9 @@ def _process_one_session(
         result.plot_paths = [str(p.resolve()) for p in plot_paths]
 
     if manifest_dir is not None:
-        manifest_dir.mkdir(parents=True, exist_ok=True)
         mpath = manifest_dir / f"{name}.json"
-        write_manifest(result, mpath)
         result.manifest_path = str(mpath.resolve())
+        write_manifest(result, mpath)
 
     return result
 
@@ -462,14 +600,41 @@ def _binding_identity(products: Products) -> tuple[object, ...]:
 # Public: process_session (existing-session mode)
 # ---------------------------------------------------------------------------
 
-def _read_in_session_manifest(session_dir: Path) -> Optional[Dict[str, Any]]:
+def _manifest_object_without_duplicate_keys(
+    pairs: list[tuple[str, Any]],
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"session manifest contains duplicate key {key!r}")
+        result[key] = value
+    return result
+
+
+def _read_in_session_manifest(
+    session_dir: Path,
+    *,
+    strict: bool,
+) -> Optional[Dict[str, Any]]:
     p = session_dir / IN_SESSION_MANIFEST_NAME
-    if not p.is_file():
+    if p.is_symlink() or (p.exists() and not p.is_file()):
+        if strict:
+            raise ValueError("session.json must be a regular file")
+        return None
+    if not p.exists():
         return None
     try:
         with p.open("r", encoding="ascii") as fh:
-            return json.load(fh)
+            value = json.load(
+                fh,
+                object_pairs_hook=_manifest_object_without_duplicate_keys,
+            )
+        if not isinstance(value, dict):
+            raise ValueError("session manifest must be a JSON object")
+        return value
     except Exception as exc:    # noqa: BLE001
+        if strict:
+            raise ValueError(f"cannot read in-session manifest {p}: {exc}") from exc
         warnings.warn(
             f"failed to read in-session manifest {p}: {exc}; ignoring",
             RuntimeWarning,
@@ -525,16 +690,15 @@ def _rederive_telemetry_from_flash(
 def process_session(
     session_dir: Path | str,
     *,
+    landing_time_file: Path | str | None = None,
     h5_dir: Optional[Path | str] = None,
     fits_dir: Optional[Path | str] = None,
     plots_dir: Optional[Path | str] = None,
     manifest_dir: Optional[Path | str] = None,
     name: Optional[str] = None,
     ordinal: int = 0,
-    interpolate_telemetry: bool = False,
-    interpolation_mode: str = "normalized",
     plot_names: Optional[Sequence[str]] = None,
-    constants_kwargs: Optional[Dict[str, object]] = None,
+    overwrite: bool = False,
     flash_root: Optional[Path | str] = None,
     rederive_telemetry: bool = True,
     issue_collector: IssueCollector | None = None,
@@ -564,6 +728,10 @@ def process_session(
     fits_dir = Path(fits_dir) if fits_dir else None
     plots_dir = Path(plots_dir) if plots_dir else None
     manifest_dir = Path(manifest_dir) if manifest_dir else None
+    output_requested = any(
+        path is not None
+        for path in (h5_dir, fits_dir, plots_dir, manifest_dir)
+    )
     if issue_collector is None:
         issue_collector = IssueCollector()
 
@@ -571,13 +739,57 @@ def process_session(
     encoder_arrays: Optional[Dict[str, np.ndarray]] = None
     telemetry_source: Optional[str] = None
 
-    in_session_manifest = _read_in_session_manifest(session_dir)
+    in_session_manifest = _read_in_session_manifest(
+        session_dir,
+        strict=output_requested or landing_time_file is not None,
+    )
+    telemetry_input_sources = _recorded_telemetry_sources(in_session_manifest)
+    public_sidecar = session_dir / LEGACY_TELEMETRY_SIDECAR_NAME
+    if _input_path_present(public_sidecar):
+        telemetry_input_sources.add("legacy_sidecar")
+    embedded_reference = None
+    embedded_record = (in_session_manifest or {}).get("clock_reference")
+    if embedded_record is not None:
+        embedded_reference = clock_reference_set_from_record(embedded_record)
+        embedded_reference.require_reference(ClockSource.SPECTROMETER)
+    elif (
+        output_requested
+        and (in_session_manifest or {}).get("manifest_schema_version") == 3
+    ):
+        raise ValueError("session manifest v3 is missing clock_reference")
+
+    supplied_reference = (
+        _load_landing_reference(landing_time_file)
+        if landing_time_file is not None
+        else None
+    )
+    if (
+        embedded_reference is not None
+        and supplied_reference is not None
+        and embedded_reference != supplied_reference
+    ):
+        raise ValueError(
+            "supplied landing-time file contradicts the embedded clock reference"
+        )
+    clock_reference_set = supplied_reference or embedded_reference
+    if output_requested and clock_reference_set is None:
+        raise ValueError(
+            "operational session output requires landing_time_file or a "
+            "verified embedded clock reference"
+        )
     flash_used: Optional[Path] = None
 
+    manifest_flash = (in_session_manifest or {}).get("flash_source_path")
+    candidate = (Path(flash_root) if flash_root
+                 else (Path(manifest_flash) if manifest_flash else None))
+    if (
+        candidate is not None
+        and candidate.is_dir()
+        and _input_path_present(_bank_path(candidate, TELEMETRY_BANK))
+    ):
+        telemetry_input_sources.add("b01")
+
     if rederive_telemetry:
-        manifest_flash = (in_session_manifest or {}).get("flash_source_path")
-        candidate = (Path(flash_root) if flash_root
-                     else (Path(manifest_flash) if manifest_flash else None))
         if candidate is not None and candidate.is_dir():
             recorded_fp = (in_session_manifest or {}).get(
                 "flash_source_fingerprint", {}
@@ -614,6 +826,8 @@ def process_session(
                      manifest_flash)
 
     sidecar = telemetry_mod.find_legacy_sidecar(session_dir)
+    if sidecar is not None:
+        telemetry_input_sources.add("legacy_sidecar")
     if telemetry_source is None and sidecar is not None:
         log.info("reading legacy DCB_telemetry sidecar at %s", sidecar)
         fpga_arrays = telemetry_mod.parse_legacy_sidecar(sidecar) or None
@@ -621,8 +835,9 @@ def process_session(
     elif telemetry_source == "flash" and sidecar is not None:
         log.info("ignoring legacy sidecar %s in favor of flash backreference",
                  sidecar)
-
-    name = name or default_session_name(ordinal, None)
+    telemetry_decoder_status = (
+        "available" if telemetry_mod.has_decoder() else "unavailable"
+    ) if telemetry_input_sources else "not_needed"
 
     with _WarningCapture() as cap:
         result = _process_one_session(
@@ -634,15 +849,16 @@ def process_session(
             plots_dir=plots_dir,
             manifest_dir=manifest_dir,
             issue_collector=issue_collector,
+            clock_reference_set=clock_reference_set,
             fpga_arrays=fpga_arrays,
             encoder_arrays=encoder_arrays,
-            has_legacy_sidecar=sidecar is not None,
+            has_legacy_sidecar="legacy_sidecar" in telemetry_input_sources,
+            telemetry_input_sources=tuple(telemetry_input_sources),
+            telemetry_decoder_status=telemetry_decoder_status,
             source_path=session_dir,
             source_kind="session",
-            interpolate_telemetry=interpolate_telemetry,
-            interpolation_mode=interpolation_mode,
             plot_names=plot_names,
-            constants_kwargs=constants_kwargs,
+            overwrite=overwrite,
             decoder_strict=decoder_strict,
             diagnostic_override=diagnostic_override,
             schema_variant=schema_variant,
@@ -665,22 +881,29 @@ def process_session(
 def process_flash(
     flash_dir: Path | str,
     *,
+    landing_time_file: Path | str,
     sessions_root: Path | str,
     h5_dir: Optional[Path | str] = None,
     fits_dir: Optional[Path | str] = None,
     plots_dir: Optional[Path | str] = None,
     manifest_dir: Optional[Path | str] = None,
     session_name: Optional[SessionNamer] = None,
-    interpolate_telemetry: bool = False,
-    interpolation_mode: str = "normalized",
     plot_names: Optional[Sequence[str]] = None,
-    constants_kwargs: Optional[Dict[str, object]] = None,
+    overwrite: bool = False,
     issue_collector: IssueCollector | None = None,
 ) -> List[SessionResult]:
-    """Single-pass: raw flash directory -> sessions on disk + HDF5/FITS/plots/manifests."""
+    """Run the single-pass flash-to-session and product pipeline."""
+    clock_reference_set = _load_landing_reference(landing_time_file)
     flash_dir = Path(flash_dir).resolve()
+    telemetry_input_sources = (
+        ("b01",)
+        if _input_path_present(_bank_path(flash_dir, TELEMETRY_BANK))
+        else ()
+    )
+    telemetry_decoder_status = (
+        "available" if telemetry_mod.has_decoder() else "unavailable"
+    ) if telemetry_input_sources else "not_needed"
     sessions_root = Path(sessions_root)
-    sessions_root.mkdir(parents=True, exist_ok=True)
     h5_dir = Path(h5_dir) if h5_dir else None
     fits_dir = Path(fits_dir) if fits_dir else None
     plots_dir = Path(plots_dir) if plots_dir else None
@@ -691,7 +914,7 @@ def process_flash(
         issue_collector = IssueCollector()
 
     results: List[SessionResult] = []
-    sessions, _fpga_all, _enc_all = parse_flash(
+    sessions, _fpga_all, _enc_all = _parse_flash_loaded(
         flash_dir,
         issue_collector=issue_collector,
     )
@@ -706,7 +929,11 @@ def process_flash(
     #   * other session: window = [own.start, next_session.start)  (or +inf at end)
     sorted_sessions = sorted(
         sessions,
-        key=lambda s: (s.start_raw_seconds if s.start_raw_seconds is not None else float("-inf")),
+        key=lambda s: (
+            s.start_raw_seconds
+            if s.start_raw_seconds is not None
+            else float("-inf")
+        ),
     )
     win_lower: Dict[int, Optional[float]] = {}
     win_upper: Dict[int, Optional[float]] = {}
@@ -718,7 +945,11 @@ def process_flash(
     prepared: list[tuple[Session, str, Path, Products, list[str]]] = []
     expected_binding: tuple[object, ...] | None = None
     for session in sessions:
-        name = session_name(session.ordinal, session.start_raw_seconds)
+        name = session_name(
+            session.ordinal,
+            session.start_raw_seconds,
+            clock_reference_set,
+        )
         session_dir = sessions_root / name
         write_uncrater_session(session, session_dir)
 
@@ -754,15 +985,16 @@ def process_flash(
                 plots_dir=plots_dir,
                 manifest_dir=manifest_dir,
                 issue_collector=issue_collector,
+                clock_reference_set=clock_reference_set,
                 fpga_arrays=fpga_arrays,
                 encoder_arrays=encoder_arrays,
                 has_legacy_sidecar=False,
+                telemetry_input_sources=telemetry_input_sources,
+                telemetry_decoder_status=telemetry_decoder_status,
                 source_path=flash_dir,
                 source_kind="flash",
-                interpolate_telemetry=interpolate_telemetry,
-                interpolation_mode=interpolation_mode,
                 plot_names=plot_names,
-                constants_kwargs=constants_kwargs,
+                overwrite=overwrite,
                 products=products,
             )
         result.warnings_summary = [*decode_warnings, *cap.records]

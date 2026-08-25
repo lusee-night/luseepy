@@ -119,6 +119,9 @@ _LAZY_EXPORTS = {
     "load_clock_reference_set": (
         "clock_reference", "load_clock_reference_set"
     ),
+    "clock_reference_set_from_record": (
+        "clock_reference", "clock_reference_set_from_record"
+    ),
     "FrequencyWindowContract": (
         "frequency_contract", "FrequencyWindowContract"
     ),
@@ -221,6 +224,7 @@ __all__ = [
     "LegacyClockReferenceSet",
     "ClockReferenceUnavailableError", "ClockSource",
     "UnsupportedClockSourceError", "load_clock_reference_set",
+    "clock_reference_set_from_record",
     "FrequencyWindowContract", "UnresolvedFrequencyCoordinateError",
     "spectrometer_frequency_window",
     # layout-v4 writer request

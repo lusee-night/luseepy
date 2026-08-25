@@ -110,6 +110,7 @@ class QualificationConfig:
 class BaselineClockAdapter:
     """Current-writer arguments derived from one explicit clock reference."""
 
+    landing_time_file: Path
     reference_isot: str
     time_scale: str
     spectrometer_clock_source: str
@@ -509,6 +510,7 @@ def load_baseline_clock_adapter(config: QualificationConfig) -> BaselineClockAda
     dcb_raw = raw_anchor(config.dcb_clock_source)
     reference = Time(reference_isot, format="isot", scale=time_scale.lower())
     return BaselineClockAdapter(
+        landing_time_file=path,
         reference_isot=reference_isot,
         time_scale=time_scale.lower(),
         spectrometer_clock_source=config.spectrometer_clock_source,
@@ -766,7 +768,10 @@ def execute_target_default(
         )]
 
     ok, parsed, parse_issues = capture_call(
-        lambda: parse_flash(target.source_path),
+        lambda: parse_flash(
+            target.source_path,
+            landing_time_file=clock_adapter.landing_time_file,
+        ),
         target_id=target.target_id,
         session_id="target",
         stage="raw_reassembly",

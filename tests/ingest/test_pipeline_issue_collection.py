@@ -1,9 +1,27 @@
 from __future__ import annotations
 
+import json
+
 from lusee.ingest import pipeline
 from lusee.ingest.constants import BANK_FILENAME, SCIENCE_BANKS, TELEMETRY_BANK
 from lusee.ingest.decode import Products
 from lusee.ingest.issues import IssueCollector
+
+
+def write_landing_reference(tmp_path):
+    path = tmp_path / "landing.json"
+    path.write_text(json.dumps({
+        "format_version": 1,
+        "reference_event": "landing",
+        "clock_reference_isot": "2027-05-01T00:00:00",
+        "time_scale": "utc",
+        "clocks": {
+            "spectrometer": {"clock_reference_raw_seconds": 0.0},
+        },
+        "source": "synthetic pipeline test",
+        "assumed": True,
+    }), encoding="utf-8")
+    return path
 
 
 def make_bank(flash_dir, bank):
@@ -45,7 +63,11 @@ def test_parse_flash_threads_one_collector_through_science_and_telemetry(
         lambda sessions, fpga, encoder: None,
     )
 
-    result = pipeline.parse_flash(tmp_path, issue_collector=collector)
+    result = pipeline.parse_flash(
+        tmp_path,
+        landing_time_file=write_landing_reference(tmp_path),
+        issue_collector=collector,
+    )
 
     assert result == ([], {}, {})
     assert [call[1] for call in calls] == [science_bank, TELEMETRY_BANK]
@@ -78,7 +100,7 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
         decode_seen.append((path, issue_collector))
         return Products()
 
-    monkeypatch.setattr(pipeline, "parse_flash", fake_parse_flash)
+    monkeypatch.setattr(pipeline, "_parse_flash_loaded", fake_parse_flash)
     monkeypatch.setattr(
         pipeline,
         "write_uncrater_session",
@@ -90,6 +112,7 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
 
     result = pipeline.process_flash(
         flash_dir,
+        landing_time_file=write_landing_reference(tmp_path),
         sessions_root=sessions_root,
         issue_collector=collector,
     )

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+import lusee.ingest as ingest
 from scripts import ingest_qualification_report as report
 
 SYNTHETIC_REFERENCE_ISOT = "2024-03-04T05:06:07"
@@ -110,6 +111,31 @@ def empty_artifact(target_id: str) -> report.SessionArtifacts:
         h5_path=None,
         fits_path=None,
     )
+
+
+def test_raw_qualification_threads_landing_file_to_parse_flash(
+    tmp_path: Path,
+    monkeypatch,
+):
+    config = make_direct_config(tmp_path, ("raw",))
+    target = replace(config.targets[0], kind="raw")
+    adapter = report.load_baseline_clock_adapter(config)
+    seen = []
+
+    def fake_parse_flash(path, *, landing_time_file):
+        seen.append((path, landing_time_file))
+        return [], {}, {}
+
+    monkeypatch.setattr(ingest, "parse_flash", fake_parse_flash)
+
+    artifacts = report.execute_target_default(
+        target,
+        tmp_path / "work",
+        adapter,
+    )
+
+    assert artifacts == []
+    assert seen == [(target.source_path, config.landing_time_file)]
 
 
 def test_run_attempts_targets_after_failure_and_writes_failure_report(tmp_path: Path):

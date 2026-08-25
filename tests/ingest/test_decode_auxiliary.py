@@ -10,17 +10,23 @@ import numpy as np
 import pytest
 
 from lusee.ingest.decode import read_uncrater_session
+from lusee.ingest.issues import IssueAction
 from lusee.ingest.products import (
     CalibratorDataSample,
     CalibratorDebugSample,
     CalibratorMetadataSample,
     CalibratorRawPFBSample,
+    DataQuality,
     GrimmSample,
     HKSample,
     WaveformSample,
     ZoomSample,
 )
 from lusee.ingest.session import raw_seconds_from_split_time
+from lusee.ingest.write_request import (
+    FamilyCoverage,
+    family_statuses_for_products,
+)
 
 uncrater = pytest.importorskip("uncrater")
 schema_registry = pytest.importorskip("uncrater.schema_registry")
@@ -1024,3 +1030,92 @@ def test_malformed_orphan_and_duplicate_inputs_create_no_zero_rows(tmp_path):
     assert "decode.payload_decode_failed" in codes
     assert "decode.orphan_multipart_page" in codes
     assert "decode.missing_multipart_page" in codes
+
+
+@pytest.mark.parametrize(
+    ("dropped_family", "surviving_family"),
+    (
+        ("calibrator_metadata", "grimm_spectra"),
+        ("grimm_spectra", "calibrator_metadata"),
+    ),
+)
+def test_fatal_auxiliary_packet_is_attributed_with_another_family_present(
+    tmp_path,
+    dropped_family,
+    surviving_family,
+):
+    if dropped_family == "calibrator_metadata":
+        uid = 0x6100
+        write_packet(
+            tmp_path,
+            0,
+            BINDING.appids.AppID_MetaData,
+            metadata_blob(uid, time_32=0x10010, time_16=0),
+        )
+        write_packet(
+            tmp_path,
+            1,
+            BINDING.appids.AppID_SpectraGrimm,
+            grimm_blob(uid, np.ones((1, 16, 4), dtype=np.int32)),
+        )
+        damaged_index = 2
+        damaged = cdi_padded(calibrator_metadata_value(
+            0x6200,
+            time_32=0x20020,
+            time_16=0,
+            mode=1,
+        ))[:-4]
+        write_packet(
+            tmp_path,
+            damaged_index,
+            BINDING.appids.AppID_Calibrator_MetaData,
+            damaged,
+        )
+    else:
+        write_packet(
+            tmp_path,
+            0,
+            BINDING.appids.AppID_Calibrator_MetaData,
+            cdi_padded(calibrator_metadata_value(
+                0x6300,
+                time_32=0x30030,
+                time_16=0,
+                mode=1,
+            )),
+        )
+        damaged_index = 1
+        damaged = grimm_blob(
+            0x6400,
+            np.ones((1, 16, 4), dtype=np.int32),
+        ) + b"\x34\x12"
+        write_packet(
+            tmp_path,
+            damaged_index,
+            BINDING.appids.AppID_SpectraGrimm,
+            damaged,
+        )
+
+    products = read_uncrater_session(tmp_path)
+
+    assert getattr(products, dropped_family) == []
+    assert len(getattr(products, surviving_family)) == 1
+    issue = next(
+        issue
+        for issue in products.issues
+        if issue.packet_index == damaged_index
+        and issue.action is IssueAction.DROPPED
+    )
+    assert products.family_issue_ids[dropped_family] == (issue.issue_id,)
+    assert surviving_family not in products.family_issue_ids
+    assert products.quality_status.value == "partial"
+    statuses = {
+        status.family: status
+        for status in family_statuses_for_products(
+            products,
+            family_issue_ids=products.family_issue_ids,
+        )
+    }
+    assert statuses[dropped_family].coverage is FamilyCoverage.INVALID_OR_DROPPED
+    assert statuses[dropped_family].quality is DataQuality.FAILED
+    assert statuses[surviving_family].coverage is FamilyCoverage.PERSISTED
+    assert statuses[surviving_family].quality is DataQuality.CLEAN

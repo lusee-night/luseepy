@@ -24,6 +24,9 @@ _CLOCK_REFERENCE_KEYS = frozenset({
     "source",
     "assumed",
 })
+_CLOCK_REFERENCE_RECORD_KEYS = _CLOCK_REFERENCE_KEYS | frozenset({
+    "source_sha256",
+})
 _CLOCK_KEYS = frozenset({"clock_reference_raw_seconds"})
 _ISOT_RE = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
@@ -395,6 +398,42 @@ def load_clock_reference_set(path: Path | str) -> ClockReferenceSet:
         raise
     except (OverflowError, TypeError, ValueError) as exc:
         raise ClockReferenceFormatError(f"$: {exc}") from exc
+
+
+def clock_reference_set_from_record(value: object) -> ClockReferenceSet:
+    """Validate a normalized clock-reference record embedded in a manifest."""
+    if not isinstance(value, dict):
+        raise ClockReferenceFormatError("$: expected an object")
+    _require_exact_keys(value, _CLOCK_REFERENCE_RECORD_KEYS, "$")
+    payload = {key: value[key] for key in _CLOCK_REFERENCE_KEYS}
+    try:
+        references = _clock_reference_from_json(
+            payload,
+            value["source_sha256"],
+        )
+    except ClockReferenceFormatError:
+        raise
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ClockReferenceFormatError(f"$: {exc}") from exc
+    normalized = json.dumps(
+        references.as_record(),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    supplied = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    if normalized != supplied:
+        raise ClockReferenceFormatError(
+            "$: embedded clock-reference record is not normalized"
+        )
+    return references
 
 
 def _clock_reference_from_json(

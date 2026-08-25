@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import warnings
 
 import pytest
@@ -7,6 +8,22 @@ import pytest
 from lusee.ingest import pipeline
 from lusee.ingest.decode import Products
 from lusee.ingest.products import DecodeProvenance, ExecutionMode
+
+
+def write_landing_reference(tmp_path):
+    path = tmp_path / "landing.json"
+    path.write_text(json.dumps({
+        "format_version": 1,
+        "reference_event": "landing",
+        "clock_reference_isot": "2027-05-01T00:00:00",
+        "time_scale": "utc",
+        "clocks": {
+            "spectrometer": {"clock_reference_raw_seconds": 0.0},
+        },
+        "source": "synthetic pipeline test",
+        "assumed": True,
+    }), encoding="utf-8")
+    return path
 
 
 def make_products(
@@ -45,7 +62,7 @@ def install_synthetic_flash(monkeypatch, products):
     sessions = [pipeline.Session(ordinal=index) for index in range(len(products))]
     monkeypatch.setattr(
         pipeline,
-        "parse_flash",
+        "_parse_flash_loaded",
         lambda *args, **kwargs: (sessions, {}, {}),
     )
 
@@ -93,10 +110,12 @@ def test_flash_preflight_accepts_same_binding_with_different_evidence(
         return original_worker(**kwargs)
 
     monkeypatch.setattr(pipeline, "_process_one_session", worker)
+    landing = write_landing_reference(tmp_path)
 
     with pytest.warns(RuntimeWarning) as captured:
         results = pipeline.process_flash(
             flash_dir,
+            landing_time_file=landing,
             sessions_root=tmp_path / "sessions",
         )
 
@@ -118,6 +137,12 @@ def test_flash_preflight_accepts_same_binding_with_different_evidence(
     assert "decode warning 0" in results[0].warnings_summary[0]
     assert "writer warning 0" in results[0].warnings_summary[1]
     assert results[1].n_warnings == 2
+    manifest = json.loads((
+        tmp_path / "sessions" / "session_000" / "session.json"
+    ).read_text("ascii"))
+    assert manifest["manifest_schema_version"] == 3
+    assert manifest["clock_reference"]["assumed"] is True
+    assert manifest["clock_reference"]["source_sha256"]
 
 
 def test_flash_preflight_mismatch_refuses_all_product_writes(
@@ -154,6 +179,7 @@ def test_flash_preflight_mismatch_refuses_all_product_writes(
     ):
         pipeline.process_flash(
             flash_dir,
+            landing_time_file=write_landing_reference(tmp_path),
             sessions_root=tmp_path / "sessions",
             h5_dir=tmp_path / "h5",
             fits_dir=tmp_path / "fits",
