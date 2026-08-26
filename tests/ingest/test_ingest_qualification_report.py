@@ -122,7 +122,8 @@ def test_raw_qualification_threads_landing_file_to_parse_flash(
     adapter = report.load_baseline_clock_adapter(config)
     seen = []
 
-    def fake_parse_flash(path, *, landing_time_file):
+    def fake_parse_flash(path, *, landing_time_file, issue_collector):
+        assert isinstance(issue_collector, ingest.IssueCollector)
         seen.append((path, landing_time_file))
         return [], {}, {}
 
@@ -136,6 +137,209 @@ def test_raw_qualification_threads_landing_file_to_parse_flash(
 
     assert artifacts == []
     assert seen == [(target.source_path, config.landing_time_file)]
+
+
+def test_write_one_session_uses_v4_writer_contract(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from test_layout_v4_hdf5 import make_request
+
+    config = make_direct_config(tmp_path, ("writer-contract",))
+    target = config.targets[0]
+    clock_adapter = report.load_baseline_clock_adapter(config)
+    products = make_request().products
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    calls = []
+
+    def record_writer(output_format):
+        def writer(request, destination):
+            assert isinstance(request, ingest.WriteRequest)
+            assert request.products is products
+            request.validate()
+            calls.append((output_format, Path(destination)))
+            return Path(destination)
+
+        return writer
+
+    monkeypatch.setattr(ingest, "write_hdf5", record_writer("hdf5"))
+    monkeypatch.setattr(ingest, "write_fits", record_writer("fits"))
+
+    artifact = report.write_one_session(
+        target,
+        "session_000",
+        products,
+        work_dir,
+        clock_adapter,
+    )
+
+    assert calls == [
+        ("hdf5", work_dir / "session_000.h5"),
+        ("fits", work_dir / "session_000.fits"),
+    ]
+    assert artifact.h5_path == work_dir / "session_000.h5"
+    assert artifact.fits_path == work_dir / "session_000.fits"
+    assert not any(
+        str(issue.get("code", "")).startswith("stage_failed.")
+        for issue in artifact.issues
+    )
+
+
+def test_raw_context_and_global_issues_reach_request_and_report(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from test_layout_v4_hdf5 import make_request
+
+    config = make_direct_config(tmp_path, ("raw-context",))
+    target = replace(config.targets[0], kind="raw")
+    products = make_request().products
+    session = SimpleNamespace(ordinal=0, packets=[], telemetry=None)
+    requests = []
+
+    def fake_parse_flash(path, *, landing_time_file, issue_collector):
+        issue_collector.record(
+            code="identity.synthetic_context",
+            severity="warning",
+            stage="identity",
+            message="synthetic session-scoped issue",
+            action="kept",
+            session="0",
+        )
+        issue_collector.record(
+            code="source.synthetic_global",
+            severity="warning",
+            stage="input",
+            message="synthetic run-global issue",
+            action="kept",
+        )
+        return [session], ingest.TelemetryDecodeResult.absent(), None
+
+    def fake_read_session(path, *, issue_collector):
+        return products
+
+    def record_writer(request, destination):
+        requests.append(request)
+        return Path(destination)
+
+    monkeypatch.setattr(ingest, "parse_flash", fake_parse_flash)
+    monkeypatch.setattr(
+        ingest,
+        "write_uncrater_session",
+        lambda session, destination: Path(destination),
+    )
+    monkeypatch.setattr(ingest, "read_uncrater_session", fake_read_session)
+    monkeypatch.setattr(ingest, "write_hdf5", record_writer)
+    monkeypatch.setattr(ingest, "write_fits", record_writer)
+
+    artifacts = report.execute_target_default(
+        target,
+        tmp_path / "work",
+        report.load_baseline_clock_adapter(config),
+    )
+
+    assert len(requests) == 2
+    assert all(
+        tuple(issue.code for issue in request.context_issues)
+        == ("identity.synthetic_context",)
+        for request in requests
+    )
+    assert any(
+        issue.get("code") == "identity.synthetic_context"
+        for issue in artifacts[0].issues
+    )
+    assert [
+        issue.get("code") for issue in artifacts[0].issues
+    ].count("source.synthetic_global") == 1
+
+
+def test_write_one_session_reports_product_and_telemetry_issues(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from test_ingest_reader import make_issue_request
+    from test_layout_v4_telemetry import failed_telemetry_request
+
+    config = make_direct_config(tmp_path, ("typed-issues",))
+    target = config.targets[0]
+    clock_adapter = report.load_baseline_clock_adapter(config)
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    monkeypatch.setattr(
+        ingest,
+        "write_hdf5",
+        lambda request, destination: Path(destination),
+    )
+    monkeypatch.setattr(
+        ingest,
+        "write_fits",
+        lambda request, destination: Path(destination),
+    )
+
+    product_request = make_issue_request()
+    product_issue = product_request.products.issues[0]
+    product_request.products.family_issue_ids = {
+        "housekeeping": (product_issue.issue_id,)
+    }
+    product_artifact = report.write_one_session(
+        target,
+        "product_issue",
+        product_request.products,
+        work_dir,
+        clock_adapter,
+    )
+
+    telemetry_request = failed_telemetry_request(
+        ingest.TelemetryDecoderStatus.BROKEN
+    )
+    telemetry_artifact = report.write_one_session(
+        target,
+        "telemetry_issue",
+        telemetry_request.products,
+        work_dir,
+        clock_adapter,
+        telemetry=telemetry_request.telemetry,
+    )
+
+    assert [issue["code"] for issue in product_artifact.issues] == [
+        "decode.fixture_issue"
+    ]
+    assert [issue["code"] for issue in telemetry_artifact.issues] == [
+        "telemetry_decoder.broken"
+    ]
+
+
+def test_qualification_issue_record_redacts_nested_private_paths(tmp_path: Path):
+    source = tmp_path / "source"
+    sidecar = tmp_path / "sidecar.json"
+    work = tmp_path / "work"
+    collector = ingest.IssueCollector()
+    issue = collector.record(
+        code="telemetry.synthetic_failure",
+        severity="error",
+        stage="telemetry_decode",
+        message=f"failed to decode {sidecar}",
+        action="dropped",
+        input_identity=str(source),
+        details={
+            "error": f"could not open {source}",
+            "nested": [str(work), {"sidecar": str(sidecar)}],
+        },
+    )
+
+    record = report.qualification_issue_record(
+        issue,
+        "redaction",
+        "session_000",
+        [source, sidecar, work],
+    )
+    payload = json.dumps(record)
+
+    assert str(source) not in payload
+    assert str(sidecar) not in payload
+    assert str(work) not in payload
+    assert payload.count("<private-path>") == 5
 
 
 def test_run_attempts_targets_after_failure_and_writes_failure_report(tmp_path: Path):
@@ -277,8 +481,8 @@ def test_coverage_states_and_zero_statistics_are_explicit():
         target,
         family_counts(calibrator=1),
         family_counts(calibrator=1),
-        family_counts(),
-        family_counts(),
+        family_counts(calibrator=1),
+        family_counts(calibrator=1),
         family_counts(),
         set(),
     )
@@ -291,8 +495,8 @@ def test_coverage_states_and_zero_statistics_are_explicit():
         "observed_input": "present",
         "decoded": "present",
         "hdf5": "present",
-        "fits": "unsupported",
-        "reader": "unsupported",
+        "fits": "present",
+        "reader": "present",
         "plotted": "unsupported",
     }
 
@@ -346,7 +550,16 @@ def test_coverage_states_and_zero_statistics_are_explicit():
     telemetry_rows = [
         row for row in present_empty_rows if row["family"] == "telemetry"
     ]
-    assert {row["state"] for row in telemetry_rows} == {"present_empty"}
+    assert {
+        row["stage"]: row["state"] for row in telemetry_rows
+    } == {
+        "observed_input": "present_empty",
+        "decoded": "present_empty",
+        "hdf5": "present_empty",
+        "fits": "present_empty",
+        "reader": "present_empty",
+        "plotted": "unsupported",
+    }
     assert {row["observed_unit"] for row in telemetry_rows} == {
         "sidecar record"
     }
@@ -485,6 +698,18 @@ def test_public_writer_reader_parity_for_supported_fields(tmp_path: Path):
 
     hdf5 = report.read_public_bundle(h5_path, "h5")
     fits = report.read_public_bundle(fits_path, "fits")
+    expected_counts = {
+        "normal": 1,
+        "tr": 1,
+        "zoom": 1,
+        "waveform": 1,
+        "grimm": 1,
+        "telemetry": 0,
+        "housekeeping": 2,
+        "calibrator": 5,
+    }
+    assert report.family_counts_from_bundle(hdf5.bundle) == expected_counts
+    assert report.family_counts_from_bundle(fits.bundle) == expected_counts
     parity = {
         row["field_path"]: row
         for row in report.compare_semantics(
@@ -498,6 +723,40 @@ def test_public_writer_reader_parity_for_supported_fields(tmp_path: Path):
     assert parity["normal/unique_ids"]["status"] == "equal"
     assert parity["normal/raw_times"]["status"] == "equal"
     assert parity["normal/mjd_times"]["status"] == "equal"
+
+
+def test_public_bundle_reader_accepts_valid_auxiliary_only_files(tmp_path: Path):
+    from test_layout_v4_hdf5 import make_request
+
+    request = make_request()
+    expected = family_counts(housekeeping=1)
+    for output_format, writer in (
+        ("h5", ingest.write_hdf5),
+        ("fits", ingest.write_fits),
+    ):
+        path = tmp_path / f"auxiliary-only.{output_format}"
+        writer(request, path)
+        view = report.read_public_bundle(path, output_format)
+        assert report.family_counts_from_bundle(view.bundle) == expected
+
+
+def test_public_bundle_reader_preserves_legacy_frequency_evidence(tmp_path: Path):
+    from test_time_provenance import write_legacy_hdf5
+
+    path = tmp_path / "legacy-v3.h5"
+    write_legacy_hdf5(path, 3, navgf=2)
+
+    with pytest.warns(ingest.LegacyIngestWarning, match="legacy_unverified"):
+        view = report.read_public_bundle(path, "h5")
+
+    assert view.frequency_mhz is not None
+    assert view.frequency_mhz.shape == (1024,)
+    np.testing.assert_allclose(
+        np.diff(view.frequency_mhz),
+        0.05,
+        rtol=0.0,
+        atol=1e-14,
+    )
 
 
 def test_family_pages_are_unique_hdf5_based_and_label_open_contracts(tmp_path: Path):
@@ -735,7 +994,6 @@ def test_encoder_status_metrics_jsonl_uses_counts_and_mode(
             telemetry_state="decoded",
         )]
 
-    monkeypatch.setattr(report, "inspect_hdf5", lambda path: observed)
     monkeypatch.setattr(
         report,
         "read_public_bundle",
@@ -978,12 +1236,6 @@ def test_post_execute_failure_isolated_and_later_target_completes(
             fits_path=None,
         )]
 
-    monkeypatch.setattr(
-        report,
-        "inspect_hdf5",
-        lambda path: family_counts(normal=1),
-    )
-
     def reader(path, output_format):
         bundle = SimpleNamespace(
             marker=path.parent.name,
@@ -1065,11 +1317,6 @@ def test_fits_reader_is_canonical_plot_fallback_after_hdf5_failure(
 
     monkeypatch.setattr(
         report,
-        "inspect_fits",
-        lambda path: family_counts(normal=1),
-    )
-    monkeypatch.setattr(
-        report,
         "read_public_bundle",
         lambda path, prefer_format: report.ReaderView(bundle, np.arange(4)),
     )
@@ -1118,12 +1365,6 @@ def test_semantic_failure_in_one_session_does_not_skip_later_session(
                 fits_path=None,
             ))
         return artifacts
-
-    monkeypatch.setattr(
-        report,
-        "inspect_hdf5",
-        lambda path: family_counts(normal=1),
-    )
 
     def reader(path, prefer_format):
         return report.ReaderView(

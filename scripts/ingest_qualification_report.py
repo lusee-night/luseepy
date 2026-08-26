@@ -108,7 +108,7 @@ class QualificationConfig:
 
 @dataclass(frozen=True)
 class BaselineClockAdapter:
-    """Current-writer arguments derived from one explicit clock reference."""
+    """Report coordinates derived from one explicit clock reference."""
 
     landing_time_file: Path
     reference_isot: str
@@ -120,17 +120,6 @@ class BaselineClockAdapter:
     mjd_epoch_offset_days: float
     assumed: bool
     source_digest: str
-
-    @property
-    def writer_kwargs(self) -> dict[str, object]:
-        return {
-            "raw_time_subtract_seconds": self.spectrometer_raw_seconds,
-            "mjd_epoch_offset_days": self.mjd_epoch_offset_days,
-            "time_scale": self.time_scale,
-            "clock_source": self.spectrometer_clock_source,
-            "clock_epoch_isot": self.reference_isot,
-        }
-
 
 @dataclass(frozen=True)
 class SessionArtifacts:
@@ -467,7 +456,7 @@ def load_config(path: Path | str) -> QualificationConfig:
 
 
 def load_baseline_clock_adapter(config: QualificationConfig) -> BaselineClockAdapter:
-    """Validate the report-only landing reference and build legacy writer args."""
+    """Validate the report-only landing reference and build plot coordinates."""
 
     from astropy.time import Time
 
@@ -550,6 +539,22 @@ def clean_message(message: object, private_paths: Sequence[Path]) -> str:
     for path in sorted(private_paths, key=lambda item: len(str(item)), reverse=True):
         result = result.replace(str(path), "<private-path>")
     return result
+
+
+def clean_structured_value(
+    value: object,
+    private_paths: Sequence[Path],
+) -> object:
+    if isinstance(value, str):
+        return clean_message(value, private_paths)
+    if isinstance(value, Mapping):
+        return {
+            key: clean_structured_value(item, private_paths)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [clean_structured_value(item, private_paths) for item in value]
+    return value
 
 
 def capture_call(
@@ -641,6 +646,156 @@ def products_summary(
     }
 
 
+def ingest_issue_union(
+    products: object,
+    telemetry: object | None,
+    context_issues: Sequence[object] = (),
+) -> tuple[object, ...]:
+    issue_by_id = {}
+    for issue in (
+        *products.issues,
+        *(() if telemetry is None else telemetry.issues),
+        *context_issues,
+    ):
+        existing = issue_by_id.get(issue.issue_id)
+        if existing is not None and existing != issue:
+            raise ValueError("request issue sources reuse an issue ID")
+        issue_by_id[issue.issue_id] = issue
+    return tuple(issue_by_id[key] for key in sorted(issue_by_id))
+
+
+def append_ingest_issue_records(
+    output: list[dict[str, object]],
+    issues: Sequence[object],
+    target_id: str,
+    session_id: str,
+    reported_issue_ids: set[str],
+    private_paths: Sequence[Path],
+) -> None:
+    for issue in issues:
+        if issue.issue_id in reported_issue_ids:
+            continue
+        output.append(qualification_issue_record(
+            issue,
+            target_id,
+            session_id,
+            private_paths,
+        ))
+        reported_issue_ids.add(issue.issue_id)
+
+
+def make_write_request(
+    target: TargetConfig,
+    products: object,
+    clock_adapter: BaselineClockAdapter,
+    telemetry: object | None,
+    context_issues: Sequence[object] = (),
+):
+    from lusee.ingest import (
+        InterpolationPolicy,
+        LunarLocation,
+        RunProvenance,
+        TelemetryDecodeResult,
+        WriteRequest,
+        family_statuses_for_products,
+        load_clock_reference_set,
+    )
+    from lusee.ingest.constants import (
+        DEFAULT_LUN_HEIGHT_M,
+        DEFAULT_LUN_LAT_DEG,
+        DEFAULT_LUN_LONG_DEG,
+    )
+    from lusee.ingest.write_request import FAMILY_TYPES
+
+    request_telemetry = telemetry or TelemetryDecodeResult.absent()
+    normalized_context_issues = tuple(context_issues)
+    issues = ingest_issue_union(
+        products,
+        request_telemetry,
+        normalized_context_issues,
+    )
+    family_issue_ids = {}
+    for family, _ in FAMILY_TYPES:
+        issue_ids = set(products.family_issue_ids.get(family, ()))
+        issue_ids.update(
+            issue_id
+            for row in getattr(products, family)
+            for issue_id in row.provenance.decoder_issue_ids
+        )
+        family_issue_ids[family] = tuple(sorted(issue_ids))
+    family_statuses = family_statuses_for_products(
+        products,
+        family_issue_ids=family_issue_ids,
+        telemetry=request_telemetry,
+    )
+    return WriteRequest(
+        products=products,
+        clock_reference_set=load_clock_reference_set(
+            clock_adapter.landing_time_file
+        ),
+        clock_reference_unavailable_reason=None,
+        location=LunarLocation(
+            latitude_deg=DEFAULT_LUN_LAT_DEG,
+            longitude_deg=DEFAULT_LUN_LONG_DEG,
+            height_m=DEFAULT_LUN_HEIGHT_M,
+        ),
+        run_provenance=RunProvenance(
+            input_identity=None,
+            input_identity_kind=None,
+            input_identity_unavailable_reason=(
+                "qualification_input_identity_not_recorded"
+            ),
+            source_kind="session" if target.kind == "cdi" else "flash",
+            source_path=None,
+            pipeline_version=None,
+        ),
+        issues=issues,
+        family_statuses=family_statuses,
+        telemetry=request_telemetry,
+        interpolation_policy=InterpolationPolicy(),
+        context_issues=normalized_context_issues,
+    )
+
+
+def telemetry_state(result: object | None) -> str:
+    from lusee.ingest import (
+        TelemetryCoverage,
+        TelemetryDecoderStatus,
+        TelemetryInputState,
+    )
+
+    if result is None or result.input_state is TelemetryInputState.ABSENT:
+        return "absent"
+    if result.decoder_status is TelemetryDecoderStatus.UNAVAILABLE:
+        return "decoder_unavailable"
+    if result.decoder_status in (
+        TelemetryDecoderStatus.BROKEN,
+        TelemetryDecoderStatus.INCOMPATIBLE,
+    ):
+        return "decoder_broken"
+    if result.coverage is TelemetryCoverage.PRESENT_EMPTY:
+        return "present_empty"
+    return "decoded"
+
+
+def qualification_issue_record(
+    issue: object,
+    target_id: str,
+    session_id: str,
+    private_paths: Sequence[Path],
+) -> dict[str, object]:
+    record = {
+        "target_id": target_id,
+        "session_id": session_id,
+        **issue.as_dict(),
+        "occurrence_count": 1,
+    }
+    cleaned = clean_structured_value(record, private_paths)
+    if not isinstance(cleaned, dict):
+        raise TypeError("structured issue redaction did not return a mapping")
+    return cleaned
+
+
 def write_one_session(
     target: TargetConfig,
     session_id: str,
@@ -648,26 +803,45 @@ def write_one_session(
     work_dir: Path,
     clock_adapter: BaselineClockAdapter,
     *,
-    fpga_telemetry: Mapping[str, np.ndarray] | None = None,
-    encoder_telemetry: Mapping[str, np.ndarray] | None = None,
+    telemetry: object | None = None,
+    context_issues: Sequence[object] = (),
     telemetry_state: str = "absent",
     initial_issues: Sequence[Mapping[str, object]] = (),
+    reported_issue_ids: set[str] | None = None,
 ) -> SessionArtifacts:
     from lusee.ingest import write_fits, write_hdf5
 
     paths = [target.source_path, work_dir]
+    if target.telemetry_sidecar is not None:
+        paths.append(target.telemetry_sidecar)
     issues = [dict(item) for item in initial_issues]
+    reported = reported_issue_ids if reported_issue_ids is not None else set()
+    reported.update(
+        str(item["issue_id"])
+        for item in issues
+        if item.get("issue_id") is not None
+    )
+    append_ingest_issue_records(
+        issues,
+        ingest_issue_union(products, telemetry, context_issues),
+        target.target_id,
+        session_id,
+        reported,
+        paths,
+    )
     h5_path = work_dir / f"{session_id}.h5"
     fits_path = work_dir / f"{session_id}.fits"
-    common = {
-        "cdi_directory": target.source_path,
-        "fpga_telemetry": fpga_telemetry,
-        "encoder_telemetry": encoder_telemetry,
-        "interpolate_telemetry": False,
-        **clock_adapter.writer_kwargs,
-    }
     ok_h5, _, found = capture_call(
-        lambda: write_hdf5(products, h5_path, **common),
+        lambda: write_hdf5(
+            make_write_request(
+                target,
+                products,
+                clock_adapter,
+                telemetry,
+                context_issues,
+            ),
+            h5_path,
+        ),
         target_id=target.target_id,
         session_id=session_id,
         stage="hdf5",
@@ -675,7 +849,16 @@ def write_one_session(
     )
     issues.extend(found)
     ok_fits, _, found = capture_call(
-        lambda: write_fits(products, fits_path, **common),
+        lambda: write_fits(
+            make_write_request(
+                target,
+                products,
+                clock_adapter,
+                telemetry,
+                context_issues,
+            ),
+            fits_path,
+        ),
         target_id=target.target_id,
         session_id=session_id,
         stage="fits",
@@ -703,16 +886,24 @@ def execute_target_default(
     """Execute current public ingest stages without changing production code."""
 
     from lusee.ingest import (
+        IssueCollector,
+        decode_legacy_sidecar,
+        load_clock_reference_set,
         parse_flash,
-        parse_legacy_sidecar,
         read_uncrater_session,
         write_uncrater_session,
     )
+    from lusee.ingest.telemetry import map_dcb_absolute_time
+    from lusee.ingest.pipeline import _issues_for_session
 
     work_dir.mkdir(parents=True, exist_ok=True)
+    issue_collector = IssueCollector()
     if target.kind == "cdi":
         ok, products, decode_issues = capture_call(
-            lambda: read_uncrater_session(target.source_path),
+            lambda: read_uncrater_session(
+                target.source_path,
+                issue_collector=issue_collector,
+            ),
             target_id=target.target_id,
             session_id="session_000",
             stage="decoded",
@@ -727,50 +918,55 @@ def execute_target_default(
                 fits_path=None,
                 issues=tuple(decode_issues),
             )]
-        fpga: Mapping[str, np.ndarray] | None = None
-        telemetry_state = "absent"
+        telemetry = None
+        state = "absent"
         sidecar_issues: list[dict[str, object]] = list(decode_issues)
         if target.telemetry_sidecar is not None:
-            if importlib.util.find_spec("lusee_telemetry") is None:
-                telemetry_state = "decoder_unavailable"
-                sidecar_issues.append(issue_record(
-                    target.target_id,
-                    "session_000",
-                    "telemetry_decode",
-                    "telemetry.decoder_unavailable",
-                    "historic telemetry sidecar is present but the decoder is unavailable",
-                ))
-            else:
-                ok, value, found = capture_call(
-                    lambda: parse_legacy_sidecar(target.telemetry_sidecar),
-                    target_id=target.target_id,
-                    session_id="session_000",
-                    stage="telemetry_decode",
-                    private_paths=[
-                        target.source_path, target.telemetry_sidecar, work_dir
-                    ],
+            def decode_sidecar():
+                value = decode_legacy_sidecar(
+                    target.telemetry_sidecar,
+                    issue_collector=issue_collector,
                 )
-                sidecar_issues.extend(found)
-                if ok:
-                    fpga = value
-                    telemetry_state = "decoded" if value else "present_empty"
-                else:
-                    telemetry_state = "decoder_broken"
+                return map_dcb_absolute_time(
+                    value,
+                    clock_reference_set=load_clock_reference_set(
+                        clock_adapter.landing_time_file
+                    ),
+                    issue_collector=issue_collector,
+                )
+
+            ok, value, found = capture_call(
+                decode_sidecar,
+                target_id=target.target_id,
+                session_id="session_000",
+                stage="telemetry_decode",
+                private_paths=[
+                    target.source_path, target.telemetry_sidecar, work_dir
+                ],
+            )
+            sidecar_issues.extend(found)
+            if ok:
+                telemetry = value
+                state = telemetry_state(value)
+            else:
+                state = "decoder_broken"
         return [write_one_session(
             target,
             "session_000",
             products,
             work_dir,
             clock_adapter,
-            fpga_telemetry=fpga,
-            telemetry_state=telemetry_state,
+            telemetry=telemetry,
+            telemetry_state=state,
             initial_issues=sidecar_issues,
         )]
 
+    raw_context_marker = issue_collector.mark()
     ok, parsed, parse_issues = capture_call(
         lambda: parse_flash(
             target.source_path,
             landing_time_file=clock_adapter.landing_time_file,
+            issue_collector=issue_collector,
         ),
         target_id=target.target_id,
         session_id="target",
@@ -787,21 +983,61 @@ def execute_target_default(
             issues=tuple(parse_issues),
         )]
     sessions, _, _ = parsed
-    raw_decoder_available = importlib.util.find_spec("lusee_telemetry") is not None
-    if target.observed_families.get("telemetry", 0) and not raw_decoder_available:
-        parse_issues.append(issue_record(
-            target.target_id,
-            "target",
-            "telemetry_decode",
-            "telemetry.decoder_unavailable",
-            "raw telemetry is present but the private decoder is unavailable",
-        ))
+    raw_context_issues = issue_collector.since(raw_context_marker)
+    ordered_sessions = sorted(sessions, key=lambda item: item.ordinal)
+    session_contexts = [
+        _issues_for_session(
+            raw_context_issues,
+            session=session,
+            session_name=f"session_{index:03d}",
+        )
+        for index, session in enumerate(ordered_sessions)
+    ]
+    selected_context_ids = {
+        issue.issue_id
+        for context in session_contexts
+        for issue in context
+    }
+    global_issues = tuple(
+        issue
+        for issue in raw_context_issues
+        if issue.issue_id not in selected_context_ids
+    )
+    reported_issue_ids: set[str] = set()
+    append_ingest_issue_records(
+        parse_issues,
+        global_issues,
+        target.target_id,
+        "target",
+        reported_issue_ids,
+        [target.source_path, work_dir],
+    )
+    if not ordered_sessions:
+        return [] if not parse_issues else [SessionArtifacts(
+            target_id=target.target_id,
+            session_id="target",
+            decoded_summary={family: 0 for family in FAMILIES},
+            h5_path=None,
+            fits_path=None,
+            issues=tuple(parse_issues),
+        )]
     artifacts: list[SessionArtifacts] = []
-    for index, session in enumerate(sorted(sessions, key=lambda item: item.ordinal)):
+    for index, (session, context_issues) in enumerate(zip(
+        ordered_sessions,
+        session_contexts,
+    )):
         session_id = f"session_{index:03d}"
         session_dir = work_dir / session_id
         session_issues: list[dict[str, object]] = (
             list(parse_issues) if index == 0 else []
+        )
+        append_ingest_issue_records(
+            session_issues,
+            context_issues,
+            target.target_id,
+            session_id,
+            reported_issue_ids,
+            [target.source_path, work_dir],
         )
         ok, _, found = capture_call(
             lambda session=session, session_dir=session_dir: write_uncrater_session(
@@ -824,7 +1060,10 @@ def execute_target_default(
             ))
             continue
         ok, products, found = capture_call(
-            lambda session_dir=session_dir: read_uncrater_session(session_dir),
+            lambda session_dir=session_dir: read_uncrater_session(
+                session_dir,
+                issue_collector=issue_collector,
+            ),
             target_id=target.target_id,
             session_id=session_id,
             stage="decoded",
@@ -847,20 +1086,11 @@ def execute_target_default(
             products,
             work_dir,
             clock_adapter,
-            fpga_telemetry=getattr(session, "fpga_telemetry", None) or None,
-            encoder_telemetry=getattr(session, "encoder_telemetry", None) or None,
-            telemetry_state=(
-                "decoded"
-                if getattr(session, "fpga_telemetry", None)
-                or getattr(session, "encoder_telemetry", None)
-                else "decoder_unavailable"
-                if target.observed_families.get("telemetry", 0)
-                and not raw_decoder_available
-                else "present_empty"
-                if target.observed_families.get("telemetry", 0)
-                else "absent"
-            ),
+            telemetry=session.telemetry,
+            context_issues=context_issues,
+            telemetry_state=telemetry_state(session.telemetry),
             initial_issues=session_issues,
+            reported_issue_ids=reported_issue_ids,
         ))
     return artifacts
 
@@ -1251,79 +1481,56 @@ def compare_semantics(
 
 
 def read_public_bundle(path: Path, prefer_format: str) -> ReaderView:
-    from lusee.ingest import load
+    from lusee.ingest import load_bundle
 
-    data = load(path, prefer_format=prefer_format)
-    if len(data.bundles) != 1:
-        raise ValueError("qualification reader expected exactly one bundle")
-    frequency = getattr(data, "freq", None)
+    bundle = load_bundle(path, prefer_format=prefer_format)
+    frequency_mhz = None
+    if (
+        getattr(bundle, "layout_version", None) in (2, 3)
+        and getattr(bundle, "spectra", None) is not None
+    ):
+        groups = bundle.split_by_frequency_grid()
+        if len(groups) != 1:
+            raise ValueError(
+                "qualification reader expected one homogeneous frequency grid"
+            )
+        frequency_mhz = np.asarray(groups[0].frequency_for_row(0))
     return ReaderView(
-        bundle=data.bundles[0],
-        frequency_mhz=np.asarray(frequency) if frequency is not None else None,
+        bundle=bundle,
+        frequency_mhz=frequency_mhz,
     )
-
-
-def inspect_hdf5(path: Path) -> dict[str, int]:
-    import h5py
-
-    counts = {family: 0 for family in FAMILIES}
-    with h5py.File(path, "r") as handle:
-        locations = {
-            "normal": "spectra/data",
-            "tr": "tr_spectra/data",
-            "zoom": "calibrator/zoom_spectra/data",
-            "grimm": "grimm_spectra/data",
-        }
-        for family, location in locations.items():
-            if location in handle:
-                counts[family] = int(handle[location].shape[0])
-        if "waveform" in handle:
-            counts["waveform"] = sum(
-                int(group.get("waveforms", np.empty((0,))).shape[0])
-                for group in handle["waveform"].values()
-            )
-        if "housekeeping" in handle:
-            counts["housekeeping"] = sum(
-                int(group.attrs.get("count", 0))
-                for group in handle["housekeeping"].values()
-            )
-        counts["telemetry"] = int("DCB_telemetry" in handle)
-        if "calibrator/data" in handle:
-            counts["calibrator"] = len(handle["calibrator/data"])
-    return counts
-
-
-def inspect_fits(path: Path) -> dict[str, int]:
-    from astropy.io import fits
-
-    counts = {family: 0 for family in FAMILIES}
-    with fits.open(path) as hdus:
-        by_name = {hdu.name: hdu for hdu in hdus}
-        for family, name in {
-            "normal": "SPECTRA",
-            "tr": "TR_SPECTRA",
-            "zoom": "ZOOM_DATA",
-            "grimm": "GRIMM",
-        }.items():
-            if name in by_name and by_name[name].data is not None:
-                counts[family] = int(by_name[name].data.shape[0])
-        counts["waveform"] = sum(
-            int(hdu.data.shape[0])
-            for hdu in hdus
-            if hdu.name.startswith("WF_CH") and hdu.data is not None
-        )
-        counts["housekeeping"] = sum(
-            int(hdu.data.shape[0])
-            for hdu in hdus
-            if hdu.name.startswith("HK_T") and hdu.data is not None
-        )
-        counts["telemetry"] = int("DCB_FPGA" in by_name or "DCB_ENC" in by_name)
-    return counts
 
 
 def family_counts_from_bundle(bundle: object) -> dict[str, int]:
     def rows(value: object) -> int:
         return int(np.asarray(value).shape[0]) if value is not None else 0
+
+    family_status = getattr(bundle, "family_status", {})
+    status_families = np.asarray(family_status.get("family", ()))
+    persisted_rows = np.asarray(family_status.get("persisted_rows", ()))
+    if status_families.size and status_families.shape == persisted_rows.shape:
+        by_family = {
+            str(family): int(count)
+            for family, count in zip(status_families, persisted_rows)
+        }
+        return {
+            "normal": by_family.get("spectra", 0),
+            "tr": by_family.get("tr_spectra", 0),
+            "zoom": by_family.get("zoom_spectra", 0),
+            "waveform": by_family.get("waveforms", 0),
+            "grimm": by_family.get("grimm_spectra", 0),
+            "telemetry": int(by_family.get("dcb_telemetry", 0) > 0),
+            "housekeeping": by_family.get("housekeeping", 0),
+            "calibrator": sum(
+                by_family.get(family, 0)
+                for family in (
+                    "calibrator_metadata",
+                    "calibrator_data",
+                    "calibrator_raw_pfb",
+                    "calibrator_debug",
+                )
+            ),
+        }
 
     return {
         "normal": rows(getattr(bundle, "spectra", None)),
@@ -1338,7 +1545,10 @@ def family_counts_from_bundle(bundle: object) -> dict[str, int]:
             rows(next(iter(values.values()))) if values else 0
             for values in getattr(bundle, "housekeeping", {}).values()
         ),
-        "calibrator": 0,
+        "calibrator": sum(
+            rows(values.get("unique_ids"))
+            for values in getattr(bundle, "calibrator", {}).values()
+        ),
     }
 
 
@@ -1488,17 +1698,17 @@ def build_target_coverage(
             "fits": (
                 int(fits_counts.get(family, 0)),
                 decoded_failed or "fits" in failed_stages,
-                family != "calibrator",
+                True,
             ),
             "reader": (
                 int(reader_counts.get(family, 0)),
                 reader_failed,
-                family != "calibrator",
+                True,
             ),
             "plotted": (
                 int(plotted_counts.get(family, 0)),
                 plotted_failed,
-                family != "calibrator",
+                False,
             ),
         }
         for stage in COVERAGE_STAGES:
@@ -3486,29 +3696,10 @@ def process_target_report(
             for item in artifact.issues
             if str(item.get("code", "")).startswith("stage_failed.")
         )
-        h5_counts: dict[str, int] | None = None
-        fits_counts: dict[str, int] | None = None
         h5_view: ReaderView | None = None
         fits_view: ReaderView | None = None
 
         if artifact.h5_path is not None:
-            ok_h5, value, found = capture_call(
-                lambda path=artifact.h5_path: inspect_hdf5(path),
-                target_id=target.target_id,
-                session_id=artifact.session_id,
-                stage="hdf5_inspect",
-                private_paths=private_paths,
-            )
-            target_issues.extend(found)
-            if not ok_h5:
-                failed_stages.add("hdf5")
-            failed_stages.update(
-                str(item.get("stage"))
-                for item in found
-                if str(item.get("code", "")).startswith("stage_failed.")
-            )
-            h5_counts = value if ok_h5 else None
-            add_family_counts(h5_total, h5_counts)
             any_reader_attempt = True
             ok_reader, value, found = capture_call(
                 lambda path=artifact.h5_path: read_public_bundle(path, "h5"),
@@ -3521,25 +3712,22 @@ def process_target_report(
             h5_view = value if ok_reader else None
             any_reader_success = any_reader_success or ok_reader
             if not ok_reader:
+                failed_stages.add("hdf5")
                 failed_stages.add("reader_hdf5")
+            else:
+                ok_counts, value, found = capture_call(
+                    lambda: family_counts_from_bundle(h5_view.bundle),
+                    target_id=target.target_id,
+                    session_id=artifact.session_id,
+                    stage="hdf5_inspect",
+                    private_paths=private_paths,
+                )
+                target_issues.extend(found)
+                if ok_counts:
+                    add_family_counts(h5_total, value)
+                else:
+                    failed_stages.add("hdf5")
         if artifact.fits_path is not None:
-            ok_fits, value, found = capture_call(
-                lambda path=artifact.fits_path: inspect_fits(path),
-                target_id=target.target_id,
-                session_id=artifact.session_id,
-                stage="fits_inspect",
-                private_paths=private_paths,
-            )
-            target_issues.extend(found)
-            if not ok_fits:
-                failed_stages.add("fits")
-            failed_stages.update(
-                str(item.get("stage"))
-                for item in found
-                if str(item.get("code", "")).startswith("stage_failed.")
-            )
-            fits_counts = value if ok_fits else None
-            add_family_counts(fits_total, fits_counts)
             any_reader_attempt = True
             ok_reader, value, found = capture_call(
                 lambda path=artifact.fits_path: read_public_bundle(path, "fits"),
@@ -3552,7 +3740,21 @@ def process_target_report(
             fits_view = value if ok_reader else None
             any_reader_success = any_reader_success or ok_reader
             if not ok_reader:
+                failed_stages.add("fits")
                 failed_stages.add("reader_fits")
+            else:
+                ok_counts, value, found = capture_call(
+                    lambda: family_counts_from_bundle(fits_view.bundle),
+                    target_id=target.target_id,
+                    session_id=artifact.session_id,
+                    stage="fits_inspect",
+                    private_paths=private_paths,
+                )
+                target_issues.extend(found)
+                if ok_counts:
+                    add_family_counts(fits_total, value)
+                else:
+                    failed_stages.add("fits")
 
         canonical_view = h5_view or fits_view
         if canonical_view is not None:
