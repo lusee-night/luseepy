@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lusee.ingest import fits_writer, hdf5_writer, pipeline
+from lusee.ingest import fits_writer, hdf5_writer, pipeline, viz
 from lusee.ingest.decode import Products
 from lusee.ingest.issues import IssueAction, IssueCollector, IssueSeverity
 from lusee.ingest.products import (
@@ -622,6 +622,82 @@ def test_manifest_only_session_does_not_claim_persisted_rows(tmp_path):
     assert housekeeping["coverage"] == "decoded_not_persisted"
 
 
+def test_existing_plot_directory_is_refused_before_product_write(
+    tmp_path,
+    monkeypatch,
+):
+    plot_dest = tmp_path / "plots" / "session_000"
+    plot_dest.mkdir(parents=True)
+    sentinel = plot_dest / "stale.png"
+    sentinel.write_bytes(b"stale")
+
+    monkeypatch.setattr(
+        hdf5_writer,
+        "write_hdf5",
+        lambda *args, **kwargs: pytest.fail("HDF5 write preceded plot refusal"),
+    )
+
+    with pytest.raises(FileExistsError) as error:
+        pipeline._process_one_session(
+            session_dir=tmp_path / "session",
+            name="session_000",
+            ordinal=0,
+            h5_dir=tmp_path / "h5",
+            fits_dir=None,
+            plots_dir=tmp_path / "plots",
+            manifest_dir=None,
+            issue_collector=IssueCollector(),
+            clock_reference_set=pipeline._load_landing_reference(
+                write_landing_reference(tmp_path)
+            ),
+            products=concrete_products(),
+        )
+
+    assert error.value.args == (plot_dest,)
+    assert sentinel.read_bytes() == b"stale"
+
+
+def test_plot_overwrite_replaces_directory(tmp_path, monkeypatch):
+    plot_dest = tmp_path / "plots" / "session_000"
+    plot_dest.mkdir(parents=True)
+    stale = plot_dest / "stale.png"
+    stale.write_bytes(b"stale")
+
+    def write_hdf5(request, destination):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(b"synthetic hdf5")
+
+    def plot_session(h5_path, destination, *, plots):
+        assert h5_path.is_file()
+        assert destination == plot_dest
+        assert not stale.exists()
+        path = destination / "new.png"
+        path.write_bytes(b"new")
+        return [path]
+
+    monkeypatch.setattr(hdf5_writer, "write_hdf5", write_hdf5)
+    monkeypatch.setattr(viz, "plot_session", plot_session)
+
+    result = pipeline._process_one_session(
+        session_dir=tmp_path / "session",
+        name="session_000",
+        ordinal=0,
+        h5_dir=tmp_path / "h5",
+        fits_dir=None,
+        plots_dir=tmp_path / "plots",
+        manifest_dir=None,
+        issue_collector=IssueCollector(),
+        clock_reference_set=pipeline._load_landing_reference(
+            write_landing_reference(tmp_path)
+        ),
+        products=concrete_products(),
+        overwrite=True,
+    )
+
+    assert result.plot_paths == [str((plot_dest / "new.png").resolve())]
+    assert not stale.exists()
+
+
 def test_failed_decoder_quality_is_output_choice_invariant(tmp_path):
     products = concrete_products()
     products.quality_status = DataQuality.FAILED
@@ -711,7 +787,7 @@ def install_second_writer_failure(monkeypatch):
     monkeypatch.setattr(fits_writer, "write_fits", write_fits)
 
 
-def test_session_failure_manifest_inventories_surviving_hdf5(
+def test_session_writer_exception_leaves_output_for_manual_rerun(
     tmp_path,
     monkeypatch,
 ):
@@ -739,20 +815,12 @@ def test_session_failure_manifest_inventories_surviving_hdf5(
             rederive_telemetry=False,
         )
 
-    manifest = json.loads(
-        (tmp_path / "manifests" / "session_000.json").read_text("ascii")
-    )
-    artifact = manifest["output_artifacts"]["hdf5"]
     h5_path = tmp_path / "h5" / "session_000.h5"
-    assert manifest["status"] == "failed"
-    assert artifact["size_bytes"] == h5_path.stat().st_size
-    assert artifact["sha256"] == hashlib.sha256(h5_path.read_bytes()).hexdigest()
-    assert manifest["persisted_rows_by_family"] == {
-        family: 0 for family in manifest["persisted_rows_by_family"]
-    }
+    assert h5_path.read_bytes() == b"surviving HDF5 artifact"
+    assert not (tmp_path / "manifests" / "session_000.json").exists()
 
 
-def test_flash_failure_manifest_inventories_surviving_hdf5(
+def test_flash_writer_exception_leaves_output_for_manual_rerun(
     tmp_path,
     monkeypatch,
 ):
@@ -802,20 +870,12 @@ def test_flash_failure_manifest_inventories_surviving_hdf5(
             fits_dir=tmp_path / "fits",
         )
 
-    manifest = json.loads(
-        (tmp_path / "sessions" / "flash.json").read_text("ascii")
-    )
-    session = manifest["sessions"][0]
     h5_path = tmp_path / "h5" / "session_000.h5"
-    assert manifest["status"] == "failed"
-    assert session["status"] == "failed"
-    assert session["committed_artifacts"] == ["hdf5"]
-    assert session["output_artifacts"]["hdf5"]["size_bytes"] == (
-        h5_path.stat().st_size
-    )
-    assert session["output_artifacts"]["hdf5"]["sha256"] == (
-        hashlib.sha256(h5_path.read_bytes()).hexdigest()
-    )
+    assert h5_path.read_bytes() == b"surviving HDF5 artifact"
+    assert not (tmp_path / "sessions" / "flash.json").exists()
+    assert not (
+        tmp_path / "sessions" / "session_000" / "session.json"
+    ).exists()
 
 
 def test_flash_manifests_are_final_once_portable_and_digest_linked(

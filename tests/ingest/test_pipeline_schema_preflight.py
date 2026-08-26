@@ -170,7 +170,6 @@ def test_flash_preflight_mismatch_refuses_all_product_writes(
     ]
     reads = install_synthetic_flash(monkeypatch, products)
     worker_calls = []
-    manifest_calls = []
     process_one_session = pipeline._process_one_session
 
     def track_product_writes(**kwargs):
@@ -182,11 +181,6 @@ def test_flash_preflight_mismatch_refuses_all_product_writes(
         return process_one_session(**kwargs)
 
     monkeypatch.setattr(pipeline, "_process_one_session", track_product_writes)
-    monkeypatch.setattr(
-        pipeline,
-        "write_manifest",
-        lambda *args, **kwargs: manifest_calls.append((args, kwargs)),
-    )
 
     with pytest.warns(RuntimeWarning), pytest.raises(
         RuntimeError,
@@ -202,46 +196,17 @@ def test_flash_preflight_mismatch_refuses_all_product_writes(
             manifest_dir=tmp_path / "manifests",
         )
 
-    assert isinstance(error.value.ingest_result, pipeline.FlashResult)
-    assert error.value.ingest_result.status == "failed"
-    assert error.value.ingest_result.issue_counts == {
-        "pipeline.flash_failed": 1
-    }
-
+    assert not hasattr(error.value, "ingest_result")
     assert [index for index, _ in reads] == [0, 1]
     assert worker_calls == []
-    assert manifest_calls == []
     assert not (tmp_path / "h5").exists()
     assert not (tmp_path / "fits").exists()
     assert not (tmp_path / "plots").exists()
-    failure_manifest = json.loads(
-        (tmp_path / "manifests" / "flash.json").read_text("ascii")
-    )
-    assert failure_manifest["status"] == "failed"
-    assert failure_manifest["failure"]["stage"] == "decoder_preflight"
-    assert failure_manifest["status_issue_codes"] == [
-        "pipeline.flash_failed"
-    ]
-    assert len(failure_manifest["sessions"]) == 2
-    for index, session in enumerate(failure_manifest["sessions"]):
-        assert session["status"] == "failed"
-        assert session["status_issue_codes"] == ["pipeline.flash_failed"]
-        assert session["issue_counts"] == {"pipeline.flash_failed": 1}
-        assert session["issues"][0]["code"] == "pipeline.flash_failed"
-        assert set(session["stage_counts"]) == {
-            "decode",
-            "persistence",
-            "products",
-            "session_input",
-        }
-        assert session["family_statuses"]
-        assert session["contracts"]["output_layout_version"] == 4
-        if index == 0:
-            housekeeping = next(
-                status
-                for status in session["family_statuses"]
-                if status["family"] == "housekeeping"
-            )
-            assert housekeeping["coverage"] == "decoded_not_persisted"
-            assert housekeeping["decoded_rows"] == 1
-            assert housekeeping["persisted_rows"] == 0
+    assert not (tmp_path / "sessions" / "flash.json").exists()
+    assert not (tmp_path / "manifests" / "flash.json").exists()
+    assert not (
+        tmp_path / "sessions" / "session_000" / "session.json"
+    ).exists()
+    assert not (
+        tmp_path / "sessions" / "session_001" / "session.json"
+    ).exists()

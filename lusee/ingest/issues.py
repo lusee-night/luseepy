@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-import threading
 from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
@@ -174,16 +173,13 @@ class IssueCollector:
     def __init__(self, policy: IssuePolicy | str = IssuePolicy.COLLECT):
         self.policy = IssuePolicy(policy)
         self._issues: list[IngestIssue] = []
-        self._lock = threading.Lock()
 
     def __len__(self) -> int:
-        with self._lock:
-            return len(self._issues)
+        return len(self._issues)
 
     @property
     def issues(self) -> tuple[IngestIssue, ...]:
-        with self._lock:
-            return tuple(self._issues)
+        return tuple(self._issues)
 
     def mark(self) -> int:
         """Return a marker that can later select issues from this point."""
@@ -191,15 +187,13 @@ class IssueCollector:
 
     def since(self, marker: int) -> tuple[IngestIssue, ...]:
         """Return the immutable issue slice recorded since ``marker``."""
-        with self._lock:
-            if marker < 0 or marker > len(self._issues):
-                raise ValueError(f"invalid issue marker {marker}")
-            return tuple(self._issues[marker:])
+        if marker < 0 or marker > len(self._issues):
+            raise ValueError(f"invalid issue marker {marker}")
+        return tuple(self._issues[marker:])
 
     def counts(self) -> dict[str, int]:
         """Return occurrence counts keyed by stable issue code."""
-        with self._lock:
-            counts = Counter(issue.code for issue in self._issues)
+        counts = Counter(issue.code for issue in self._issues)
         return dict(sorted(counts.items()))
 
     def record(
@@ -227,26 +221,25 @@ class IssueCollector:
         if not stage:
             raise ValueError("issue stage must not be empty")
         frozen_details = _freeze_details(details)
-        with self._lock:
-            issue = IngestIssue(
-                issue_id=f"issue-{len(self._issues) + 1:08d}",
-                code=code,
-                severity=IssueSeverity(severity),
-                stage=stage,
-                message=message,
-                action=IssueAction(action),
-                input_identity=input_identity,
-                bank=bank,
-                byte_offset=byte_offset,
-                frame_index=frame_index,
-                packet_index=packet_index,
-                appid=appid,
-                sequence_count=sequence_count,
-                uid=uid,
-                session=session,
-                details=frozen_details,
-            )
-            self._issues.append(issue)
+        issue = IngestIssue(
+            issue_id=f"issue-{len(self._issues) + 1:08d}",
+            code=code,
+            severity=IssueSeverity(severity),
+            stage=stage,
+            message=message,
+            action=IssueAction(action),
+            input_identity=input_identity,
+            bank=bank,
+            byte_offset=byte_offset,
+            frame_index=frame_index,
+            packet_index=packet_index,
+            appid=appid,
+            sequence_count=sequence_count,
+            uid=uid,
+            session=session,
+            details=frozen_details,
+        )
+        self._issues.append(issue)
         if self.policy is IssuePolicy.STRICT:
             raise IngestIssueError(issue)
         return issue

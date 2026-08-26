@@ -151,10 +151,6 @@ def make_all_family_request() -> WriteRequest:
     )
 
 
-def sibling_temporaries(destination: Path) -> list[Path]:
-    return list(destination.parent.glob(f".{destination.name}.*.tmp"))
-
-
 def test_writer_requires_write_request(tmp_path: Path):
     destination = tmp_path / "invalid.h5"
 
@@ -164,7 +160,7 @@ def test_writer_requires_write_request(tmp_path: Path):
     assert not destination.exists()
 
 
-def test_writer_revalidates_mutated_session_invariants_before_tempfile(tmp_path: Path):
+def test_writer_revalidates_mutated_session_invariants_before_output(tmp_path: Path):
     request = make_request()
     products = request.products
     products.sw_version = 0x307
@@ -182,10 +178,9 @@ def test_writer_revalidates_mutated_session_invariants_before_tempfile(tmp_path:
         hdf5_writer.write_hdf5(request, destination)
 
     assert not destination.exists()
-    assert sibling_temporaries(destination) == []
 
 
-def test_writer_rejects_mutated_string_quality_before_tempfile(tmp_path: Path):
+def test_writer_rejects_mutated_string_quality_before_output(tmp_path: Path):
     request = make_request()
     request.products.quality_status = "clean"
     destination = tmp_path / "invalid-quality.h5"
@@ -194,13 +189,9 @@ def test_writer_rejects_mutated_string_quality_before_tempfile(tmp_path: Path):
         hdf5_writer.write_hdf5(request, destination)
 
     assert not destination.exists()
-    assert sibling_temporaries(destination) == []
 
 
-def test_writer_rejects_nonportable_field_dtype_before_tempfile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_writer_rejects_nonportable_field_dtype_before_output(tmp_path: Path):
     request = make_all_family_request()
     row = request.products.housekeeping[0]
     request.products.housekeeping[0] = replace(
@@ -210,21 +201,13 @@ def test_writer_rejects_nonportable_field_dtype_before_tempfile(
     )
     destination = tmp_path / "invalid-field-dtype.h5"
 
-    def fail_mkstemp(*args, **kwargs):
-        raise AssertionError("mkstemp must not be called")
-
-    monkeypatch.setattr(hdf5_writer.tempfile, "mkstemp", fail_mkstemp)
-
     with pytest.raises(TypeError, match="not portable for layout v4"):
         hdf5_writer.write_hdf5(request, destination)
 
     assert not destination.exists()
 
 
-def test_writer_rejects_excessive_field_rank_before_tempfile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_writer_rejects_excessive_field_rank_before_output(tmp_path: Path):
     request = make_all_family_request()
     row = request.products.housekeeping[0]
     request.products.housekeeping[0] = replace(
@@ -234,21 +217,13 @@ def test_writer_rejects_excessive_field_rank_before_tempfile(
     )
     destination = tmp_path / "excessive-field-rank.h5"
 
-    def fail_mkstemp(*args, **kwargs):
-        raise AssertionError("mkstemp must not be called")
-
-    monkeypatch.setattr(hdf5_writer.tempfile, "mkstemp", fail_mkstemp)
-
     with pytest.raises(ValueError, match="at most 31 dimensions"):
         hdf5_writer.write_hdf5(request, destination)
 
     assert not destination.exists()
 
 
-def test_writer_rejects_dtype_metadata_before_tempfile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_writer_rejects_dtype_metadata_before_output(tmp_path: Path):
     request = make_all_family_request()
     row = request.products.housekeeping[0]
     enum_dtype = h5py.enum_dtype({"\ud800": 0}, basetype="i4")
@@ -259,21 +234,13 @@ def test_writer_rejects_dtype_metadata_before_tempfile(
     )
     destination = tmp_path / "invalid-field-metadata.h5"
 
-    def fail_mkstemp(*args, **kwargs):
-        raise AssertionError("mkstemp must not be called")
-
-    monkeypatch.setattr(hdf5_writer.tempfile, "mkstemp", fail_mkstemp)
-
     with pytest.raises(TypeError, match="dtype metadata is not portable"):
         hdf5_writer.write_hdf5(request, destination)
 
     assert not destination.exists()
 
 
-def test_writer_rejects_non_native_field_dtype_before_tempfile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_writer_rejects_non_native_field_dtype_before_output(tmp_path: Path):
     request = make_all_family_request()
     row = request.products.housekeeping[0]
     request.products.housekeeping[0] = replace(
@@ -286,21 +253,13 @@ def test_writer_rejects_non_native_field_dtype_before_tempfile(
     )
     destination = tmp_path / "non-native-field-dtype.h5"
 
-    def fail_mkstemp(*args, **kwargs):
-        raise AssertionError("mkstemp must not be called")
-
-    monkeypatch.setattr(hdf5_writer.tempfile, "mkstemp", fail_mkstemp)
-
     with pytest.raises(TypeError, match="non-native dtype"):
         hdf5_writer.write_hdf5(request, destination)
 
     assert not destination.exists()
 
 
-def test_writer_rejects_non_utf8_field_text_before_tempfile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_writer_rejects_non_utf8_field_text_before_output(tmp_path: Path):
     request = make_all_family_request()
     row = request.products.housekeeping[0]
     request.products.housekeeping[0] = replace(
@@ -310,21 +269,13 @@ def test_writer_rejects_non_utf8_field_text_before_tempfile(
     )
     destination = tmp_path / "invalid-field-text.h5"
 
-    def fail_mkstemp(*args, **kwargs):
-        raise AssertionError("mkstemp must not be called")
-
-    monkeypatch.setattr(hdf5_writer.tempfile, "mkstemp", fail_mkstemp)
-
     with pytest.raises(ValueError, match="valid UTF-8"):
         hdf5_writer.write_hdf5(request, destination)
 
     assert not destination.exists()
 
 
-def test_writer_rejects_non_utf8_decoder_issue_code_before_tempfile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_writer_rejects_non_utf8_decoder_issue_code_before_output(tmp_path: Path):
     request = make_all_family_request()
     request.products.decode_provenance = replace(
         request.products.decode_provenance,
@@ -332,30 +283,19 @@ def test_writer_rejects_non_utf8_decoder_issue_code_before_tempfile(
     )
     destination = tmp_path / "invalid-decoder-issue-code.h5"
 
-    def fail_mkstemp(*args, **kwargs):
-        raise AssertionError("mkstemp must not be called")
-
-    monkeypatch.setattr(hdf5_writer.tempfile, "mkstemp", fail_mkstemp)
-
     with pytest.raises(ValueError, match="valid UTF-8"):
         hdf5_writer.write_hdf5(request, destination)
 
     assert not destination.exists()
 
 
-def test_writer_rejects_unrepresentable_clock_conversion_before_tempfile(
+def test_writer_rejects_unrepresentable_clock_conversion_before_output(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ):
     request = make_all_family_request()
     row = request.products.housekeeping[0]
     request.products.housekeeping[0] = replace(row, raw_seconds=1e308)
     destination = tmp_path / "unrepresentable-clock.h5"
-
-    def fail_mkstemp(*args, **kwargs):
-        raise AssertionError("mkstemp must not be called")
-
-    monkeypatch.setattr(hdf5_writer.tempfile, "mkstemp", fail_mkstemp)
 
     with pytest.raises(ValueError, match="unrepresentable"):
         hdf5_writer.write_hdf5(request, destination)
@@ -363,10 +303,7 @@ def test_writer_rejects_unrepresentable_clock_conversion_before_tempfile(
     assert not destination.exists()
 
 
-def test_writer_rejects_unrepresentable_page_clock_before_tempfile(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_writer_rejects_unrepresentable_page_clock_before_output(tmp_path: Path):
     request = make_all_family_request()
     row = request.products.calibrator_data[0]
     page_raw_seconds = row.page_raw_seconds.copy()
@@ -376,11 +313,6 @@ def test_writer_rejects_unrepresentable_page_clock_before_tempfile(
         page_raw_seconds=page_raw_seconds,
     )
     destination = tmp_path / "unrepresentable-page-clock.h5"
-
-    def fail_mkstemp(*args, **kwargs):
-        raise AssertionError("mkstemp must not be called")
-
-    monkeypatch.setattr(hdf5_writer.tempfile, "mkstemp", fail_mkstemp)
 
     with pytest.raises(ValueError, match="unrepresentable"):
         hdf5_writer.write_hdf5(request, destination)
@@ -461,7 +393,6 @@ def test_existing_destination_is_refused_by_default(tmp_path: Path):
         hdf5_writer.write_hdf5(make_request(), destination)
 
     assert destination.read_bytes() == original
-    assert sibling_temporaries(destination) == []
 
 
 def test_overwrite_is_explicit_and_recorded(tmp_path: Path):
@@ -474,47 +405,6 @@ def test_overwrite_is_explicit_and_recorded(tmp_path: Path):
         run = h5["run_provenance"]
         assert run.attrs["overwrite_requested"] == np.bool_(True)
         assert run.attrs["destination_preexisted"] == np.bool_(True)
-    assert sibling_temporaries(destination) == []
-
-
-@pytest.mark.parametrize("failure_seam", ["_write_layout_v4", "_verify_layout_v4"])
-def test_failure_preserves_existing_destination_and_cleans_temp(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    failure_seam: str,
-):
-    destination = tmp_path / "existing.h5"
-    original = b"still original"
-    destination.write_bytes(original)
-
-    def fail(*args, **kwargs):
-        raise RuntimeError(f"injected {failure_seam} failure")
-
-    monkeypatch.setattr(hdf5_writer, failure_seam, fail)
-
-    with pytest.raises(RuntimeError, match="injected"):
-        hdf5_writer.write_hdf5(make_request(overwrite=True), destination)
-
-    assert destination.read_bytes() == original
-    assert sibling_temporaries(destination) == []
-
-
-def test_failure_with_empty_destination_creates_no_output(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    destination = tmp_path / "missing.h5"
-
-    def fail(*args, **kwargs):
-        raise RuntimeError("injected verification failure")
-
-    monkeypatch.setattr(hdf5_writer, "_verify_layout_v4", fail)
-
-    with pytest.raises(RuntimeError, match="injected verification failure"):
-        hdf5_writer.write_hdf5(make_request(), destination)
-
-    assert not destination.exists()
-    assert sibling_temporaries(destination) == []
 
 
 @pytest.mark.parametrize(
@@ -543,7 +433,7 @@ def test_failure_with_empty_destination_creates_no_output(
         ("delete", "calibrator/debug/pages/page_0"),
     ),
 )
-def test_close_time_verifier_rejects_malformed_all_family_tempfile(
+def test_close_time_verifier_rejects_malformed_all_family_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     corruption: str,
@@ -594,8 +484,7 @@ def test_close_time_verifier_rejects_malformed_all_family_tempfile(
 
     monkeypatch.setattr(hdf5_writer, "_write_layout_v4", write_then_corrupt)
 
-    with pytest.raises(ValueError, match="temporary HDF5"):
+    with pytest.raises(ValueError, match="HDF5"):
         hdf5_writer.write_hdf5(request, destination)
 
-    assert not destination.exists()
-    assert sibling_temporaries(destination) == []
+    assert destination.exists()

@@ -36,6 +36,10 @@ manifest because no output destination has been accepted yet.
 requires both ``--plots-dir`` and ``--h5-dir``; plots use the persisted v4
 masks and preserve separate frequency grids.
 
+HDF5, FITS, and extracted-session outputs are written directly to their
+requested destinations. A failed write can leave a partial destination;
+manual reruns may remove it or use ``--overwrite``.
+
 ``--issue-policy`` controls whether the shared issue collector accumulates
 findings or stops at the first one. ``--decoder-strict`` separately controls
 the repaired decoder's execution mode. ``--schema-variant`` is an explicit
@@ -77,12 +81,11 @@ Independent products continue, and fixed-shape spectral storage receives NaN
 where a product plane is absent or rejected. Issue policy is independent of
 the aggregate quality status.
 
-The command prints the final status, available artifact and manifest paths,
-and sorted issue counts. When processing constructs a failure result, the same
-summary reports its partial artifacts and actual manifest name. An earlier
-preflight or command-line failure prints a concise error only. Processing and
-validation return ``0`` for clean, ``2`` for usable partial data, and ``1``
-for failed, invalid, or command-line input.
+Completed processing prints the final status, artifact and manifest paths, and
+sorted issue counts. An unexpected processing, preflight, or command-line
+exception prints a concise error; any direct partial output is left for manual
+inspection and rerun. Processing and validation return ``0`` for clean, ``2``
+for usable partial data, and ``1`` for failed, invalid, or command-line input.
 
 Validation and compatibility
 ----------------------------

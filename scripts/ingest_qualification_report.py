@@ -236,7 +236,7 @@ def hash_path(path: Path) -> str:
         digest.update(hash_file(path).encode("ascii"))
         return digest.hexdigest()
     if not path.is_dir():
-        raise ValueError("checkpoint source is neither a file nor a directory")
+        raise ValueError("qualification source is neither a file nor a directory")
     digest.update(b"directory\0")
     for child in sorted(path.rglob("*"), key=lambda item: item.relative_to(path).as_posix()):
         relative = child.relative_to(path).as_posix().encode("utf-8")
@@ -3119,15 +3119,6 @@ def write_jsonl(path: Path, records: Sequence[Mapping[str, object]]) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def write_json_atomic(path: Path, value: Mapping[str, object]) -> None:
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(
-        json.dumps(value, sort_keys=True, indent=2, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary, path)
-
-
 def target_input_identity(
     target: TargetConfig,
     config: QualificationConfig,
@@ -3139,7 +3130,7 @@ def target_input_identity(
     dependency_snapshot: Mapping[str, str],
     requested_selections: Mapping[str, object],
 ) -> dict[str, object]:
-    """Return the content and commit identity that makes a checkpoint reusable."""
+    """Return portable content and code identity for run provenance."""
 
     return {
         "target_id": target.target_id,
@@ -3210,76 +3201,6 @@ def emergency_target_coverage(target: TargetConfig) -> list[dict[str, object]]:
                 "observed_basis": evidence.basis,
             })
     return records
-
-
-def load_target_checkpoint(
-    path: Path,
-    report_path: Path,
-    config_digest: str,
-    target_id: str,
-    input_identity: Mapping[str, object],
-) -> dict[str, object] | None:
-    if not path.is_file() or not report_path.is_file():
-        return None
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(value, dict):
-            return None
-        if value.get("report_schema_version") != REPORT_SCHEMA_VERSION:
-            return None
-        if value.get("report_source_digest") != hash_file(Path(__file__).resolve()):
-            return None
-        if value.get("config_digest") != config_digest:
-            return None
-        if value.get("target_id") != target_id:
-            return None
-        if canonical_json(value.get("input_identity")) != canonical_json(input_identity):
-            return None
-        if value.get("report_sha256") != hash_file(report_path):
-            return None
-        for name in ("metrics", "issues", "coverage"):
-            if not isinstance(value.get(name), list):
-                return None
-        if not isinstance(value.get("selections"), dict):
-            return None
-        for name in ("reader_layout_versions", "reader_source_formats"):
-            if not isinstance(value.get(name), list):
-                return None
-        return value
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return None
-
-
-def write_target_checkpoint(
-    path: Path,
-    report_path: Path,
-    config_digest: str,
-    input_identity: Mapping[str, object],
-    target: TargetConfig,
-    metrics: Sequence[Mapping[str, object]],
-    issues: Sequence[Mapping[str, object]],
-    coverage: Sequence[Mapping[str, object]],
-    selections: Mapping[str, object],
-    reader_layout_versions: Sequence[str],
-    reader_source_formats: Sequence[str],
-) -> None:
-    """Build and atomically persist one complete, content-bound checkpoint."""
-
-    write_json_atomic(path, {
-        "report_schema_version": REPORT_SCHEMA_VERSION,
-        "report_source_digest": hash_file(Path(__file__).resolve()),
-        "config_digest": config_digest,
-        "input_identity": dict(input_identity),
-        "target_id": target.target_id,
-        "target_kind": target.kind,
-        "report_sha256": hash_file(report_path),
-        "metrics": sorted(metrics, key=metric_sort_key),
-        "issues": sorted(issues, key=issue_sort_key),
-        "coverage": sorted(coverage, key=metric_sort_key),
-        "selections": dict(sorted(selections.items())),
-        "reader_layout_versions": sorted(reader_layout_versions),
-        "reader_source_formats": sorted(reader_source_formats),
-    })
 
 
 def write_summary_csv(path: Path, coverage: Sequence[Mapping[str, object]]) -> None:
@@ -3747,7 +3668,6 @@ def run_qualification(
     config: QualificationConfig,
     output_dir: Path | str,
     *,
-    resume: bool = False,
     selection_manifest: Path | None = None,
     compare_to: Path | None = None,
     target_executor: TargetExecutor | None = None,
@@ -3755,8 +3675,8 @@ def run_qualification(
     """Attempt every configured target and write deterministic reports."""
 
     output = Path(output_dir).expanduser().resolve()
-    if output.exists() and any(output.iterdir()) and not resume:
-        raise FileExistsError("output directory is not empty; pass resume=True")
+    if output.exists() and any(output.iterdir()):
+        raise FileExistsError("output directory is not empty")
     output.mkdir(parents=True, exist_ok=True)
     clock_adapter = load_baseline_clock_adapter(config)
     executor = target_executor or execute_target_default
@@ -3809,7 +3729,6 @@ def run_qualification(
                 / ("trees" if target.kind == "cdi" else "raw")
                 / target.target_id
             )
-            checkpoint_path = target_dir / "checkpoint.json"
             input_identity = target_input_identity(
                 target,
                 config,
@@ -3822,32 +3741,6 @@ def run_qualification(
                 requested,
             )
             target_input_identities[target.target_id] = input_identity
-            checkpoint = (
-                load_target_checkpoint(
-                    checkpoint_path,
-                    target_dir / "report.pdf",
-                    config.config_digest,
-                    target.target_id,
-                    input_identity,
-                )
-                if resume
-                else None
-            )
-            if checkpoint is not None:
-                metrics.extend(dict(item) for item in checkpoint["metrics"])
-                issues.extend(dict(item) for item in checkpoint["issues"])
-                coverage.extend(dict(item) for item in checkpoint["coverage"])
-                selections.update(checkpoint["selections"])
-                reader_layout_versions.update(
-                    str(item)
-                    for item in checkpoint.get("reader_layout_versions", [])
-                )
-                reader_source_formats.update(
-                    str(item)
-                    for item in checkpoint.get("reader_source_formats", [])
-                )
-                continue
-
             target_work = temp_root / target.target_id
             private_paths = [target.source_path, target_work, output]
             if target.telemetry_sidecar is not None:
@@ -3909,32 +3802,6 @@ def run_qualification(
                 target_issues.extend(fallback_issues)
                 if not ok_fallback:
                     target_coverage = emergency_target_coverage(target)
-
-            ok_checkpoint, _, checkpoint_issues = capture_call(
-                lambda: write_target_checkpoint(
-                    checkpoint_path,
-                    target_dir / "report.pdf",
-                    config.config_digest,
-                    input_identity,
-                    target,
-                    target_metrics,
-                    target_issues,
-                    target_coverage,
-                    target_selections,
-                    sorted(target_layout_versions),
-                    sorted(target_source_formats),
-                ),
-                target_id=target.target_id,
-                session_id="all",
-                stage="checkpoint",
-                private_paths=private_paths,
-            )
-            target_issues.extend(checkpoint_issues)
-            if not ok_checkpoint and checkpoint_path.is_file():
-                try:
-                    checkpoint_path.unlink()
-                except OSError:
-                    pass
 
             metrics.extend(target_metrics)
             coverage.extend(target_coverage)
@@ -4133,7 +4000,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--resume", action="store_true")
     parser.add_argument("--selection-manifest", type=Path)
     parser.add_argument("--compare-to", type=Path)
     parser.add_argument("--verbose", action="store_true")
@@ -4142,7 +4008,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_qualification(
             load_config(args.config),
             args.output_dir,
-            resume=args.resume,
             selection_manifest=args.selection_manifest,
             compare_to=args.compare_to,
         )

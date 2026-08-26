@@ -345,7 +345,7 @@ def test_flash_output_cannot_replace_a_source_bank(tmp_path, monkeypatch):
     assert not (flash_dir / pipeline.FLASH_MANIFEST_NAME).exists()
 
 
-def test_flash_outputs_cannot_be_nested_under_source_root(
+def test_nonoverlapping_flash_outputs_may_be_nested_under_source_root(
     tmp_path,
     monkeypatch,
 ):
@@ -353,14 +353,14 @@ def test_flash_outputs_cannot_be_nested_under_source_root(
     flash_dir.mkdir()
     install_one_session_flash(monkeypatch)
 
-    with pytest.raises(ValueError, match="protected input"):
-        pipeline.process_flash(
-            flash_dir,
-            landing_time_file=write_landing_reference(tmp_path),
-            sessions_root=flash_dir / "outputs",
-        )
+    result = pipeline.process_flash(
+        flash_dir,
+        landing_time_file=write_landing_reference(tmp_path),
+        sessions_root=flash_dir / "outputs",
+    )
 
-    assert not (flash_dir / "outputs").exists()
+    assert result.status == "clean"
+    assert (flash_dir / "outputs" / "flash.json").is_file()
 
 
 @pytest.mark.parametrize(
@@ -381,7 +381,7 @@ def test_session_manifest_cannot_alias_an_ingestion_input(tmp_path, name):
 
 
 @pytest.mark.parametrize("strict", [False, True])
-def test_failure_manifest_inventories_extracted_session_directory(
+def test_flash_decoder_exception_propagates_without_failure_manifests(
     tmp_path,
     monkeypatch,
     strict,
@@ -416,38 +416,17 @@ def test_failure_manifest_inventories_extracted_session_directory(
             issue_collector=IssueCollector("strict") if strict else None,
         )
 
-    manifest = json.loads(
-        (tmp_path / "sessions" / "flash.json").read_text("ascii")
-    )
-    session = manifest["sessions"][0]
-    assert session["session_dir"] == "session_000"
-    assert "packet_map" in session["output_artifacts"]
-    assert session["status"] == "failed"
-    assert session["status_issue_codes"] == ["pipeline.flash_failed"]
-    assert session["issue_counts"] == {"pipeline.flash_failed": 1}
-    assert session["issues"][0]["code"] == "pipeline.flash_failed"
-    assert session["packet_map_status"] == "verified"
-    assert session["packet_map_format_version"] == 1
-    assert session["contracts"]["output_layout_version"] == 4
-    failed_families = [
-        status
-        for status in session["family_statuses"]
-        if status["reason"] == "stage_failed_before_decode"
-    ]
-    assert failed_families
-    assert all(
-        status["coverage"] == "invalid_or_dropped"
-        and status["quality"] == "failed"
-        and status["issue_codes"] == ["pipeline.flash_failed"]
-        for status in failed_families
-    )
     assert (
-        tmp_path / "sessions" / "session_000" / "session.json"
+        tmp_path / "sessions" / "session_000" / pipeline.PACKET_MAP_FILENAME
     ).is_file()
+    assert not (tmp_path / "sessions" / "flash.json").exists()
+    assert not (
+        tmp_path / "sessions" / "session_000" / "session.json"
+    ).exists()
 
 
 @pytest.mark.parametrize("strict", [False, True])
-def test_session_decode_failure_manifest_has_complete_status_contracts(
+def test_session_decoder_exception_propagates_without_failure_manifest(
     tmp_path,
     monkeypatch,
     strict,
@@ -471,46 +450,18 @@ def test_session_decode_failure_manifest_has_complete_status_contracts(
             issue_collector=IssueCollector("strict") if strict else None,
         )
 
-    manifest = json.loads(
-        (tmp_path / "manifests" / "session_000.json").read_text("ascii")
-    )
-    assert manifest["status"] == "failed"
-    assert manifest["status_issue_codes"] == ["pipeline.session_failed"]
-    assert manifest["issue_counts"] == {"pipeline.session_failed": 1}
-    assert manifest["issues"][0]["code"] == "pipeline.session_failed"
-    assert manifest["contracts"]["output_layout_version"] == 4
-    assert manifest["stage_counts"]["decode"] == {
-        "input_packets": 0,
-        "valid_packets": 0,
-        "invalid_packets": 0,
-    }
-    failed_families = [
-        status
-        for status in manifest["family_statuses"]
-        if status["reason"] == "stage_failed_before_decode"
-    ]
-    assert failed_families
-    assert all(
-        status["issue_codes"] == ["pipeline.session_failed"]
-        for status in failed_families
-    )
+    assert not (tmp_path / "manifests" / "session_000.json").exists()
 
 
-def test_session_failure_exposes_resolved_result_to_caller(
+def test_session_unexpected_failure_is_not_reconstructed(
     tmp_path,
     monkeypatch,
 ):
     session_dir = tmp_path / "session"
     session_dir.mkdir()
-    resolved_name = "20270501T010203"
 
-    def fail_session(path, *, result_sink, **kwargs):
-        result_sink.append(pipeline.SessionResult(
-            session_ordinal=0,
-            session_name=resolved_name,
-            source_path=str(path),
-            source_kind="session",
-        ))
+    def fail_session(path, **kwargs):
+        assert "result_sink" not in kwargs
         raise RuntimeError("synthetic writer failure")
 
     monkeypatch.setattr(pipeline, "_process_session_impl", fail_session)
@@ -520,14 +471,8 @@ def test_session_failure_exposes_resolved_result_to_caller(
             manifest_dir=tmp_path / "manifests",
         )
 
-    result = error.value.ingest_result
-    expected_manifest = tmp_path / "manifests" / f"{resolved_name}.json"
-    assert isinstance(result, pipeline.SessionResult)
-    assert result.session_name == resolved_name
-    assert result.status == "failed"
-    assert result.issue_counts == {"pipeline.session_failed": 1}
-    assert result.manifest_path == str(expected_manifest.resolve())
-    assert expected_manifest.is_file()
+    assert not hasattr(error.value, "ingest_result")
+    assert not (tmp_path / "manifests").exists()
 
 
 def test_flash_explicit_overwrite_replaces_existing_session_coherently(

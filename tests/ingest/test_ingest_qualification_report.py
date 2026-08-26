@@ -947,128 +947,18 @@ def test_run_removes_all_temporary_derivatives(tmp_path: Path):
     assert not list(output.rglob("*.h5"))
     assert (output / "trees" / "clean" / "report.pdf").is_file()
 
-    def must_not_rerun(target, work_dir, clock_adapter):
-        raise AssertionError("completed target was not resumed from its checkpoint")
 
-    resumed = report.run_qualification(
-        config,
-        output,
-        resume=True,
-        target_executor=must_not_rerun,
-    )
-    assert resumed.attempted_target_ids == ("clean",)
-
-
-@pytest.mark.parametrize("mutation", ("landing", "manifest", "source", "sidecar"))
-def test_resume_reexecutes_when_private_input_content_changes(
-    tmp_path: Path,
-    mutation: str,
-):
-    config = make_direct_config(tmp_path, ("mutable",))
-    sidecar = tmp_path / "telemetry.bin"
-    sidecar.write_bytes(b"first")
-    config = replace(
-        config,
-        targets=(replace(config.targets[0], telemetry_sidecar=sidecar),),
-    )
-    calls: list[str] = []
-
-    def executor(target, work_dir, clock_adapter):
-        calls.append(target.target_id)
-        return [empty_artifact(target.target_id)]
-
+def test_run_refuses_nonempty_output_directory(tmp_path: Path):
+    config = make_direct_config(tmp_path, ("fresh-output",))
     output = tmp_path / "report"
-    report.run_qualification(config, output, target_executor=executor)
-    if mutation == "landing":
-        value = json.loads(config.landing_time_file.read_text(encoding="ascii"))
-        value["source"] = "changed synthetic test reference"
-        config.landing_time_file.write_text(json.dumps(value), encoding="ascii")
-    elif mutation == "manifest":
-        config.corpus_manifest_paths[0].write_text('{"changed": true}\n', encoding="ascii")
-    elif mutation == "source":
-        (config.targets[0].source_path / "new-packet.bin").write_bytes(b"changed")
-    else:
-        sidecar.write_bytes(b"second")
+    output.mkdir()
+    (output / "previous-run.txt").write_text("stale", encoding="ascii")
 
-    report.run_qualification(
-        config,
-        output,
-        resume=True,
-        target_executor=executor,
-    )
-    assert calls == ["mutable", "mutable"]
+    with pytest.raises(FileExistsError, match="output directory is not empty"):
+        report.run_qualification(config, output, target_executor=lambda *args: [])
 
 
-def test_resume_reexecutes_when_requested_selection_changes(tmp_path: Path):
-    config = make_direct_config(tmp_path, ("selected",))
-    selection_manifest = tmp_path / "selections.json"
-    selection_manifest.write_text(
-        json.dumps({
-            "selections": {
-                "selected/normal": {"session_id": "session_first"}
-            }
-        }),
-        encoding="ascii",
-    )
-    calls: list[str] = []
-
-    def executor(target, work_dir, clock_adapter):
-        calls.append(target.target_id)
-        return [empty_artifact(target.target_id)]
-
-    output = tmp_path / "report"
-    report.run_qualification(
-        config,
-        output,
-        selection_manifest=selection_manifest,
-        target_executor=executor,
-    )
-    selection_manifest.write_text(
-        json.dumps({
-            "selections": {
-                "selected/normal": {"session_id": "session_second"}
-            }
-        }),
-        encoding="ascii",
-    )
-    report.run_qualification(
-        config,
-        output,
-        resume=True,
-        selection_manifest=selection_manifest,
-        target_executor=executor,
-    )
-    assert calls == ["selected", "selected"]
-
-
-def test_resume_reexecutes_and_manifest_updates_when_dependencies_change(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    config = make_direct_config(tmp_path, ("dependencies",))
-    versions = {"python": "first", "numpy": "first"}
-    monkeypatch.setattr(report, "dependency_versions", lambda: dict(versions))
-    calls: list[str] = []
-
-    def executor(target, work_dir, clock_adapter):
-        calls.append(target.target_id)
-        return [empty_artifact(target.target_id)]
-
-    output = tmp_path / "report"
-    report.run_qualification(config, output, target_executor=executor)
-    versions["numpy"] = "second"
-    report.run_qualification(
-        config,
-        output,
-        resume=True,
-        target_executor=executor,
-    )
-    assert calls == ["dependencies", "dependencies"]
-    manifest = json.loads((output / "run_manifest.json").read_text(encoding="ascii"))
-    assert manifest["dependencies"] == versions
-
-
-@pytest.mark.parametrize("failure_phase", ("coverage", "pdf", "checkpoint"))
+@pytest.mark.parametrize("failure_phase", ("coverage", "pdf"))
 def test_post_execute_failure_isolated_and_later_target_completes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1124,30 +1014,16 @@ def test_post_execute_failure_isolated_and_later_target_completes(
             return original(path, target, *args, **kwargs)
 
         monkeypatch.setattr(report, "write_target_pdf", fail_pdf)
-    else:
-        original = report.write_json_atomic
-
-        def fail_checkpoint(path, value):
-            if path.parent.name == "broken":
-                raise RuntimeError("synthetic checkpoint failure")
-            return original(path, value)
-
-        monkeypatch.setattr(report, "write_json_atomic", fail_checkpoint)
-
     output = tmp_path / "report"
     result = report.run_qualification(config, output, target_executor=executor)
 
     assert result.attempted_target_ids == ("broken", "later")
     assert (output / "trees" / "broken" / "report.pdf").is_file()
     assert (output / "trees" / "later" / "report.pdf").is_file()
-    assert (output / "trees" / "later" / "checkpoint.json").is_file()
-    broken_checkpoint = output / "trees" / "broken" / "checkpoint.json"
-    assert broken_checkpoint.is_file() == (failure_phase != "checkpoint")
     issues = read_jsonl(output / "issues.jsonl")
-    expected_stage = "checkpoint" if failure_phase == "checkpoint" else "target_report"
     assert any(
         row.get("target_id") == "broken"
-        and row.get("stage") == expected_stage
+        and row.get("stage") == "target_report"
         and str(row.get("code", "")).startswith("stage_failed.")
         for row in issues
     )
@@ -1297,15 +1173,8 @@ def test_semantic_failure_in_one_session_does_not_skip_later_session(
     assert normal_coverage["reader"]["count"] == 2
     assert normal_coverage["plotted"]["state"] == "present"
     assert normal_coverage["plotted"]["count"] == 2
-    checkpoint = json.loads(
-        (
-            output
-            / "trees"
-            / "multi-session"
-            / "checkpoint.json"
-        ).read_text(encoding="ascii")
-    )
-    assert checkpoint["reader_source_formats"] == ["hdf5"]
+    manifest = json.loads((output / "run_manifest.json").read_text(encoding="ascii"))
+    assert manifest["semantic_options"]["actual_plot_source_formats"] == ["hdf5"]
     assert (output / "trees" / "multi-session" / "report.pdf").is_file()
 
 

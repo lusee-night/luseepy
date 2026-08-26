@@ -21,7 +21,7 @@ import hashlib
 import json
 import logging
 import os
-import tempfile
+import shutil
 import warnings
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -59,12 +59,11 @@ from .constants import (
 from .decode import Products, read_uncrater_session
 from .issues import (
     IngestIssue,
-    IngestIssueError,
     IssueAction,
     IssueCollector,
     IssueSeverity,
 )
-from .packet_map import PACKET_MAP_FILENAME, PACKET_MAP_FORMAT_VERSION
+from .packet_map import PACKET_MAP_FILENAME
 from .reassembly import LogicalPacket, reassemble_logical_packets
 from .session import (
     Session,
@@ -788,7 +787,7 @@ def _canonical_manifest_bytes(body: Dict[str, object]) -> bytes:
     ).encode("ascii")
 
 
-def _write_bytes_atomic(
+def _write_bytes(
     payload: bytes,
     dest: Path,
     *,
@@ -796,24 +795,9 @@ def _write_bytes_atomic(
 ) -> Path:
     _validate_overwrite(overwrite)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=dest.parent,
-        prefix=f".{dest.name}.",
-        suffix=".tmp",
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as output:
-            output.write(payload)
-            output.flush()
-            os.fsync(output.fileno())
-        if overwrite:
-            os.replace(temporary, dest)
-        else:
-            os.link(temporary, dest)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    if dest.exists() and not overwrite:
+        raise FileExistsError(dest)
+    dest.write_bytes(payload)
     return dest
 
 
@@ -996,11 +980,11 @@ def _flash_manifest_body(
 
 
 def write_manifest(result: SessionResult, dest_path: Path | str) -> Path:
-    """Atomically serialize one final session result as strict ASCII JSON."""
+    """Serialize one final session result as strict ASCII JSON."""
     if not isinstance(result, SessionResult):
         raise TypeError("session manifest requires a SessionResult")
     dest = Path(dest_path)
-    return _write_bytes_atomic(
+    return _write_bytes(
         _canonical_manifest_bytes(
             _session_manifest_body(result, destination=dest)
         ),
@@ -1026,7 +1010,7 @@ def write_flash_manifest(
         raise ValueError(
             "FLASH manifest destination must be sessions_root/flash.json"
         )
-    return _write_bytes_atomic(
+    return _write_bytes(
         _canonical_manifest_bytes(
             _flash_manifest_body(result, path_parent=root)
         ),
@@ -1391,7 +1375,6 @@ def _process_one_session(
     input_identity_kind: str | None = None,
     input_identity_unavailable_reason: str | None = None,
     flash_result_id: str | None = None,
-    result_sink: List[SessionResult] | None = None,
 ) -> SessionResult:
     _validate_overwrite(overwrite)
     if (
@@ -1401,8 +1384,6 @@ def _process_one_session(
         raise ValueError(
             "available input identity cannot have an unavailable reason"
         )
-    if result_sink is not None and not isinstance(result_sink, list):
-        raise TypeError("result_sink must be a list or None")
     if products is None:
         products = read_uncrater_session(
             session_dir,
@@ -1666,9 +1647,6 @@ def _process_one_session(
             interpolation_policy,
         ),
     )
-    if result_sink is not None:
-        result_sink.append(result)
-
     def mark_products_persisted() -> None:
         result.persisted_rows_by_family = dict(persistable_rows)
         result.stage_counts["persistence"] = dict(persistable_rows)
@@ -1685,12 +1663,17 @@ def _process_one_session(
         if manifest_dir is not None
         else None
     )
+    plot_dest = (
+        plots_dir / name
+        if plots_dir is not None and h5_path is not None
+        else None
+    )
     if manifest_path is not None:
         result.manifest_path = str(manifest_path.resolve())
-    if not overwrite:
-        for destination in (h5_path, fits_path, manifest_path):
-            if destination is not None and _input_path_present(destination):
-                raise FileExistsError(destination)
+    if plot_dest is not None and plot_dest.exists():
+        if not overwrite:
+            raise FileExistsError(plot_dest)
+        shutil.rmtree(plot_dest)
 
     request = None
     if h5_path is not None or fits_path is not None:
@@ -1748,10 +1731,9 @@ def _process_one_session(
         result.committed_artifacts.append("fits")
         mark_products_persisted()
 
-    if plots_dir is not None and h5_path is not None:
+    if plot_dest is not None:
         from . import viz as viz_mod
 
-        plot_dest = plots_dir / name
         plot_dest.mkdir(parents=True, exist_ok=True)
         result.committed_artifacts.append("plot_directory")
         plot_paths = viz_mod.plot_session(h5_path, plot_dest, plots=plot_names)
@@ -2470,7 +2452,6 @@ def _process_session_impl(
     diagnostic_override: bool = False,
     schema_variant: str | None = None,
     issue_marker: int | None = None,
-    result_sink: List[SessionResult] | None = None,
 ) -> SessionResult:
     """Process one already-extracted uncrater session directory.
 
@@ -2761,7 +2742,6 @@ def _process_session_impl(
         ),
         input_identity_unavailable_reason=flash_identity_unavailable,
         flash_result_id=flash_result_id,
-        result_sink=result_sink,
     )
     if telemetry_source is not None:
         result.telemetry_source = telemetry_source
@@ -2825,7 +2805,7 @@ def process_session(
     diagnostic_override: bool = False,
     schema_variant: str | None = None,
 ) -> SessionResult:
-    """Process one extracted session and atomically finalize its manifest."""
+    """Process one extracted session and finalize its manifest."""
     _validate_overwrite(overwrite)
     collector = (
         issue_collector
@@ -2843,139 +2823,26 @@ def process_session(
             resolved_session,
             manifest_destination,
         )
-    partial_results: List[SessionResult] = []
-    try:
-        return _process_session_impl(
-            resolved_session,
-            landing_time_file=landing_time_file,
-            h5_dir=h5_dir,
-            fits_dir=fits_dir,
-            plots_dir=plots_dir,
-            manifest_dir=manifest_dir,
-            name=name,
-            ordinal=ordinal,
-            plot_names=plot_names,
-            overwrite=overwrite,
-            flash_root=flash_root,
-            rederive_telemetry=rederive_telemetry,
-            allow_changed_flash_source=allow_changed_flash_source,
-            issue_collector=collector,
-            decoder_strict=decoder_strict,
-            diagnostic_override=diagnostic_override,
-            schema_variant=schema_variant,
-            issue_marker=marker,
-            result_sink=partial_results,
-        )
-    except Exception as exc:
-        failure_result = partial_results[-1] if partial_results else None
-        failure_issue = None
-        try:
-            failure_issue = collector.record(
-                code="pipeline.session_failed",
-                severity=IssueSeverity.ERROR,
-                stage="finalization",
-                message="session processing aborted before finalization",
-                action=IssueAction.REJECTED,
-                details={"error_type": type(exc).__name__},
-            )
-        except IngestIssueError as strict_exc:
-            failure_issue = strict_exc.issue
-        if manifest_dir is not None:
-            failure_issues = collector.since(marker)
-            records, counts, codes = _issue_manifest_fields(failure_issues)
-            try:
-                failure_name = _validate_session_output_name(
-                    name or f"session_{ordinal:03d}"
-                )
-            except ValueError:
-                failure_name = f"session_{ordinal:03d}"
-            failed = failure_result
-            if failed is None:
-                family_issue_ids = (
-                    {
-                        family: (failure_issue.issue_id,)
-                        for family, _family_type in FAMILY_TYPES
-                    }
-                    if failure_issue is not None
-                    else {}
-                )
-                failure_clock_reference = None
-                if landing_time_file is not None:
-                    try:
-                        failure_clock_reference = _load_landing_reference(
-                            Path(landing_time_file).resolve()
-                        )
-                    except Exception:  # noqa: BLE001
-                        pass
-                try:
-                    failed = _process_one_session(
-                        session_dir=resolved_session,
-                        name=failure_name,
-                        ordinal=ordinal,
-                        h5_dir=None,
-                        fits_dir=None,
-                        plots_dir=None,
-                        manifest_dir=None,
-                        issue_collector=collector,
-                        clock_reference_set=failure_clock_reference,
-                        source_path=resolved_session,
-                        source_kind="session",
-                        products=Products(
-                            family_issue_ids=family_issue_ids
-                        ),
-                        context_issues=failure_issues,
-                        overwrite=overwrite,
-                    )
-                    failed_families = {
-                        family for family, _family_type in FAMILY_TYPES
-                    }
-                    for family_status in failed.family_statuses:
-                        if family_status["family"] in failed_families:
-                            family_status["reason"] = (
-                                "stage_failed_before_decode"
-                            )
-                except Exception:  # noqa: BLE001
-                    failed = SessionResult(
-                        session_ordinal=ordinal,
-                        session_name=failure_name,
-                        source_path=str(resolved_session),
-                        source_kind="session",
-                    )
-            failed.status = "failed"
-            failed.status_issue_codes = codes
-            failed.issue_counts = counts
-            failed.issues = records
-            failed.failure = {
-                "stage": "session_processing",
-                "error_type": type(exc).__name__,
-                "message": "session processing aborted before finalization",
-            }
-            failed.processed_at_utc = _now_utc_iso()
-            failed.pipeline_version = _pipeline_version_string()
-            failed.overwrite = overwrite
-            failure_path = (
-                Path(failed.manifest_path)
-                if failed.manifest_path is not None
-                else Path(manifest_dir) / f"{failed.session_name}.json"
-            )
-            failed.manifest_path = str(failure_path.resolve())
-            failure_result = failed
-            try:
-                _write_bytes_atomic(
-                    _canonical_manifest_bytes(
-                        _session_manifest_body(
-                            failed,
-                            destination=failure_path,
-                        )
-                    ),
-                    failure_path,
-                    overwrite=overwrite,
-                )
-            except Exception:  # noqa: BLE001
-                log.exception("failed to write session failure manifest")
-        if failure_result is not None:
-            setattr(exc, "ingest_result", failure_result)
-        raise
+    return _process_session_impl(
+        resolved_session,
+        landing_time_file=landing_time_file,
+        h5_dir=h5_dir,
+        fits_dir=fits_dir,
+        plots_dir=plots_dir,
+        manifest_dir=manifest_dir,
+        name=name,
+        ordinal=ordinal,
+        plot_names=plot_names,
+        overwrite=overwrite,
+        flash_root=flash_root,
+        rederive_telemetry=rederive_telemetry,
+        allow_changed_flash_source=allow_changed_flash_source,
+        issue_collector=collector,
+        decoder_strict=decoder_strict,
+        diagnostic_override=diagnostic_override,
+        schema_variant=schema_variant,
+        issue_marker=marker,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3015,43 +2882,39 @@ def _preflight_flash_outputs(
     manifest_dir: Path | None,
     run_manifest_destinations: Sequence[Path],
     protected_inputs: Sequence[Path],
-    overwrite: bool,
 ) -> None:
     if len(set(names)) != len(names):
         raise ValueError("session_name returned duplicate output names")
-    candidates: List[tuple[str, Path, str]] = [
-        ("run_manifest", Path(path), "file")
+    candidates: List[tuple[str, Path]] = [
+        ("run_manifest", Path(path))
         for path in run_manifest_destinations
     ]
     for name in names:
         session_dir = sessions_root / name
         candidates.extend((
-            ("session_directory", session_dir, "directory"),
+            ("session_directory", session_dir),
             (
                 "in_session_manifest",
                 session_dir / IN_SESSION_MANIFEST_NAME,
-                "file",
             ),
         ))
         if h5_dir is not None:
-            candidates.append(("hdf5", h5_dir / f"{name}.h5", "file"))
+            candidates.append(("hdf5", h5_dir / f"{name}.h5"))
         if fits_dir is not None:
-            candidates.append(("fits", fits_dir / f"{name}.fits", "file"))
+            candidates.append(("fits", fits_dir / f"{name}.fits"))
         if manifest_dir is not None:
             candidates.append((
                 "session_manifest",
                 manifest_dir / f"{name}.json",
-                "file",
             ))
         if plots_dir is not None and h5_dir is not None:
             candidates.append((
                 "plot_directory",
                 plots_dir / name,
-                "directory",
             ))
 
     claimed: Dict[Path, tuple[str, Path]] = {}
-    for label, destination, kind in candidates:
+    for label, destination in candidates:
         resolved = destination.resolve()
         previous = claimed.get(resolved)
         if previous is not None:
@@ -3061,57 +2924,12 @@ def _preflight_flash_outputs(
                 f"{previous_label}={previous_path} and {label}={destination}"
             )
         claimed[resolved] = (label, destination)
-        if not _input_path_present(destination):
-            continue
-        if not overwrite:
-            raise FileExistsError(destination)
-        if kind == "directory" and (
-            destination.is_symlink() or not destination.is_dir()
-        ):
-            raise ValueError(
-                f"session destination is not a directory: {destination}"
-            )
-        if kind == "file" and (
-            destination.is_symlink() or not destination.is_file()
-        ):
-            raise ValueError(
-                f"output destination is not a regular file: {destination}"
-            )
-
-    for index, (label, destination, _kind) in enumerate(candidates):
-        resolved = destination.resolve()
-        for other_label, other_destination, _other_kind in candidates[index + 1:]:
-            other_resolved = other_destination.resolve()
-            if resolved not in other_resolved.parents and (
-                other_resolved not in resolved.parents
-            ):
-                continue
-            intentional_session_manifest = (
-                label == "session_directory"
-                and other_label == "in_session_manifest"
-                and other_resolved.parent == resolved
-            ) or (
-                other_label == "session_directory"
-                and label == "in_session_manifest"
-                and resolved.parent == other_resolved
-            )
-            if intentional_session_manifest:
-                continue
-            raise ValueError(
-                "FLASH output destinations have an ancestor conflict: "
-                f"{label}={destination} and "
-                f"{other_label}={other_destination}"
-            )
 
     for protected_input in protected_inputs:
         protected = protected_input.resolve()
-        for label, destination, _kind in candidates:
+        for label, destination in candidates:
             resolved = destination.resolve()
-            if (
-                resolved == protected
-                or resolved in protected.parents
-                or protected in resolved.parents
-            ):
+            if resolved == protected or resolved in protected.parents:
                 raise ValueError(
                     "FLASH output destination overlaps a protected input: "
                     f"{label}={destination}, input={protected_input}"
@@ -3232,7 +3050,7 @@ def _write_flash_manifests(
             ))
     entries.extend((Path(destination), payload) for destination in destinations)
     for destination, manifest_payload in entries:
-        _write_bytes_atomic(
+        _write_bytes(
             manifest_payload,
             destination,
             overwrite=overwrite,
@@ -3323,145 +3141,6 @@ def _flash_decoder_provenance(
     ]
 
 
-def _write_flash_failure_manifests(
-    result: FlashResult,
-    destinations: Sequence[Path],
-    *,
-    payload: bytes,
-    overwrite: bool,
-) -> None:
-    try:
-        _write_flash_manifests(
-            result,
-            destinations,
-            payload=payload,
-            overwrite=overwrite,
-        )
-    except Exception:  # noqa: BLE001
-        log.exception("failed to write linked FLASH failure manifests")
-
-
-def _failed_flash_session_result(
-    *,
-    session: Session,
-    name: str,
-    session_dir: Path,
-    installed: bool,
-    products: Products | None,
-    failure_issue: IngestIssue | None,
-    run_issues: Sequence[IngestIssue],
-    failure_stage: str,
-    error_type: str,
-    flash_dir: Path,
-    flash_fingerprint: Dict[str, Dict[str, object]],
-    flash_result_id: str,
-    input_identity_sha256: str | None,
-    input_identity_unavailable_reason: str | None,
-    clock_reference_set: ClockReferenceSet,
-    issue_collector: IssueCollector,
-    telemetry_all: telemetry_mod.TelemetryDecodeResult,
-    telemetry_input_sources: Sequence[str],
-    telemetry_decoder_status: str,
-    lower_elapsed_seconds: float | None,
-    upper_elapsed_seconds: float | None,
-    first_session_elapsed_seconds: float | None,
-    manifest_dir: Path | None,
-    overwrite: bool,
-) -> SessionResult:
-    decode_failed = products is None
-    if products is None:
-        family_issue_ids = (
-            {
-                family: (failure_issue.issue_id,)
-                for family, _family_type in FAMILY_TYPES
-            }
-            if failure_issue is not None
-            else {}
-        )
-        products = Products(family_issue_ids=family_issue_ids)
-        if installed and (session_dir / PACKET_MAP_FILENAME).is_file():
-            products.packet_map_status = "verified"
-            products.packet_map_format_version = PACKET_MAP_FORMAT_VERSION
-            products.raw_flash_provenance_unavailable_reason = None
-    context_issues = list(_issues_for_session(
-        run_issues,
-        session=session,
-        session_name=name,
-    ))
-    if failure_issue is not None and failure_issue not in context_issues:
-        context_issues.append(failure_issue)
-    result = _process_one_session(
-        session_dir=session_dir,
-        name=name,
-        ordinal=session.ordinal,
-        h5_dir=None,
-        fits_dir=None,
-        plots_dir=None,
-        manifest_dir=None,
-        issue_collector=issue_collector,
-        clock_reference_set=clock_reference_set,
-        telemetry=session.telemetry,
-        has_legacy_sidecar=False,
-        telemetry_input_sources=telemetry_input_sources,
-        telemetry_decoder_status=telemetry_decoder_status,
-        source_path=flash_dir,
-        source_kind="flash",
-        overwrite=overwrite,
-        products=products,
-        context_issues=context_issues,
-        input_packet_count=len(session.packets),
-        input_identity=input_identity_sha256,
-        input_identity_kind=(
-            "flash_source_sha256"
-            if input_identity_sha256 is not None
-            else None
-        ),
-        input_identity_unavailable_reason=(
-            input_identity_unavailable_reason
-        ),
-        flash_result_id=flash_result_id,
-    )
-    if decode_failed:
-        decoded_families = {family for family, _family_type in FAMILY_TYPES}
-        for family_status in result.family_statuses:
-            if family_status["family"] in decoded_families:
-                family_status["reason"] = "stage_failed_before_decode"
-    _set_flash_session_metadata(
-        result,
-        session=session,
-        flash_dir=flash_dir,
-        flash_fingerprint=flash_fingerprint,
-        flash_result_id=flash_result_id,
-        input_identity_sha256=input_identity_sha256,
-        input_identity_unavailable_reason=(
-            input_identity_unavailable_reason
-        ),
-        lower_elapsed_seconds=lower_elapsed_seconds,
-        upper_elapsed_seconds=upper_elapsed_seconds,
-        first_session_elapsed_seconds=first_session_elapsed_seconds,
-        telemetry_all=telemetry_all,
-    )
-    if installed:
-        packet_map_path = session_dir / PACKET_MAP_FILENAME
-        if packet_map_path.is_file():
-            result.output_artifacts["packet_map"] = _artifact_record(
-                packet_map_path
-            )
-    else:
-        result.session_dir = None
-    if manifest_dir is not None:
-        result.manifest_path = str(
-            (manifest_dir / f"{name}.json").resolve()
-        )
-    result.status = "failed"
-    result.failure = {
-        "stage": failure_stage,
-        "error_type": error_type,
-        "message": "session was not finalized before the FLASH run aborted",
-    }
-    return result
-
-
 def _process_flash_run(
     *,
     flash_dir: Path,
@@ -3483,7 +3162,6 @@ def _process_flash_run(
     capture = _FlashParseCapture()
     results: List[SessionResult] = []
     prepared: List[tuple[Session, str, Path, Products]] = []
-    extracted: List[tuple[Session, str, Path]] = []
     sessions: List[Session] = []
     names: List[str] = []
     telemetry_all: telemetry_mod.TelemetryDecodeResult | None = None
@@ -3501,475 +3179,253 @@ def _process_flash_run(
     win_lower: Dict[int, Optional[float]] = {}
     win_upper: Dict[int, Optional[float]] = {}
     first_session_elapsed: float | None = None
-    outputs_preflighted = False
     run_manifest_destinations = _flash_manifest_destinations(
         sessions_root,
         manifest_dir,
     )
-    if not overwrite:
-        for destination in run_manifest_destinations:
-            if _input_path_present(destination):
-                raise FileExistsError(destination)
 
-    failure_stage = "input_parse"
-    try:
-        sessions, telemetry_all, _unassigned_telemetry = _parse_flash_loaded(
-            flash_dir,
-            clock_reference_set=clock_reference_set,
-            issue_collector=issue_collector,
-            capture=capture,
-        )
-        flash_fingerprint = _validate_flash_fingerprint(
-            capture.source_fingerprint
-        )
-        parse_issues = issue_collector.since(run_marker)
-        telemetry_input_sources = (
-            ("b01",)
-            if telemetry_all.input_source == "b01"
-            else ()
-        )
-        telemetry_decoder_status = telemetry_all.decoder_status.value
+    sessions, telemetry_all, _unassigned_telemetry = _parse_flash_loaded(
+        flash_dir,
+        clock_reference_set=clock_reference_set,
+        issue_collector=issue_collector,
+        capture=capture,
+    )
+    flash_fingerprint = _validate_flash_fingerprint(
+        capture.source_fingerprint
+    )
+    parse_issues = issue_collector.since(run_marker)
+    telemetry_input_sources = (
+        ("b01",)
+        if telemetry_all.input_source == "b01"
+        else ()
+    )
+    telemetry_decoder_status = telemetry_all.decoder_status.value
 
-        sorted_sessions = sorted(sessions, key=lambda item: item.ordinal)
-        spectrometer_reference = clock_reference_set.require_reference(
-            ClockSource.SPECTROMETER
-        )
-        for index, session in enumerate(sorted_sessions):
-            next_session = (
-                sorted_sessions[index + 1]
-                if index + 1 < len(sorted_sessions)
-                else None
-            )
-            win_lower[session.ordinal] = (
-                None
-                if session.start_raw_seconds is None
-                else session.start_raw_seconds
-                - spectrometer_reference.clock_reference_raw_seconds
-            )
-            win_upper[session.ordinal] = (
-                None
-                if next_session is None
-                or next_session.start_raw_seconds is None
-                else next_session.start_raw_seconds
-                - spectrometer_reference.clock_reference_raw_seconds
-            )
-        first_session_elapsed = (
-            win_lower.get(sorted_sessions[0].ordinal)
-            if sorted_sessions
+    sorted_sessions = sorted(sessions, key=lambda item: item.ordinal)
+    spectrometer_reference = clock_reference_set.require_reference(
+        ClockSource.SPECTROMETER
+    )
+    for index, session in enumerate(sorted_sessions):
+        next_session = (
+            sorted_sessions[index + 1]
+            if index + 1 < len(sorted_sessions)
             else None
         )
-        for session in sessions:
-            names.append(_validate_session_output_name(session_name(
-                session.ordinal,
-                session.start_raw_seconds,
-                clock_reference_set,
-            )))
-        failure_stage = "output_preflight"
-        _preflight_flash_outputs(
-            names=names,
-            sessions_root=sessions_root,
+        win_lower[session.ordinal] = (
+            None
+            if session.start_raw_seconds is None
+            else session.start_raw_seconds
+            - spectrometer_reference.clock_reference_raw_seconds
+        )
+        win_upper[session.ordinal] = (
+            None
+            if next_session is None
+            or next_session.start_raw_seconds is None
+            else next_session.start_raw_seconds
+            - spectrometer_reference.clock_reference_raw_seconds
+        )
+    first_session_elapsed = (
+        win_lower.get(sorted_sessions[0].ordinal)
+        if sorted_sessions
+        else None
+    )
+    for session in sessions:
+        names.append(_validate_session_output_name(session_name(
+            session.ordinal,
+            session.start_raw_seconds,
+            clock_reference_set,
+        )))
+    _preflight_flash_outputs(
+        names=names,
+        sessions_root=sessions_root,
+        h5_dir=h5_dir,
+        fits_dir=fits_dir,
+        plots_dir=plots_dir,
+        manifest_dir=manifest_dir,
+        run_manifest_destinations=run_manifest_destinations,
+        protected_inputs=(
+            flash_dir,
+            landing_time_path,
+            *(
+                _bank_path(flash_dir, bank).resolve()
+                for bank in (*SCIENCE_BANKS, TELEMETRY_BANK)
+                if _input_path_present(_bank_path(flash_dir, bank))
+            ),
+        ),
+    )
+    for session, name in zip(sessions, names):
+        session_dir = sessions_root / name
+        if overwrite:
+            write_uncrater_session(
+                session,
+                session_dir,
+                overwrite=True,
+            )
+        else:
+            write_uncrater_session(session, session_dir)
+        products = read_uncrater_session(
+            session_dir,
+            strict=decoder_strict,
+            schema_variant=schema_variant,
+            issue_collector=issue_collector,
+        )
+        prepared.append((session, name, session_dir, products))
+        binding = _binding_identity(products)
+        if expected_binding is None:
+            expected_binding = binding
+        elif binding != expected_binding:
+            raise RuntimeError(
+                "derived FLASH sessions selected different decoder "
+                "bindings; refusing all product writes. This is a "
+                "conservative guard, not a forced input-wide binding"
+            )
+
+    (
+        flash_result_id,
+        input_identity_sha256,
+        identity_unavailable_reason,
+    ) = _flash_identity(
+        flash_fingerprint,
+        clock_reference_set,
+        expected_binding,
+        source_identity_complete=capture.source_identity_complete,
+        source_identity_unavailable_reasons=(
+            capture.source_identity_unavailable_reasons
+        ),
+    )
+    for session, name, session_dir, products in prepared:
+        result = _process_one_session(
+            session_dir=session_dir,
+            name=name,
+            ordinal=session.ordinal,
             h5_dir=h5_dir,
             fits_dir=fits_dir,
             plots_dir=plots_dir,
             manifest_dir=manifest_dir,
-            run_manifest_destinations=run_manifest_destinations,
-            protected_inputs=(
-                flash_dir,
-                landing_time_path,
-                *(
-                    _bank_path(flash_dir, bank).resolve()
-                    for bank in (*SCIENCE_BANKS, TELEMETRY_BANK)
-                    if _input_path_present(_bank_path(flash_dir, bank))
-                ),
-            ),
+            issue_collector=issue_collector,
+            clock_reference_set=clock_reference_set,
+            telemetry=session.telemetry,
+            has_legacy_sidecar=False,
+            telemetry_input_sources=telemetry_input_sources,
+            telemetry_decoder_status=telemetry_decoder_status,
+            source_path=flash_dir,
+            source_kind="flash",
+            plot_names=plot_names,
             overwrite=overwrite,
-        )
-        outputs_preflighted = True
-
-        failure_stage = "decoder_preflight"
-        for session, name in zip(sessions, names):
-            session_dir = sessions_root / name
-            if overwrite:
-                write_uncrater_session(
-                    session,
-                    session_dir,
-                    overwrite=True,
-                )
-            else:
-                write_uncrater_session(session, session_dir)
-            extracted.append((session, name, session_dir))
-            products = read_uncrater_session(
-                session_dir,
-                strict=decoder_strict,
-                schema_variant=schema_variant,
-                issue_collector=issue_collector,
-            )
-            prepared.append((session, name, session_dir, products))
-            binding = _binding_identity(products)
-            if expected_binding is None:
-                expected_binding = binding
-            elif binding != expected_binding:
-                raise RuntimeError(
-                    "derived FLASH sessions selected different decoder "
-                    "bindings; refusing all product writes. This is a "
-                    "conservative guard, not a forced input-wide binding"
-                )
-
-        (
-            flash_result_id,
-            input_identity_sha256,
-            identity_unavailable_reason,
-        ) = _flash_identity(
-            flash_fingerprint,
-            clock_reference_set,
-            expected_binding,
-            source_identity_complete=capture.source_identity_complete,
-            source_identity_unavailable_reasons=(
-                capture.source_identity_unavailable_reasons
-            ),
-        )
-        failure_stage = "product_write"
-        for session, name, session_dir, products in prepared:
-            partial_results: List[SessionResult] = []
-            try:
-                result = _process_one_session(
-                    session_dir=session_dir,
-                    name=name,
-                    ordinal=session.ordinal,
-                    h5_dir=h5_dir,
-                    fits_dir=fits_dir,
-                    plots_dir=plots_dir,
-                    manifest_dir=manifest_dir,
-                    issue_collector=issue_collector,
-                    clock_reference_set=clock_reference_set,
-                    telemetry=session.telemetry,
-                    has_legacy_sidecar=False,
-                    telemetry_input_sources=telemetry_input_sources,
-                    telemetry_decoder_status=telemetry_decoder_status,
-                    source_path=flash_dir,
-                    source_kind="flash",
-                    plot_names=plot_names,
-                    overwrite=overwrite,
-                    products=products,
-                    context_issues=_issues_for_session(
-                        parse_issues,
-                        session=session,
-                        session_name=name,
-                    ),
-                    input_packet_count=len(session.packets),
-                    input_identity=input_identity_sha256,
-                    input_identity_kind=(
-                        "flash_source_sha256"
-                        if input_identity_sha256 is not None
-                        else None
-                    ),
-                    input_identity_unavailable_reason=(
-                        identity_unavailable_reason
-                    ),
-                    flash_result_id=flash_result_id,
-                    result_sink=partial_results,
-                )
-            except Exception as exc:
-                if partial_results:
-                    partial = partial_results[-1]
-                    _set_flash_session_metadata(
-                        partial,
-                        session=session,
-                        flash_dir=flash_dir,
-                        flash_fingerprint=flash_fingerprint,
-                        flash_result_id=flash_result_id,
-                        input_identity_sha256=input_identity_sha256,
-                        input_identity_unavailable_reason=(
-                            identity_unavailable_reason
-                        ),
-                        lower_elapsed_seconds=win_lower.get(session.ordinal),
-                        upper_elapsed_seconds=win_upper.get(session.ordinal),
-                        first_session_elapsed_seconds=first_session_elapsed,
-                        telemetry_all=telemetry_all,
-                    )
-                    partial.status = "failed"
-                    partial.failure = {
-                        "stage": "product_write",
-                        "error_type": type(exc).__name__,
-                        "message": (
-                            "session product writing aborted before finalization"
-                        ),
-                    }
-                    results.append(partial)
-                raise
-            _set_flash_session_metadata(
-                result,
+            products=products,
+            context_issues=_issues_for_session(
+                parse_issues,
                 session=session,
-                flash_dir=flash_dir,
-                flash_fingerprint=flash_fingerprint,
-                flash_result_id=flash_result_id,
-                input_identity_sha256=input_identity_sha256,
-                input_identity_unavailable_reason=(
-                    identity_unavailable_reason
-                ),
-                lower_elapsed_seconds=win_lower.get(session.ordinal),
-                upper_elapsed_seconds=win_upper.get(session.ordinal),
-                first_session_elapsed_seconds=first_session_elapsed,
-                telemetry_all=telemetry_all,
-            )
-            results.append(result)
-
-        if not results:
-            issue_collector.record(
-                code="pipeline.no_usable_sessions",
-                severity=IssueSeverity.ERROR,
-                stage="session_split",
-                message="the FLASH input produced no usable sessions",
-                action=IssueAction.REJECTED,
-            )
-        run_issues = _flash_run_issues(
-            issue_collector,
-            run_marker,
-            telemetry=telemetry_all,
-            sessions=sessions,
-            prepared=prepared,
+                session_name=name,
+            ),
+            input_packet_count=len(session.packets),
+            input_identity=input_identity_sha256,
+            input_identity_kind=(
+                "flash_source_sha256"
+                if input_identity_sha256 is not None
+                else None
+            ),
+            input_identity_unavailable_reason=(
+                identity_unavailable_reason
+            ),
+            flash_result_id=flash_result_id,
         )
-        issue_records, issue_counts, status_issue_codes = (
-            _issue_manifest_fields(run_issues)
-        )
-        run_status = _status_from_issues(run_issues)
-        if not results or all(result.status == "failed" for result in results):
-            run_status = "failed"
-        elif any(result.status != "clean" for result in results):
-            run_status = "partial"
-        if any(result.status != "clean" for result in results):
-            status_issue_codes = sorted({
-                *status_issue_codes,
-                *(
-                    code
-                    for result in results
-                    for code in result.status_issue_codes
-                ),
-            })
-        flash_result = FlashResult(
+        _set_flash_session_metadata(
+            result,
+            session=session,
+            flash_dir=flash_dir,
+            flash_fingerprint=flash_fingerprint,
             flash_result_id=flash_result_id,
             input_identity_sha256=input_identity_sha256,
-            input_identity_unavailable_reason=identity_unavailable_reason,
-            source_path=str(flash_dir),
-            source_fingerprint=flash_fingerprint,
-            session_results=results,
-            status=run_status,
-            status_issue_codes=status_issue_codes,
-            issue_counts=issue_counts,
-            issues=issue_records,
-            stage_counts=_flash_stage_counts(
-                capture,
-                run_issues,
-                products=[product for *_, product in prepared],
-                results=results,
-                telemetry=telemetry_all,
+            input_identity_unavailable_reason=(
+                identity_unavailable_reason
             ),
-            decoder_provenance=_flash_decoder_provenance(prepared),
-            telemetry_provenance=_telemetry_provenance_manifest(
-                telemetry_all,
-                InterpolationPolicy(),
-            ),
-            clock_reference=clock_reference_set.as_record(),
-            pipeline_version=_pipeline_version_string(),
-            processed_at_utc=_now_utc_iso(),
-            manifest_paths=[str(path) for path in run_manifest_destinations],
-            overwrite=overwrite,
-            source_identity_unavailable_reasons=list(
-                capture.source_identity_unavailable_reasons
-            ),
+            lower_elapsed_seconds=win_lower.get(session.ordinal),
+            upper_elapsed_seconds=win_upper.get(session.ordinal),
+            first_session_elapsed_seconds=first_session_elapsed,
+            telemetry_all=telemetry_all,
         )
-        manifest_payload = _canonical_manifest_bytes(
-            _flash_manifest_body(
-                flash_result,
-                path_parent=sessions_root,
-            )
-        )
-        manifest_sha256 = hashlib.sha256(manifest_payload).hexdigest()
-        flash_result.manifest_sha256 = manifest_sha256
-        for result in results:
-            result.flash_manifest_sha256 = manifest_sha256
+        results.append(result)
 
-        failure_stage = "manifest_finalization"
-        _write_flash_manifests(
+    if not results:
+        issue_collector.record(
+            code="pipeline.no_usable_sessions",
+            severity=IssueSeverity.ERROR,
+            stage="session_split",
+            message="the FLASH input produced no usable sessions",
+            action=IssueAction.REJECTED,
+        )
+    run_issues = _flash_run_issues(
+        issue_collector,
+        run_marker,
+        telemetry=telemetry_all,
+        sessions=sessions,
+        prepared=prepared,
+    )
+    issue_records, issue_counts, status_issue_codes = (
+        _issue_manifest_fields(run_issues)
+    )
+    run_status = _status_from_issues(run_issues)
+    if not results or all(result.status == "failed" for result in results):
+        run_status = "failed"
+    elif any(result.status != "clean" for result in results):
+        run_status = "partial"
+    if any(result.status != "clean" for result in results):
+        status_issue_codes = sorted({
+            *status_issue_codes,
+            *(
+                code
+                for result in results
+                for code in result.status_issue_codes
+            ),
+        })
+    flash_result = FlashResult(
+        flash_result_id=flash_result_id,
+        input_identity_sha256=input_identity_sha256,
+        input_identity_unavailable_reason=identity_unavailable_reason,
+        source_path=str(flash_dir),
+        source_fingerprint=flash_fingerprint,
+        session_results=results,
+        status=run_status,
+        status_issue_codes=status_issue_codes,
+        issue_counts=issue_counts,
+        issues=issue_records,
+        stage_counts=_flash_stage_counts(
+            capture,
+            run_issues,
+            products=[product for *_, product in prepared],
+            results=results,
+            telemetry=telemetry_all,
+        ),
+        decoder_provenance=_flash_decoder_provenance(prepared),
+        telemetry_provenance=_telemetry_provenance_manifest(
+            telemetry_all,
+            InterpolationPolicy(),
+        ),
+        clock_reference=clock_reference_set.as_record(),
+        pipeline_version=_pipeline_version_string(),
+        processed_at_utc=_now_utc_iso(),
+        manifest_paths=[str(path) for path in run_manifest_destinations],
+        overwrite=overwrite,
+        source_identity_unavailable_reasons=list(
+            capture.source_identity_unavailable_reasons
+        ),
+    )
+    manifest_payload = _canonical_manifest_bytes(
+        _flash_manifest_body(
             flash_result,
-            run_manifest_destinations,
-            payload=manifest_payload,
-            overwrite=overwrite,
+            path_parent=sessions_root,
         )
-        return flash_result
-    except Exception as exc:
-        failure_issue = None
-        try:
-            failure_issue = issue_collector.record(
-                code="pipeline.flash_failed",
-                severity=IssueSeverity.ERROR,
-                stage="finalization",
-                message="FLASH processing aborted before finalization",
-                action=IssueAction.REJECTED,
-                details={
-                    "error_type": type(exc).__name__,
-                    "failure_stage": failure_stage,
-                },
-            )
-        except IngestIssueError as strict_exc:
-            failure_issue = strict_exc.issue
-        if failure_issue is not None:
-            for result in results:
-                if result.status != "failed":
-                    continue
-                result.status_issue_codes = sorted({
-                    *result.status_issue_codes,
-                    failure_issue.code,
-                })
-                result.issue_counts[failure_issue.code] = (
-                    result.issue_counts.get(failure_issue.code, 0) + 1
-                )
-                result.issues.append(failure_issue.as_dict())
-        failure_issues = _flash_run_issues(
-            issue_collector,
-            run_marker,
-            telemetry=telemetry_all,
-            sessions=sessions,
-            prepared=prepared,
-        )
-        issue_records, issue_counts, status_issue_codes = (
-            _issue_manifest_fields(failure_issues)
-        )
-        source_fingerprint = _validate_flash_fingerprint(
-            capture.source_fingerprint
-        )
-        (
-            flash_result_id,
-            input_identity_sha256,
-            identity_unavailable_reason,
-        ) = _flash_identity(
-            source_fingerprint,
-            clock_reference_set,
-            expected_binding,
-            source_identity_complete=capture.source_identity_complete,
-            source_identity_unavailable_reasons=(
-                capture.source_identity_unavailable_reasons
-            ),
-        )
-        represented = {
-            (result.session_ordinal, result.session_name)
-            for result in results
-        }
-        prepared_products = {
-            (session.ordinal, name): products
-            for session, name, _session_dir, products in prepared
-        }
-        extracted_sessions = {
-            (session.ordinal, name)
-            for session, name, _session_dir in extracted
-        }
-        failure_telemetry = (
-            telemetry_all
-            if telemetry_all is not None
-            else telemetry_mod.TelemetryDecodeResult.absent()
-        )
-        failure_sources = (
-            telemetry_input_sources if telemetry_all is not None else ()
-        )
-        failure_decoder_status = (
-            telemetry_decoder_status
-            if failure_sources
-            else "not_needed"
-        )
-        for index, session in enumerate(sessions):
-            name = (
-                names[index]
-                if index < len(names)
-                else f"session_{session.ordinal:03d}"
-            )
-            if (session.ordinal, name) in represented:
-                continue
-            session_dir = sessions_root / name
-            products = prepared_products.get((session.ordinal, name))
-            session_result = _failed_flash_session_result(
-                session=session,
-                name=name,
-                session_dir=session_dir,
-                installed=(session.ordinal, name) in extracted_sessions,
-                products=products,
-                failure_issue=failure_issue,
-                run_issues=failure_issues,
-                failure_stage=failure_stage,
-                error_type=type(exc).__name__,
-                flash_dir=flash_dir,
-                flash_fingerprint=source_fingerprint,
-                flash_result_id=flash_result_id,
-                input_identity_sha256=input_identity_sha256,
-                input_identity_unavailable_reason=(
-                    identity_unavailable_reason
-                ),
-                clock_reference_set=clock_reference_set,
-                issue_collector=issue_collector,
-                telemetry_all=failure_telemetry,
-                telemetry_input_sources=failure_sources,
-                telemetry_decoder_status=failure_decoder_status,
-                lower_elapsed_seconds=win_lower.get(session.ordinal),
-                upper_elapsed_seconds=win_upper.get(session.ordinal),
-                first_session_elapsed_seconds=first_session_elapsed,
-                manifest_dir=manifest_dir,
-                overwrite=overwrite,
-            )
-            results.append(session_result)
-            represented.add((session.ordinal, name))
-        failed_result = FlashResult(
-            flash_result_id=flash_result_id,
-            input_identity_sha256=input_identity_sha256,
-            input_identity_unavailable_reason=identity_unavailable_reason,
-            source_path=str(flash_dir),
-            source_fingerprint=source_fingerprint,
-            session_results=results,
-            status="failed",
-            status_issue_codes=status_issue_codes,
-            issue_counts=issue_counts,
-            issues=issue_records,
-            stage_counts=_flash_stage_counts(
-                capture,
-                failure_issues,
-                products=[product for *_, product in prepared],
-                results=results,
-                telemetry=telemetry_all,
-            ),
-            decoder_provenance=_flash_decoder_provenance(prepared),
-            telemetry_provenance=_telemetry_provenance_manifest(
-                telemetry_all,
-                InterpolationPolicy(),
-            ),
-            clock_reference=clock_reference_set.as_record(),
-            pipeline_version=_pipeline_version_string(),
-            processed_at_utc=_now_utc_iso(),
-            manifest_paths=[str(path) for path in run_manifest_destinations],
-            failure={
-                "stage": failure_stage,
-                "error_type": type(exc).__name__,
-                "message": "FLASH processing aborted before finalization",
-            },
-            overwrite=overwrite,
-            source_identity_unavailable_reasons=list(
-                capture.source_identity_unavailable_reasons
-            ),
-        )
-        failure_payload = _canonical_manifest_bytes(
-            _flash_manifest_body(
-                failed_result,
-                path_parent=sessions_root,
-            )
-        )
-        failed_result.manifest_sha256 = hashlib.sha256(
-            failure_payload
-        ).hexdigest()
-        for result in results:
-            result.flash_manifest_sha256 = failed_result.manifest_sha256
-        setattr(exc, "ingest_result", failed_result)
-        if outputs_preflighted:
-            _write_flash_failure_manifests(
-                failed_result,
-                run_manifest_destinations,
-                payload=failure_payload,
-                overwrite=overwrite,
-            )
-        raise
+    )
+    manifest_sha256 = hashlib.sha256(manifest_payload).hexdigest()
+    flash_result.manifest_sha256 = manifest_sha256
+    for result in results:
+        result.flash_manifest_sha256 = manifest_sha256
+
+    _write_flash_manifests(
+        flash_result,
+        run_manifest_destinations,
+        payload=manifest_payload,
+        overwrite=overwrite,
+    )
+    return flash_result

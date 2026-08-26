@@ -12,13 +12,8 @@ session" format).
 
 from __future__ import annotations
 
-import ctypes
-import errno
 import logging
-import os
 import shutil
-import sys
-import tempfile
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -37,9 +32,7 @@ from .constants import (
 from .issues import IssueAction, IssueCollector, IssueSeverity
 from .packet_map import (
     PACKET_MAP_FILENAME,
-    PacketMapError,
     build_packet_map,
-    read_packet_map,
     write_packet_map,
 )
 from .reassembly import LogicalPacket
@@ -421,56 +414,6 @@ def packet_filename(index: int, appid: int, *, width: int = FILENAME_PACKET_INDE
     return f"{index:0{width}d}_{appid:0{FILENAME_APID_HEX_WIDTH}x}.bin"
 
 
-def _rename_noreplace(source: Path, target: Path) -> None:
-    """Atomically rename one directory without replacing an existing target."""
-    if sys.platform == "darwin":
-        libc = ctypes.CDLL(None, use_errno=True)
-        renamex_np = libc.renamex_np
-        renamex_np.argtypes = (
-            ctypes.c_char_p,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        )
-        renamex_np.restype = ctypes.c_int
-        result = renamex_np(os.fsencode(source), os.fsencode(target), 0x4)
-    elif sys.platform.startswith("linux"):
-        libc = ctypes.CDLL(None, use_errno=True)
-        renameat2 = getattr(libc, "renameat2", None)
-        if renameat2 is None:
-            raise OSError(
-                errno.ENOTSUP,
-                "atomic no-replace directory installation is unavailable",
-                target,
-            )
-        renameat2.argtypes = (
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        )
-        renameat2.restype = ctypes.c_int
-        result = renameat2(
-            -100,
-            os.fsencode(source),
-            -100,
-            os.fsencode(target),
-            0x1,
-        )
-    elif os.name == "nt":
-        os.rename(source, target)
-        return
-    else:
-        raise OSError(
-            errno.ENOTSUP,
-            "atomic no-replace directory installation is unavailable",
-            target,
-        )
-    if result != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error), target)
-
-
 def write_uncrater_session(
     session: Session,
     dest_dir: Path | str,
@@ -481,22 +424,18 @@ def write_uncrater_session(
 
     The directory layout produced is "Layout B" (cdi_output/ subdirectory)
     -- ``dest_dir/cdi_output/NNNNN_XXXX.bin`` plus a versioned
-    ``dest_dir/packet_map.json``. The complete tree is first written to a
-    sibling staging directory, then installed. An existing ``dest_dir`` is
-    refused and left untouched unless ``overwrite=True``;
-    replacement removes that directory only after the complete staged tree is
-    validated. No telemetry sidecar is written.
+    ``dest_dir/packet_map.json``. An existing ``dest_dir`` is refused unless
+    ``overwrite=True``. No telemetry sidecar is written.
 
     Returns the path of the cdi_output/ subdirectory.
     """
     if type(overwrite) is not bool:
         raise TypeError("overwrite must be bool")
     dest = Path(dest_dir)
-    if dest.exists() or dest.is_symlink():
+    if dest.exists():
         if not overwrite:
             raise FileExistsError(dest)
-        if dest.is_symlink() or not dest.is_dir():
-            raise NotADirectoryError(dest)
+        shutil.rmtree(dest)
     width = _index_width(len(session.packets))
     filenames = [
         packet_filename(index, packet.appid, width=width)
@@ -508,40 +447,11 @@ def write_uncrater_session(
         filenames,
         normalize_appid=normalize_appid,
     )
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    staging_root = Path(tempfile.mkdtemp(
-        prefix=f".{dest.name}.",
-        suffix=".tmp",
-        dir=dest.parent,
-    ))
-    try:
-        staging = staging_root / dest.name
-        staging.mkdir()
-        cdi = staging / "cdi_output"
-        cdi.mkdir()
-        for p, filename in zip(session.packets, filenames):
-            fn = cdi / filename
-            with fn.open("wb") as fh:
-                fh.write(p.blob)
-        write_packet_map(packet_map, staging / PACKET_MAP_FILENAME)
-        installed_map = read_packet_map(
-            staging,
-            cdi,
-            normalize_appid=normalize_appid,
-        )
-        if installed_map != packet_map:
-            raise PacketMapError(
-                "staged packet map disagrees with retained packet provenance"
-            )
-        if dest.exists() or dest.is_symlink():
-            if not overwrite:
-                raise FileExistsError(dest)
-            if dest.is_symlink() or not dest.is_dir():
-                raise NotADirectoryError(dest)
-            shutil.rmtree(dest)
-        _rename_noreplace(staging, dest)
-    finally:
-        shutil.rmtree(staging_root, ignore_errors=True)
-    installed_cdi = dest / "cdi_output"
-    log.info("wrote %d packets to %s", len(session.packets), installed_cdi)
-    return installed_cdi
+    cdi = dest / "cdi_output"
+    cdi.mkdir(parents=True)
+    for packet, filename in zip(session.packets, filenames):
+        with (cdi / filename).open("wb") as output:
+            output.write(packet.blob)
+    write_packet_map(packet_map, dest / PACKET_MAP_FILENAME)
+    log.info("wrote %d packets to %s", len(session.packets), cdi)
+    return cdi

@@ -265,7 +265,7 @@ def build_packet_map(
 
 
 def write_packet_map(packet_map: PacketMap, path: Path | str) -> Path:
-    """Write deterministic ASCII JSON to a path inside a staged session tree."""
+    """Write deterministic ASCII JSON beside an extracted session tree."""
     if not isinstance(packet_map, PacketMap):
         raise TypeError("packet_map must be a PacketMap")
     destination = Path(path)

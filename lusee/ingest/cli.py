@@ -45,11 +45,7 @@ def print_issue_summary(
     print(f"issues: {summary}")
 
 
-def print_session_result(
-    result: pipeline.SessionResult,
-    *,
-    existing_only: bool = False,
-) -> None:
+def print_session_result(result: pipeline.SessionResult) -> None:
     print(f"status: {result.status}")
     print(f"session: {result.session_name}")
     for label, path in (
@@ -58,25 +54,17 @@ def print_session_result(
         ("fits", result.fits_path),
         ("manifest", result.manifest_path),
     ):
-        if path is not None and (
-            not existing_only or Path(path).exists()
-        ):
+        if path is not None:
             print(f"{label}: {path}")
     for path in result.plot_paths:
-        if not existing_only or Path(path).exists():
-            print(f"plot: {path}")
+        print(f"plot: {path}")
     print_issue_summary(result.issue_counts, result.status_issue_codes)
 
 
-def print_flash_result(
-    result: pipeline.FlashResult,
-    *,
-    existing_only: bool = False,
-) -> None:
+def print_flash_result(result: pipeline.FlashResult) -> None:
     print(f"status: {result.status}")
     for path in result.manifest_paths:
-        if not existing_only or Path(path).exists():
-            print(f"manifest: {path}")
+        print(f"manifest: {path}")
     for session in result.session_results:
         print(f"session[{session.session_name}]: {session.status}")
         for label, path in (
@@ -85,13 +73,10 @@ def print_flash_result(
             ("fits", session.fits_path),
             ("manifest", session.manifest_path),
         ):
-            if path is not None and (
-                not existing_only or Path(path).exists()
-            ):
+            if path is not None:
                 print(f"session[{session.session_name}].{label}: {path}")
         for path in session.plot_paths:
-            if not existing_only or Path(path).exists():
-                print(f"session[{session.session_name}].plot: {path}")
+            print(f"session[{session.session_name}].plot: {path}")
     print_issue_summary(result.issue_counts, result.status_issue_codes)
 
 
@@ -251,28 +236,22 @@ def process_session_command(args: argparse.Namespace) -> int:
     if args.plots_dir is not None and args.h5_dir is None:
         raise ValueError("--plots-dir requires --h5-dir")
     collector = IssueCollector(args.issue_policy)
-    try:
-        result = pipeline.process_session(
-            args.session_dir,
-            landing_time_file=args.landing_time_file,
-            h5_dir=args.h5_dir,
-            fits_dir=args.fits_dir,
-            plots_dir=args.plots_dir,
-            manifest_dir=args.manifest_dir,
-            name=args.name,
-            ordinal=args.ordinal,
-            overwrite=args.overwrite,
-            flash_root=args.flash_root,
-            rederive_telemetry=not args.no_rederive_telemetry,
-            issue_collector=collector,
-            decoder_strict=args.decoder_strict,
-            schema_variant=args.schema_variant,
-        )
-    except Exception as exc:
-        failure_result = getattr(exc, "ingest_result", None)
-        if isinstance(failure_result, pipeline.SessionResult):
-            print_session_result(failure_result, existing_only=True)
-        raise
+    result = pipeline.process_session(
+        args.session_dir,
+        landing_time_file=args.landing_time_file,
+        h5_dir=args.h5_dir,
+        fits_dir=args.fits_dir,
+        plots_dir=args.plots_dir,
+        manifest_dir=args.manifest_dir,
+        name=args.name,
+        ordinal=args.ordinal,
+        overwrite=args.overwrite,
+        flash_root=args.flash_root,
+        rederive_telemetry=not args.no_rederive_telemetry,
+        issue_collector=collector,
+        decoder_strict=args.decoder_strict,
+        schema_variant=args.schema_variant,
+    )
     print_session_result(result)
     return status_exit_code(result.status)
 
@@ -281,25 +260,19 @@ def process_flash_command(args: argparse.Namespace) -> int:
     if args.plots_dir is not None and args.h5_dir is None:
         raise ValueError("--plots-dir requires --h5-dir")
     collector = IssueCollector(args.issue_policy)
-    try:
-        result = pipeline.process_flash(
-            args.flash_dir,
-            landing_time_file=args.landing_time_file,
-            sessions_root=args.sessions_root,
-            h5_dir=args.h5_dir,
-            fits_dir=args.fits_dir,
-            plots_dir=args.plots_dir,
-            manifest_dir=args.manifest_dir,
-            overwrite=args.overwrite,
-            issue_collector=collector,
-            decoder_strict=args.decoder_strict,
-            schema_variant=args.schema_variant,
-        )
-    except Exception as exc:
-        failure_result = getattr(exc, "ingest_result", None)
-        if isinstance(failure_result, pipeline.FlashResult):
-            print_flash_result(failure_result, existing_only=True)
-        raise
+    result = pipeline.process_flash(
+        args.flash_dir,
+        landing_time_file=args.landing_time_file,
+        sessions_root=args.sessions_root,
+        h5_dir=args.h5_dir,
+        fits_dir=args.fits_dir,
+        plots_dir=args.plots_dir,
+        manifest_dir=args.manifest_dir,
+        overwrite=args.overwrite,
+        issue_collector=collector,
+        decoder_strict=args.decoder_strict,
+        schema_variant=args.schema_variant,
+    )
     print_flash_result(result)
     return status_exit_code(result.status)
 

@@ -1,11 +1,9 @@
-"""Atomic HDF5 writer for the validated ingest layout v4 contract."""
+"""HDF5 writer for the validated ingest layout v4 contract."""
 
 from __future__ import annotations
 
 import json
 import logging
-import os
-import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import fields as dataclass_fields
@@ -1410,26 +1408,26 @@ def _verify_layout_v4(
 ) -> None:
     def group_at(h5, path_name: str):
         if path_name not in h5 or not isinstance(h5[path_name], h5py.Group):
-            raise ValueError(f"temporary HDF5 is missing /{path_name}")
+            raise ValueError(f"HDF5 output is missing /{path_name}")
         return h5[path_name]
 
     def check_dataset(group, name: str, shape: tuple[int, ...], dtype):
         path_name = f"{group.name}/{name}"
         if name not in group or not isinstance(group[name], h5py.Dataset):
-            raise ValueError(f"temporary HDF5 is missing {path_name}")
+            raise ValueError(f"HDF5 output is missing {path_name}")
         dataset = group[name]
         string_dtype = dtype is None and h5py.check_string_dtype(dataset.dtype)
         if dataset.shape != shape or (
             dtype is None and string_dtype is None
         ) or (dtype is not None and dataset.dtype != np.dtype(dtype)):
-            raise ValueError(f"temporary HDF5 contract failed for {path_name}")
+            raise ValueError(f"HDF5 output contract failed for {path_name}")
         return dataset
 
     def check_attrs(obj, expected: Mapping[str, object]) -> None:
         for name, value in expected.items():
             if name not in obj.attrs:
                 raise ValueError(
-                    f"temporary HDF5 attribute {obj.name}@{name} disagrees"
+                    f"HDF5 output attribute {obj.name}@{name} disagrees"
                 )
             observed = np.asarray(obj.attrs[name])
             expected_array = np.asarray(value)
@@ -1439,7 +1437,7 @@ def _verify_layout_v4(
                 or not np.array_equal(observed, expected_array)
             ):
                 raise ValueError(
-                    f"temporary HDF5 attribute {obj.name}@{name} disagrees"
+                    f"HDF5 output attribute {obj.name}@{name} disagrees"
                 )
 
     def check_values(group, name: str, expected: object) -> None:
@@ -1456,7 +1454,7 @@ def _verify_layout_v4(
             equal = np.array_equal(observed, expected_array)
         if not equal:
             raise ValueError(
-                f"temporary HDF5 values disagree in {dataset.name}"
+                f"HDF5 output values disagree in {dataset.name}"
             )
 
     def optional_attrs(values: Mapping[str, object | None]) -> dict[str, object]:
@@ -1472,7 +1470,7 @@ def _verify_layout_v4(
         presence = group_at(parent, "field_present")
         if set(fields) != set(presence):
             raise ValueError(
-                f"temporary HDF5 field union disagrees in {parent.name}"
+                f"HDF5 output field union disagrees in {parent.name}"
             )
         for name in fields:
             present = check_dataset(presence, name, (count,), np.bool_)
@@ -1482,7 +1480,7 @@ def _verify_layout_v4(
                 check_attrs(field, {"kind": "untyped_absent"})
                 if np.any(presence[name][:]):
                     raise ValueError(
-                        f"temporary HDF5 absent field is present in {field.name}"
+                        f"HDF5 output absent field is present in {field.name}"
                     )
             elif kind == "mapping":
                 check_attrs(field, {"kind": "mapping"})
@@ -1496,7 +1494,7 @@ def _verify_layout_v4(
                     != np.dtype(np.uint32)
                 ):
                     raise ValueError(
-                        f"temporary HDF5 variant count disagrees in {field.name}"
+                        f"HDF5 output variant count disagrees in {field.name}"
                     )
                 variant_count = int(field.attrs["variant_count"])
                 check_attrs(
@@ -1511,7 +1509,7 @@ def _verify_layout_v4(
                     present[:],
                 ) or np.any(variant_index[present[:]] >= variant_count):
                     raise ValueError(
-                        f"temporary HDF5 variant presence disagrees in {field.name}"
+                        f"HDF5 output variant presence disagrees in {field.name}"
                     )
                 names = {f"variant_{index:03d}" for index in range(variant_count)}
                 observed = {
@@ -1519,7 +1517,7 @@ def _verify_layout_v4(
                 } - {"variant_index"}
                 if variant_count < 0 or observed != names:
                     raise ValueError(
-                        f"temporary HDF5 variants disagree in {field.name}"
+                        f"HDF5 output variants disagree in {field.name}"
                     )
                 for variant_number in range(variant_count):
                     variant_name = f"variant_{variant_number:03d}"
@@ -1537,7 +1535,7 @@ def _verify_layout_v4(
                     data = variant.get("data")
                     if not np.array_equal(rows[:], expected_rows):
                         raise ValueError(
-                            f"temporary HDF5 variant rows disagree in {variant.name}"
+                            f"HDF5 output variant rows disagree in {variant.name}"
                         )
                     try:
                         value_shape = tuple(
@@ -1546,7 +1544,7 @@ def _verify_layout_v4(
                         numpy_dtype = np.dtype(variant.attrs["numpy_dtype"])
                     except (KeyError, TypeError, ValueError) as exc:
                         raise ValueError(
-                            f"temporary HDF5 variant is incomplete in {variant.name}"
+                            f"HDF5 output variant is incomplete in {variant.name}"
                         ) from exc
                     string_dtype = (
                         numpy_dtype.kind == "U"
@@ -1560,11 +1558,11 @@ def _verify_layout_v4(
                         numpy_dtype.kind != "U" and data.dtype != numpy_dtype
                     ):
                         raise ValueError(
-                            f"temporary HDF5 variant data disagrees in {variant.name}"
+                            f"HDF5 output variant data disagrees in {variant.name}"
                         )
             else:
                 raise ValueError(
-                    f"temporary HDF5 field kind is invalid in {field.name}"
+                    f"HDF5 output field kind is invalid in {field.name}"
                 )
 
     products = request.products
@@ -2480,7 +2478,7 @@ def _verify_layout_v4(
             path_name = family_paths[family]
             if not rows and path_name in h5:
                 raise ValueError(
-                    f"temporary HDF5 unexpectedly contains /{path_name}"
+                    f"HDF5 output unexpectedly contains /{path_name}"
                 )
         expected_telemetry_children = {"issue_refs"}
         if telemetry.decoder_info is not None:
@@ -2496,14 +2494,14 @@ def _verify_layout_v4(
                 expected_telemetry_children.add(name)
         telemetry_group = group_at(h5, "telemetry")
         if set(telemetry_group) != expected_telemetry_children:
-            raise ValueError("temporary HDF5 telemetry tree is not canonical")
+            raise ValueError("HDF5 output telemetry tree is not canonical")
         for path_name, datasets in specs.items():
             group = group_at(h5, path_name)
             for name, (shape, dtype) in datasets.items():
                 check_dataset(group, name, shape, dtype)
         for path_name, expected in attrs.items():
             if path_name and path_name not in h5:
-                raise ValueError(f"temporary HDF5 is missing /{path_name}")
+                raise ValueError(f"HDF5 output is missing /{path_name}")
             obj = h5 if path_name == "" else h5[path_name]
             check_attrs(obj, expected)
         for path_name, datasets in values.items():
@@ -2515,20 +2513,12 @@ def _verify_layout_v4(
         for path_name in forbidden_paths:
             if path_name in h5:
                 raise ValueError(
-                    f"temporary HDF5 persisted forbidden mask /{path_name}"
+                    f"HDF5 output persisted forbidden mask /{path_name}"
                 )
 
 
-def _install_atomic(temp_path: Path, dest: Path, *, overwrite: bool) -> None:
-    if overwrite:
-        os.replace(temp_path, dest)
-        return
-    os.link(temp_path, dest)
-    temp_path.unlink()
-
-
 def write_hdf5(request: WriteRequest, dest: Path | str) -> Path:
-    """Validate, write, verify, and atomically install one layout-v4 file."""
+    """Validate, write, and verify one layout-v4 file."""
     if not isinstance(request, WriteRequest):
         raise TypeError("write_hdf5 requires a validated WriteRequest")
     request.validate()
@@ -2538,34 +2528,18 @@ def write_hdf5(request: WriteRequest, dest: Path | str) -> Path:
     destination_preexisted = destination.exists()
     h5py = import_optional_dependency("h5py", "HDF5 ingest output")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
-        dir=destination.parent,
+    _write_layout_v4(
+        destination,
+        request,
+        h5py,
+        destination_preexisted=destination_preexisted,
     )
-    os.close(descriptor)
-    temporary = Path(temporary_name)
-    try:
-        _write_layout_v4(
-            temporary,
-            request,
-            h5py,
-            destination_preexisted=destination_preexisted,
-        )
-        _verify_layout_v4(
-            temporary,
-            request,
-            h5py,
-            destination_preexisted=destination_preexisted,
-        )
-        _install_atomic(
-            temporary,
-            destination,
-            overwrite=request.overwrite,
-        )
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
+    _verify_layout_v4(
+        destination,
+        request,
+        h5py,
+        destination_preexisted=destination_preexisted,
+    )
     log.info("wrote layout-v4 HDF5 %s", destination)
     return destination
 

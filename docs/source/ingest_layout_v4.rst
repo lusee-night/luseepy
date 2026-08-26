@@ -16,9 +16,9 @@ writer options. Legacy mutable decoder rows, anonymous calibrator arrays, and
 untyped telemetry mappings are not accepted.
 
 Existing destinations are refused by default. An explicit ``overwrite=True``
-is recorded in run provenance. Writers create and validate a sibling temporary
-file and then install it atomically, so a failed write does not damage an
-existing product.
+is recorded in run provenance. Writers write directly to the requested path
+and verify the closed output. If writing or verification fails, a partial
+output may remain; inspect it, then remove it or rerun with overwrite.
 
 Common provenance
 -----------------
@@ -106,9 +106,9 @@ multidimensional cell shapes retain their canonical widths. Unsigned 16-,
 validity column, so ``UINT64_MAX`` round-trips exactly through Astropy and
 fitsio. The transport encoding does not change the logical public dtype.
 
-The writer validates the complete request before creating a temporary file,
-writes checksums for every HDU, reopens the closed file with unsigned reading
-enabled, verifies structure and every checksum explicitly, reconstructs the
-logical layout tree, and requires exact attribute/dataset parity before atomic
-installation. HDF5 and FITS therefore preserve the same strict product rows;
-neither serializer is a layout-v2/v3 writing path.
+The writer validates the complete request before opening the output, writes
+checksums for every HDU, reopens the closed file with unsigned reading enabled,
+verifies structure and every checksum explicitly, reconstructs the logical
+layout tree, and requires exact attribute/dataset parity. HDF5 and FITS
+therefore preserve the same strict product rows; neither serializer is a
+layout-v2/v3 writing path.

@@ -1,4 +1,4 @@
-"""Layout-v4 FITS transport, parity, and atomic-output tests."""
+"""Layout-v4 FITS transport, parity, and validation tests."""
 
 from __future__ import annotations
 
@@ -20,10 +20,6 @@ from lusee.ingest.layout_v4_tree import (
     LayoutGroup,
     assert_layout_trees_equal,
 )
-
-
-def sibling_temporaries(destination: Path) -> list[Path]:
-    return list(destination.parent.glob(f".{destination.name}.*.tmp"))
 
 
 def hdu_for_path(hdul, path: str):
@@ -224,47 +220,20 @@ def test_existing_destination_is_refused_by_default(tmp_path: Path):
         fits_writer.write_fits(make_request(), destination)
 
     assert destination.read_bytes() == original
-    assert sibling_temporaries(destination) == []
 
 
-def test_verification_failure_preserves_existing_destination(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_overwrite_is_explicit_and_recorded(tmp_path: Path):
     destination = tmp_path / "existing.fits"
-    original = b"still original"
-    destination.write_bytes(original)
+    destination.write_bytes(b"old contents")
 
-    def fail(*args, **kwargs):
-        raise RuntimeError("injected FITS verification failure")
+    fits_writer.write_fits(make_request(overwrite=True), destination)
 
-    monkeypatch.setattr(fits_writer, "_verify_fits", fail)
-
-    with pytest.raises(RuntimeError, match="injected FITS verification"):
-        fits_writer.write_fits(make_request(overwrite=True), destination)
-
-    assert destination.read_bytes() == original
-    assert sibling_temporaries(destination) == []
-
-
-def test_no_overwrite_race_never_clobbers_new_destination(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    destination = tmp_path / "raced.fits"
-    verify_fits = fits_writer._verify_fits
-
-    def verify_then_create(*args, **kwargs):
-        verify_fits(*args, **kwargs)
-        destination.write_bytes(b"racing writer")
-
-    monkeypatch.setattr(fits_writer, "_verify_fits", verify_then_create)
-
-    with pytest.raises(FileExistsError):
-        fits_writer.write_fits(make_request(), destination)
-
-    assert destination.read_bytes() == b"racing writer"
-    assert sibling_temporaries(destination) == []
+    with fits.open(destination, uint=True, memmap=False) as hdul:
+        tree = fits_writer._read_layout_tree(hdul, fits)
+    run = tree["run_provenance"]
+    assert isinstance(run, LayoutGroup)
+    assert run.attrs["overwrite_requested"] == np.bool_(True)
+    assert run.attrs["destination_preexisted"] == np.bool_(True)
 
 
 def test_close_time_verifier_rejects_valid_checksum_schema_corruption(
@@ -272,10 +241,10 @@ def test_close_time_verifier_rejects_valid_checksum_schema_corruption(
     monkeypatch: pytest.MonkeyPatch,
 ):
     destination = tmp_path / "malformed.fits"
-    write_fits_temp = fits_writer._write_fits_temp
+    write_fits_file = fits_writer._write_fits_file
 
     def write_then_corrupt(path, root, fits_module):
-        write_fits_temp(path, root, fits_module)
+        write_fits_file(path, root, fits_module)
         with fits_module.open(path, mode="update", uint=True, memmap=False) as hdul:
             target = hdu_for_path(hdul, "/spectra")
             del target.header["COLJSON"]
@@ -283,13 +252,12 @@ def test_close_time_verifier_rejects_valid_checksum_schema_corruption(
                 hdu.add_checksum()
             hdul.flush(output_verify="exception")
 
-    monkeypatch.setattr(fits_writer, "_write_fits_temp", write_then_corrupt)
+    monkeypatch.setattr(fits_writer, "_write_fits_file", write_then_corrupt)
 
-    with pytest.raises(ValueError, match="temporary FITS.*COLJSON"):
+    with pytest.raises(ValueError, match="FITS.*COLJSON"):
         fits_writer.write_fits(make_all_family_request(), destination)
 
-    assert not destination.exists()
-    assert sibling_temporaries(destination) == []
+    assert destination.exists()
 
 
 @pytest.mark.parametrize(
@@ -303,10 +271,10 @@ def test_close_time_verifier_rejects_unexpected_column_semantics(
     value: object,
 ):
     destination = tmp_path / f"malformed-{keyword.lower()}.fits"
-    write_fits_temp = fits_writer._write_fits_temp
+    write_fits_file = fits_writer._write_fits_file
 
     def write_then_corrupt(path, root, fits_module):
-        write_fits_temp(path, root, fits_module)
+        write_fits_file(path, root, fits_module)
         with fits_module.open(path, mode="update", uint=True, memmap=False) as hdul:
             target = hdu_for_path(hdul, "/housekeeping")
             column_index = target.columns.names.index("firmware_errors") + 1
@@ -315,13 +283,12 @@ def test_close_time_verifier_rejects_unexpected_column_semantics(
                 hdu.add_checksum()
             hdul.flush(output_verify="exception")
 
-    monkeypatch.setattr(fits_writer, "_write_fits_temp", write_then_corrupt)
+    monkeypatch.setattr(fits_writer, "_write_fits_file", write_then_corrupt)
 
-    with pytest.raises(ValueError, match=f"temporary FITS header {keyword}"):
+    with pytest.raises(ValueError, match=f"FITS output header {keyword}"):
         fits_writer.write_fits(make_all_family_request(), destination)
 
-    assert not destination.exists()
-    assert sibling_temporaries(destination) == []
+    assert destination.exists()
 
 
 def test_close_time_verifier_rejects_duplicate_contract_card(
@@ -329,10 +296,10 @@ def test_close_time_verifier_rejects_duplicate_contract_card(
     monkeypatch: pytest.MonkeyPatch,
 ):
     destination = tmp_path / "duplicate-contract-card.fits"
-    write_fits_temp = fits_writer._write_fits_temp
+    write_fits_file = fits_writer._write_fits_file
 
     def write_then_corrupt(path, root, fits_module):
-        write_fits_temp(path, root, fits_module)
+        write_fits_file(path, root, fits_module)
         with fits_module.open(path, mode="update", uint=True, memmap=False) as hdul:
             target = hdu_for_path(hdul, "/housekeeping")
             target.header.append(("COLJSON", "{}"))
@@ -340,13 +307,12 @@ def test_close_time_verifier_rejects_duplicate_contract_card(
                 hdu.add_checksum()
             hdul.flush(output_verify="exception")
 
-    monkeypatch.setattr(fits_writer, "_write_fits_temp", write_then_corrupt)
+    monkeypatch.setattr(fits_writer, "_write_fits_file", write_then_corrupt)
 
-    with pytest.raises(ValueError, match="temporary FITS header COLJSON"):
+    with pytest.raises(ValueError, match="FITS output header COLJSON"):
         fits_writer.write_fits(make_all_family_request(), destination)
 
-    assert not destination.exists()
-    assert sibling_temporaries(destination) == []
+    assert destination.exists()
 
 
 def hdf5_tree(path: Path) -> LayoutGroup:

@@ -1,12 +1,10 @@
-"""Atomic FITS transport for the validated ingest layout v4 tree."""
+"""FITS transport for the validated ingest layout v4 tree."""
 
 from __future__ import annotations
 
 import base64
 import json
 import logging
-import os
-import tempfile
 from importlib import import_module
 from pathlib import Path
 
@@ -370,7 +368,7 @@ def _tree_to_hdul(root: LayoutGroup, fits):
     return fits.HDUList(hdus)
 
 
-def _write_fits_temp(path: Path, root: LayoutGroup, fits) -> None:
+def _write_fits_file(path: Path, root: LayoutGroup, fits) -> None:
     hdul = _tree_to_hdul(root, fits)
     try:
         hdul.writeto(
@@ -386,25 +384,25 @@ def _write_fits_temp(path: Path, root: LayoutGroup, fits) -> None:
 def _read_layout_tree(hdul, fits) -> LayoutGroup:
     primary = hdul[0]
     if not isinstance(primary, fits.PrimaryHDU):
-        raise TypeError("temporary FITS has no primary HDU")
+        raise TypeError("FITS output has no primary HDU")
     if (
         primary.header.get("LAYOUTV") != INGEST_LAYOUT_VERSION
         or primary.header.get("FITSFMT") != FITS_TRANSPORT_VERSION
         or primary.header.get(_PATH_KEY) != "/"
         or primary.header.get(_KIND_KEY) != "primary"
     ):
-        raise ValueError("temporary FITS primary contract disagrees")
+        raise ValueError("FITS output primary contract disagrees")
     root = LayoutGroup(path="", attrs=_decode_attrs(primary.header.get(_ATTRS_KEY)))
     if (
         primary.header.get("QUALITY") != root.attrs.get("quality_status")
         or primary.header.get("EXECMODE") != root.attrs.get("execution_mode")
     ):
-        raise ValueError("temporary FITS public provenance cards disagree")
+        raise ValueError("FITS output public provenance cards disagree")
     declared_paths = set()
     next_part: dict[str, int] = {}
     for hdu_index, hdu in enumerate(hdul[1:], start=1):
         if hdu.name != f"L4G{hdu_index:04d}":
-            raise ValueError("temporary FITS extension order disagrees")
+            raise ValueError("FITS output extension order disagrees")
         path = hdu.header.get(_PATH_KEY)
         kind = hdu.header.get(_KIND_KEY)
         if (
@@ -412,28 +410,28 @@ def _read_layout_tree(hdul, fits) -> LayoutGroup:
             or not path.startswith("/")
             or path == "/"
         ):
-            raise ValueError("temporary FITS group path is invalid")
+            raise ValueError("FITS output group path is invalid")
         group = _require_tree_group(root, path)
         if kind in ("group", "table"):
             if path in declared_paths:
-                raise ValueError("temporary FITS group path is duplicated")
+                raise ValueError("FITS output group path is duplicated")
             declared_paths.add(path)
             group.attrs.update(_decode_attrs(hdu.header.get(_ATTRS_KEY)))
         elif kind == "table-part":
             if path not in declared_paths or _ATTRS_KEY in hdu.header:
-                raise ValueError("temporary FITS table partition is invalid")
+                raise ValueError("FITS output table partition is invalid")
             part = hdu.header.get(_PART_KEY)
             if type(part) is not int or part != next_part.get(path, 0):
-                raise ValueError("temporary FITS table partition order disagrees")
+                raise ValueError("FITS output table partition order disagrees")
             next_part[path] = part + 1
         else:
-            raise ValueError(f"temporary FITS HDU kind disagrees at {path}")
+            raise ValueError(f"FITS output HDU kind disagrees at {path}")
         if kind == "group":
             if not isinstance(hdu, fits.ImageHDU) or hdu.data is not None:
-                raise ValueError(f"temporary FITS group HDU disagrees at {path}")
+                raise ValueError(f"FITS output group HDU disagrees at {path}")
             continue
         if not isinstance(hdu, fits.BinTableHDU):
-            raise TypeError(f"temporary FITS table HDU disagrees at {path}")
+            raise TypeError(f"FITS output table HDU disagrees at {path}")
         _read_group_datasets(group, hdu)
     return root
 
@@ -446,7 +444,7 @@ def _require_tree_group(root: LayoutGroup, path: str) -> LayoutGroup:
             child = group._new_group(part)
             group.children[part] = child
         if not isinstance(child, LayoutGroup):
-            raise TypeError(f"temporary FITS path crosses a dataset: {path}")
+            raise TypeError(f"FITS output path crosses a dataset: {path}")
         group = child
     return group
 
@@ -454,31 +452,31 @@ def _require_tree_group(root: LayoutGroup, path: str) -> LayoutGroup:
 def _read_group_datasets(group: LayoutGroup, hdu) -> None:
     raw_schema = hdu.header.get(_COLUMNS_KEY)
     if type(raw_schema) is not str:
-        raise ValueError(f"temporary FITS column schema is missing at {group.path}")
+        raise ValueError(f"FITS output column schema is missing at {group.path}")
     try:
         schema = json.loads(raw_schema)
     except json.JSONDecodeError as exc:
         raise ValueError(
-            f"temporary FITS column schema is invalid at {group.path}"
+            f"FITS output column schema is invalid at {group.path}"
         ) from exc
     if not isinstance(schema, dict) or not schema:
-        raise ValueError(f"temporary FITS columns disagree at {group.path}")
+        raise ValueError(f"FITS output columns disagree at {group.path}")
     transport_names = []
     for name, record in schema.items():
         if not isinstance(record, dict):
             raise TypeError(
-                f"temporary FITS column record is invalid at {group.path}"
+                f"FITS output column record is invalid at {group.path}"
             )
         transport_name = record.get("transport_name", name)
         if type(transport_name) is not str:
             raise TypeError(
-                f"temporary FITS transport name is invalid at {group.path}"
+                f"FITS output transport name is invalid at {group.path}"
             )
         transport_names.append(transport_name)
     if len(set(transport_names)) != len(transport_names) or (
         list(hdu.columns.names) != transport_names
     ):
-        raise ValueError(f"temporary FITS columns disagree at {group.path}")
+        raise ValueError(f"FITS output columns disagree at {group.path}")
     for column_index, (name, record) in enumerate(schema.items(), start=1):
         transport_name = transport_names[column_index - 1]
         expected_tform = record.get("tform")
@@ -488,7 +486,7 @@ def _read_group_datasets(group: LayoutGroup, hdu) -> None:
             or observed_tform.strip() != expected_tform
         ):
             raise ValueError(
-                f"temporary FITS TFORM disagrees for {group.path}/{name}"
+                f"FITS output TFORM disagrees for {group.path}/{name}"
             )
         bzero = record.get("bzero")
         observed_bzero = hdu.header.get(f"TZERO{column_index}")
@@ -496,19 +494,19 @@ def _read_group_datasets(group: LayoutGroup, hdu) -> None:
         if bzero is None:
             if observed_bzero is not None:
                 raise ValueError(
-                    f"temporary FITS unsigned scaling is unexpected for "
+                    f"FITS output unsigned scaling is unexpected for "
                     f"{group.path}/{name}"
                 )
         elif observed_bzero != bzero or observed_scale not in (None, 1):
             raise ValueError(
-                f"temporary FITS unsigned scaling disagrees for "
+                f"FITS output unsigned scaling disagrees for "
                 f"{group.path}/{name}"
             )
         dataset = _decode_column(hdu.data[transport_name], record)
         raw_attrs = record.get("attrs")
         if not isinstance(raw_attrs, dict):
             raise TypeError(
-                f"temporary FITS dataset attributes are invalid at "
+                f"FITS output dataset attributes are invalid at "
                 f"{group.path}/{name}"
             )
         dataset.attrs = {
@@ -517,7 +515,7 @@ def _read_group_datasets(group: LayoutGroup, hdu) -> None:
         }
         if name in group.children:
             raise ValueError(
-                f"temporary FITS duplicates dataset {group.path}/{name}"
+                f"FITS output duplicates dataset {group.path}/{name}"
             )
         group.children[name] = dataset
 
@@ -537,7 +535,7 @@ def _decode_column(raw: object, record: dict[str, object]) -> LayoutDataset:
     if encoding == "utf8":
         width = record.get("utf8_width")
         if type(width) is not int or width <= 0:
-            raise ValueError("temporary FITS UTF-8 width is invalid")
+            raise ValueError("FITS output UTF-8 width is invalid")
         row_count = logical_shape[0]
         cell_shape = logical_shape[1:]
         element_count = (
@@ -552,14 +550,14 @@ def _decode_column(raw: object, record: dict[str, object]) -> LayoutDataset:
             try:
                 values.append(encoded.decode("utf-8"))
             except UnicodeDecodeError as exc:
-                raise ValueError("temporary FITS UTF-8 value is invalid") from exc
+                raise ValueError("FITS output UTF-8 value is invalid") from exc
         data = np.asarray(values, dtype=object).reshape(logical_shape)
         return LayoutDataset(data=data, is_utf8=True)
     dtype = np.dtype(logical_dtype)
     if encoding == "bytes":
         itemsize = record.get("itemsize")
         if type(itemsize) is not int or itemsize != dtype.itemsize:
-            raise ValueError("temporary FITS byte width disagrees")
+            raise ValueError("FITS output byte width disagrees")
         storage = np.asarray(raw, dtype=np.uint8).reshape(
             *logical_shape, itemsize
         )
@@ -568,7 +566,7 @@ def _decode_column(raw: object, record: dict[str, object]) -> LayoutDataset:
         )
         return LayoutDataset(data=data)
     if encoding not in ("native", "unsigned", "int8"):
-        raise ValueError("temporary FITS column encoding is unsupported")
+        raise ValueError("FITS output column encoding is unsupported")
     data = np.asarray(raw).astype(dtype, copy=False).reshape(logical_shape)
     return LayoutDataset(data=data)
 
@@ -583,13 +581,13 @@ def _verify_fits(path: Path, expected: LayoutGroup, fits) -> None:
                 or hdu.verify_checksum() != 1
                 or hdu.verify_datasum() != 1
             ):
-                raise ValueError("temporary FITS checksum contract failed")
+                raise ValueError("FITS output checksum contract failed")
         _verify_transport_headers(hdul, expected, fits)
         observed = _read_layout_tree(hdul, fits)
     assert_layout_trees_equal(
         expected,
         observed,
-        context="temporary FITS",
+        context="FITS output",
     )
 
 
@@ -597,13 +595,13 @@ def _verify_transport_headers(observed, expected_root: LayoutGroup, fits) -> Non
     expected = _tree_to_hdul(expected_root, fits)
     try:
         if len(observed) != len(expected):
-            raise ValueError("temporary FITS HDU count disagrees")
+            raise ValueError("FITS output HDU count disagrees")
         for hdu_index, (observed_hdu, expected_hdu) in enumerate(
             zip(observed, expected, strict=True)
         ):
             if type(observed_hdu) is not type(expected_hdu):
                 raise TypeError(
-                    f"temporary FITS HDU type disagrees at index {hdu_index}"
+                    f"FITS output HDU type disagrees at index {hdu_index}"
                 )
             for name in (
                 "ORIGIN",
@@ -633,7 +631,7 @@ def _verify_transport_headers(observed, expected_root: LayoutGroup, fits) -> Non
                     != expected_hdu.header.get(name)
                 ):
                     raise ValueError(
-                        f"temporary FITS header {name} disagrees at "
+                        f"FITS output header {name} disagrees at "
                         f"index {hdu_index}"
                     )
             if not isinstance(expected_hdu, fits.BinTableHDU):
@@ -641,13 +639,13 @@ def _verify_transport_headers(observed, expected_root: LayoutGroup, fits) -> Non
                     _semantic_header_cards(expected_hdu.header)
                 ):
                     raise ValueError(
-                        f"temporary FITS complete header disagrees at "
+                        f"FITS output complete header disagrees at "
                         f"index {hdu_index}"
                     )
                 continue
             if observed_hdu.columns.names != expected_hdu.columns.names:
                 raise ValueError(
-                    f"temporary FITS column names disagree at index {hdu_index}"
+                    f"FITS output column names disagree at index {hdu_index}"
                 )
             for column_index in range(1, len(expected_hdu.columns) + 1):
                 for prefix in (
@@ -667,30 +665,22 @@ def _verify_transport_headers(observed, expected_root: LayoutGroup, fits) -> Non
                         != expected_hdu.header.get(key)
                     ):
                         raise ValueError(
-                            f"temporary FITS header {key} disagrees at "
+                            f"FITS output header {key} disagrees at "
                             f"index {hdu_index}"
                         )
             if _semantic_header_cards(observed_hdu.header) != (
                 _semantic_header_cards(expected_hdu.header)
             ):
                 raise ValueError(
-                    f"temporary FITS complete header disagrees at "
+                    f"FITS output complete header disagrees at "
                     f"index {hdu_index}"
                 )
     finally:
         expected.close()
 
 
-def _install_atomic(temp_path: Path, destination: Path, *, overwrite: bool) -> None:
-    if overwrite:
-        os.replace(temp_path, destination)
-        return
-    os.link(temp_path, destination)
-    temp_path.unlink()
-
-
 def write_fits(request: WriteRequest, dest: Path | str) -> Path:
-    """Validate, write, verify, and atomically install one layout-v4 FITS file."""
+    """Validate, write, and verify one layout-v4 FITS file."""
     if not isinstance(request, WriteRequest):
         raise TypeError("write_fits requires a validated WriteRequest")
     request.validate()
@@ -704,20 +694,8 @@ def write_fits(request: WriteRequest, dest: Path | str) -> Path:
         destination_preexisted=destination_preexisted,
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
-        dir=destination.parent,
-    )
-    os.close(descriptor)
-    temporary = Path(temporary_name)
-    try:
-        _write_fits_temp(temporary, expected, fits)
-        _verify_fits(temporary, expected, fits)
-        _install_atomic(temporary, destination, overwrite=request.overwrite)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
+    _write_fits_file(destination, expected, fits)
+    _verify_fits(destination, expected, fits)
     log.info("wrote layout-v4 FITS %s", destination)
     return destination
 
