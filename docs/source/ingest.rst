@@ -67,11 +67,63 @@ After a failure, inspect the emitted manifest when present, correct the input
 or command, and rerun manually; use ``--overwrite`` when replacing the failed
 run's destinations.
 
-Missing private telemetry does not invalidate independent science products.
-It remains explicitly absent, with no invented values and no extrapolation.
-For an extracted session, ``--no-rederive-telemetry`` skips lookup through the
-raw FLASH backreference; an existing historical JSON sidecar remains a legacy
-fallback.
+Fixed optional DCB telemetry
+----------------------------
+
+Telemetry has two frozen input forms: complete logical ``0x314`` packets with
+the existing 57-field record, and the historic binary
+``DCB_telemetry.json`` sidecar. Despite its suffix, the sidecar is not JSON
+text. ``process-flash`` decodes ``0x314`` once and assigns disjoint row slices
+to science sessions. ``process-session`` uses only the sidecar in that
+session, when present; it does not reopen FLASH or try another telemetry
+source. ``0x325`` encoder packets are not part of this path.
+
+Both forms use the optional private ``lusee_telemetry`` package. If that
+package is absent, fails to import, raises, or returns malformed data,
+ingestion warns once, omits telemetry, and continues otherwise valid science
+output successfully. A telemetry problem does not change science family,
+root, run, or command-exit quality. No public decoder negotiation,
+interpolation, source fallback, or encoder interpretation is performed.
+
+When decoding succeeds, HDF5 and FITS store the same fixed table: source kind,
+57 field names and units, source indices, integer ``mission_seconds`` and
+``lusee_subsecs``, optional calibrated MJD, raw ``uint16`` counts,
+engineering values, and their validity mask. Invalid engineering values are
+NaN with a false validity bit; raw counts remain available. A decoded
+zero-byte sidecar is a valid zero-row table.
+
+Caller-owned gain telemetry
+---------------------------
+
+Public users can run gain conversion without the private decoder by manually
+supplying all six gain-model inputs for each call. The following values are an
+illustrative operating assumption used by an existing public golden test;
+they were not measured in, or derived from, the good telemetry trees and must
+not be described as representative flight telemetry. The temperatures are
+mutually consistent, the voltages are close to nominal 1.8 V and 1.2 V rails,
+and 45 mA is physically plausible but not independently validated.
+
+.. code-block:: python
+
+   assumed_telemetry = {
+       "THERM_FPGA": 30.4,    # degC
+       "SPE_ADC0_T": 29.8,    # degC
+       "SPE_ADC1_T": 28.5,    # degC
+       "SPE_1VAD8_V": 1.799,  # V
+       "VMON_1V2D": 1.201,    # V
+       "SPE_1VAD8_C": 0.045,  # A
+   }
+
+   physical = data.to_physical(telemetry=assumed_telemetry)
+   physical_psd = data.to_physical_psd(telemetry=assumed_telemetry)
+
+This dictionary is strictly opt-in and caller-owned. Construct it explicitly
+and pass it through ``telemetry=`` on every conversion call. Each value may be
+a scalar, broadcast only for that call, or an array of exact shape
+``(Nspectra,)``. The package never defines, selects, caches, or persists these
+assumptions and never substitutes them when decoded row-aligned telemetry is
+absent. With neither row-aligned telemetry nor an explicit ``telemetry=``
+mapping, both conversion methods raise the existing missing-input error.
 
 Status, issues, and exits
 -------------------------

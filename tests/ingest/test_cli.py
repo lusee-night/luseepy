@@ -12,6 +12,14 @@ from lusee.ingest import cli, pipeline
 from lusee.ingest.issues import IssuePolicy
 
 
+ABSENT_TELEMETRY_DIAGNOSTICS = {
+    "telemetry_status": "absent",
+    "telemetry_reason": None,
+    "telemetry_source": None,
+    "n_telemetry_rows": 0,
+}
+
+
 def test_status_exit_codes():
     assert cli.status_exit_code("clean") == 0
     assert cli.status_exit_code("partial") == 2
@@ -45,7 +53,6 @@ def test_process_session_routes_options_and_prints_paths(
     monkeypatch.setattr(cli.pipeline, "process_session", process_session)
     session_dir = tmp_path / "input"
     landing = tmp_path / "landing.json"
-    flash_root = tmp_path / "flash"
     result = cli.main([
         "process-session",
         str(session_dir),
@@ -63,9 +70,6 @@ def test_process_session_routes_options_and_prints_paths(
         "chosen",
         "--ordinal",
         "4",
-        "--flash-root",
-        str(flash_root),
-        "--no-rederive-telemetry",
         "--overwrite",
         "--issue-policy",
         "strict",
@@ -79,8 +83,6 @@ def test_process_session_routes_options_and_prints_paths(
     assert seen["landing_time_file"] == landing
     assert seen["name"] == "chosen"
     assert seen["ordinal"] == 4
-    assert seen["flash_root"] == flash_root
-    assert seen["rederive_telemetry"] is False
     assert seen["overwrite"] is True
     assert seen["issue_collector"].policy is IssuePolicy.STRICT
     assert seen["decoder_strict"] is True
@@ -90,6 +92,26 @@ def test_process_session_routes_options_and_prints_paths(
     assert f"hdf5: {h5_path}" in output
     assert f"manifest: {manifest_path}" in output
     assert "issues: none" in output
+
+
+@pytest.mark.parametrize("option", ["--flash-root", "--no-rederive-telemetry"])
+def test_process_session_removed_telemetry_options_are_rejected(
+    tmp_path,
+    option,
+    capsys,
+):
+    args = [
+        "process-session",
+        str(tmp_path / "input"),
+        "--manifest-dir",
+        str(tmp_path / "manifests"),
+        option,
+    ]
+    if option == "--flash-root":
+        args.append(str(tmp_path / "flash"))
+
+    assert cli.main(args) == 1
+    assert "unrecognized arguments" in capsys.readouterr().err
 
 
 def test_process_flash_partial_returns_two_and_summarizes_issues(
@@ -256,6 +278,7 @@ def test_validate_flash_rejects_unlinked_session(tmp_path, capsys):
         "manifest_kind": "session",
         "manifest_schema_version": pipeline.MANIFEST_SCHEMA_VERSION,
         "status": "clean",
+        **ABSENT_TELEMETRY_DIAGNOSTICS,
     }), encoding="ascii")
     (tmp_path / "flash.json").write_text(json.dumps({
         "manifest_kind": "flash",
@@ -272,11 +295,37 @@ def test_validate_flash_rejects_unlinked_session(tmp_path, capsys):
             "session_name": "session_000",
             "session_dir": "session_000",
             "status": "clean",
+            **ABSENT_TELEMETRY_DIAGNOSTICS,
         }],
     }), encoding="ascii")
 
     assert cli.main(["validate", str(tmp_path / "flash.json")]) == 1
     assert "not linked" in capsys.readouterr().err
+
+
+def test_validate_flash_rejects_invalid_telemetry_diagnostics(tmp_path, capsys):
+    (tmp_path / "flash.json").write_text(json.dumps({
+        "manifest_kind": "flash",
+        "manifest_schema_version": pipeline.MANIFEST_SCHEMA_VERSION,
+        "locator_contract": {
+            "version": 1,
+            "base": "sessions_root",
+            "canonical_manifest": "flash.json",
+            "external_copies_are_mirrors": True,
+        },
+        "status": "failed",
+        "sessions": [{
+            "session_ordinal": 0,
+            "session_name": "session_000",
+            "session_dir": None,
+            "status": "failed",
+            **ABSENT_TELEMETRY_DIAGNOSTICS,
+            "n_telemetry_rows": True,
+        }],
+    }), encoding="ascii")
+
+    assert cli.main(["validate", str(tmp_path / "flash.json")]) == 1
+    assert "n_telemetry_rows" in capsys.readouterr().err
 
 
 def write_linked_flash_fixture(
@@ -322,6 +371,7 @@ def write_linked_flash_fixture(
                 "session_name": f"session_{ordinal:03d}",
                 "session_dir": locators[ordinal],
                 "status": session_statuses[ordinal],
+                **ABSENT_TELEMETRY_DIAGNOSTICS,
             }
             for ordinal in range(2)
         ],
@@ -344,6 +394,7 @@ def write_linked_flash_fixture(
             "clock_reference": clock_reference,
             "session_ordinal": ordinal,
             "session_name": f"session_{ordinal:03d}",
+            **ABSENT_TELEMETRY_DIAGNOSTICS,
         }), encoding="ascii")
     return flash_path
 

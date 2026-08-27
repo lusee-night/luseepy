@@ -7,7 +7,11 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from lusee.ingest.clock_reference import ClockReferenceSet
+from lusee.ingest.clock_reference import (
+    ClockReference,
+    ClockReferenceSet,
+    ClockSource,
+)
 from lusee.ingest.decode import CalDataSample as LegacyCalDataSample
 from lusee.ingest.decode import Products
 from lusee.ingest.issues import IngestIssue, IssueAction, IssueSeverity
@@ -19,18 +23,12 @@ from lusee.ingest.products import (
     SourcePacketProvenance,
     ValidatedCounts,
 )
-from lusee.ingest.telemetry import (
-    TelemetryCoverage,
-    TelemetryDecodeResult,
-    TelemetryDecoderStatus,
-    TelemetryInputState,
-)
+from lusee.ingest.telemetry import TelemetryData
 from lusee.ingest.write_request import (
     ALL_FAMILIES,
     UNSUPPORTED_FAMILIES,
     FamilyCoverage,
     FamilyStatus,
-    InterpolationPolicy,
     LunarLocation,
     RunProvenance,
     WriteRequest,
@@ -138,6 +136,23 @@ def make_clock_reference_set() -> ClockReferenceSet:
     )
 
 
+def make_telemetry(*, mjd_times=None) -> TelemetryData:
+    if mjd_times is None:
+        mjd_times = np.array([np.nan], dtype=np.float64)
+    return TelemetryData(
+        source_kind="b01_0x314",
+        field_names=tuple(f"field_{index}" for index in range(57)),
+        units=("V",) * 57,
+        source_indices=np.array([3], dtype=np.int64),
+        mission_seconds=np.array([10], dtype=np.uint32),
+        lusee_subsecs=np.array([32768], dtype=np.uint16),
+        mjd_times=mjd_times,
+        raw_counts=np.zeros((1, 57), dtype=np.uint16),
+        values=np.zeros((1, 57), dtype=np.float64),
+        valid=np.ones((1, 57), dtype=np.bool_),
+    )
+
+
 def make_issue() -> IngestIssue:
     return IngestIssue(
         issue_id="issue-0001",
@@ -198,8 +213,7 @@ def test_write_request_preserves_existing_positional_constructor_order():
         values["run_provenance"],
         values["issues"],
         values["family_statuses"],
-        TelemetryDecodeResult.absent(),
-        InterpolationPolicy(),
+        None,
         False,
         "gzip",
         1,
@@ -334,13 +348,12 @@ def test_write_request_rejects_issue_integer_overflow():
         WriteRequest(**values)
 
 
-@pytest.mark.parametrize("telemetry_field", ["fpga_telemetry", "encoder_telemetry"])
-def test_write_request_rejects_untyped_telemetry(telemetry_field: str):
+def test_write_request_rejects_untyped_telemetry():
     products = make_products()
     values = request_values(products)
-    values[telemetry_field] = {"raw_seconds": np.array([1.0], dtype=np.float64)}
+    values["telemetry"] = {"raw_seconds": np.array([1.0], dtype=np.float64)}
 
-    with pytest.raises(TypeError, match="unexpected keyword argument"):
+    with pytest.raises(TypeError, match="TelemetryData or None"):
         WriteRequest(**values)
 
 
@@ -353,29 +366,18 @@ def test_write_request_rejects_issue_mismatch():
         WriteRequest(**values)
 
 
-def test_write_request_rejects_conflicting_issue_records_with_same_id():
+def test_telemetry_does_not_join_issue_union_or_family_statuses():
     products = make_products()
-    science_issue = make_issue()
-    products.issues = (science_issue,)
-    telemetry_issue = replace(science_issue, message="different issue body")
-    telemetry = TelemetryDecodeResult(
-        input_source="b01",
-        input_state=TelemetryInputState.PRESENT,
-        decoder_status=TelemetryDecoderStatus.UNAVAILABLE,
-        coverage=TelemetryCoverage.UNAVAILABLE,
-        issues=(telemetry_issue,),
-    )
     values = request_values(products)
-    values["telemetry"] = telemetry
-    values["issues"] = (science_issue,)
-    values["family_statuses"] = family_statuses_for_products(
-        products,
-        family_issue_ids={},
-        telemetry=telemetry,
-    )
+    values["telemetry"] = make_telemetry()
 
-    with pytest.raises(ValueError, match="reuse an ID with different records"):
-        WriteRequest(**values)
+    request = WriteRequest(**values)
+
+    assert request.issues == ()
+    assert request.quality_status is DataQuality.CLEAN
+    assert "dcb_telemetry" not in {
+        status.family for status in request.family_statuses
+    }
 
 
 def test_partial_quality_requires_recorded_issue():
@@ -412,22 +414,43 @@ def test_write_request_rejects_unknown_family_issue_reference():
         WriteRequest(**values)
 
 
-def test_write_request_rejects_noncanonical_telemetry_family_status():
+def test_write_request_rejects_finite_telemetry_time_without_dcb_reference():
     products = make_products()
     values = request_values(products)
-    statuses = list(values["family_statuses"])
-    index = next(
-        index
-        for index, status in enumerate(statuses)
-        if status.family == "dcb_telemetry"
+    values["telemetry"] = make_telemetry(
+        mjd_times=np.array([60000.0], dtype=np.float64)
     )
-    statuses[index] = replace(
-        statuses[index],
-        coverage=FamilyCoverage.PRESENT_EMPTY,
-    )
-    values["family_statuses"] = tuple(statuses)
 
-    with pytest.raises(ValueError, match="family status disagrees"):
+    with pytest.raises(ValueError, match="requires a DCB clock reference"):
+        WriteRequest(**values)
+
+
+def test_write_request_requires_exact_dcb_telemetry_time():
+    products = make_products()
+    reference_set = ClockReferenceSet(
+        format_version=1,
+        reference_event="landing",
+        clock_reference_isot="2026-01-01T00:00:00",
+        time_scale="utc",
+        clocks=(ClockReference(ClockSource.DCB, 10.0),),
+        source="test fixture",
+        assumed=False,
+        source_sha256="e" * 64,
+    )
+    raw_seconds = np.array([10.5], dtype=np.float64)
+    expected = np.asarray(
+        reference_set.to_mjd(raw_seconds, clock_source=ClockSource.DCB),
+        dtype=np.float64,
+    )
+    values = request_values(products)
+    values["clock_reference_set"] = reference_set
+    values["clock_reference_unavailable_reason"] = None
+    values["telemetry"] = make_telemetry(mjd_times=expected)
+
+    assert WriteRequest(**values).telemetry is values["telemetry"]
+
+    values["telemetry"] = make_telemetry(mjd_times=expected + 1.0)
+    with pytest.raises(ValueError, match="contradict the DCB clock reference"):
         WriteRequest(**values)
 
 

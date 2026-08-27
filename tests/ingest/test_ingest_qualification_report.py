@@ -37,6 +37,27 @@ def family_metadata(counts: dict[str, int]) -> dict[str, dict[str, str]]:
     }
 
 
+def fixed_telemetry(row_count: int = 2) -> ingest.TelemetryData:
+    field_names = tuple(f"field_{index:02d}" for index in range(57))
+    units = tuple("raw" for _ in field_names)
+    raw_counts = np.arange(row_count * 57, dtype=np.uint16).reshape(
+        row_count,
+        57,
+    )
+    return ingest.TelemetryData(
+        source_kind="legacy_binary_sidecar",
+        field_names=field_names,
+        units=units,
+        source_indices=np.arange(row_count, dtype=np.int64),
+        mission_seconds=np.arange(100, 100 + row_count, dtype=np.uint32),
+        lusee_subsecs=np.arange(row_count, dtype=np.uint16),
+        mjd_times=np.arange(60000, 60000 + row_count, dtype=np.float64),
+        raw_counts=raw_counts,
+        values=raw_counts.astype(np.float64),
+        valid=np.ones((row_count, 57), dtype=np.bool_),
+    )
+
+
 def test_products_summary_counts_strict_calibrator_families():
     products = SimpleNamespace(
         calibrator_metadata=[object()],
@@ -125,7 +146,7 @@ def test_raw_qualification_threads_landing_file_to_parse_flash(
     def fake_parse_flash(path, *, landing_time_file, issue_collector):
         assert isinstance(issue_collector, ingest.IssueCollector)
         seen.append((path, landing_time_file))
-        return [], {}, {}
+        return [], None
 
     monkeypatch.setattr(ingest, "parse_flash", fake_parse_flash)
 
@@ -214,7 +235,7 @@ def test_raw_context_and_global_issues_reach_request_and_report(
             message="synthetic run-global issue",
             action="kept",
         )
-        return [session], ingest.TelemetryDecodeResult.absent(), None
+        return [session], None
 
     def fake_read_session(path, *, issue_collector):
         return products
@@ -254,12 +275,11 @@ def test_raw_context_and_global_issues_reach_request_and_report(
     ].count("source.synthetic_global") == 1
 
 
-def test_write_one_session_reports_product_and_telemetry_issues(
+def test_write_one_session_reports_product_issues_but_not_skipped_telemetry(
     tmp_path: Path,
     monkeypatch,
 ):
     from test_ingest_reader import make_issue_request
-    from test_layout_v4_telemetry import failed_telemetry_request
 
     config = make_direct_config(tmp_path, ("typed-issues",))
     target = config.targets[0]
@@ -290,24 +310,27 @@ def test_write_one_session_reports_product_and_telemetry_issues(
         clock_adapter,
     )
 
-    telemetry_request = failed_telemetry_request(
-        ingest.TelemetryDecoderStatus.BROKEN
-    )
-    telemetry_artifact = report.write_one_session(
+    skipped_artifact = report.write_one_session(
         target,
-        "telemetry_issue",
-        telemetry_request.products,
+        "telemetry_skipped",
+        product_request.products,
         work_dir,
         clock_adapter,
-        telemetry=telemetry_request.telemetry,
+        telemetry_status="skipped",
+        telemetry_source="legacy_binary_sidecar",
+        telemetry_reason="decoder unavailable",
     )
 
     assert [issue["code"] for issue in product_artifact.issues] == [
         "decode.fixture_issue"
     ]
-    assert [issue["code"] for issue in telemetry_artifact.issues] == [
-        "telemetry_decoder.broken"
+    assert [issue["code"] for issue in skipped_artifact.issues] == [
+        "decode.fixture_issue"
     ]
+    assert skipped_artifact.telemetry_status == "skipped"
+    assert skipped_artifact.telemetry_source == "legacy_binary_sidecar"
+    assert skipped_artifact.telemetry_reason == "decoder unavailable"
+    assert skipped_artifact.n_telemetry_rows == 0
 
 
 def test_qualification_issue_record_redacts_nested_private_paths(tmp_path: Path):
@@ -545,7 +568,6 @@ def test_coverage_states_and_zero_statistics_are_explicit():
         family_counts(),
         family_counts(),
         set(),
-        telemetry_state="present_empty",
     )
     telemetry_rows = [
         row for row in present_empty_rows if row["family"] == "telemetry"
@@ -653,12 +675,15 @@ def test_representative_selection_honors_stable_identity_and_fails_closed():
 
 
 def test_bundle_semantic_comparator_reports_every_mismatch_class():
+    telemetry = fixed_telemetry()
     hdf5_bundle = SimpleNamespace(
         spectra=np.array([1.0, np.nan], dtype=np.float32),
         spectra_unique_ids=np.array([1], dtype=np.int16),
         tr_spectra=np.array([1, 2], dtype=np.int16),
         zoom_spectra=np.array([1], dtype=np.int16),
         grimm_spectra=np.array([1, 2], dtype=np.int16),
+        telemetry=telemetry,
+        telemetry_sessions=(telemetry,),
         constants={"hdf5_only": np.array([1], dtype=np.int16)},
     )
     fits_bundle = SimpleNamespace(
@@ -666,6 +691,8 @@ def test_bundle_semantic_comparator_reports_every_mismatch_class():
         tr_spectra=np.array([[1, 2]], dtype=np.int16),
         zoom_spectra=np.array([1], dtype=np.int32),
         grimm_spectra=np.array([1, 3], dtype=np.int16),
+        telemetry=telemetry,
+        telemetry_sessions=(telemetry,),
         constants={"fits_only": np.array([1], dtype=np.int16)},
     )
     records = report.compare_semantics(
@@ -681,6 +708,22 @@ def test_bundle_semantic_comparator_reports_every_mismatch_class():
     assert by_field["zoom/data"]["status"] == "dtype_mismatch"
     assert by_field["grimm/data"]["status"] == "value_mismatch"
     assert by_field["grimm/data"]["first_index"] == 1
+    assert {
+        field_path
+        for field_path, record in by_field.items()
+        if field_path.startswith("telemetry/") and record["status"] == "equal"
+    } == {
+        "telemetry/field_names",
+        "telemetry/lusee_subsecs",
+        "telemetry/mjd_times",
+        "telemetry/mission_seconds",
+        "telemetry/raw_counts",
+        "telemetry/source_indices",
+        "telemetry/source_kind",
+        "telemetry/units",
+        "telemetry/valid",
+        "telemetry/values",
+    }
 
 
 def test_public_writer_reader_parity_for_supported_fields(tmp_path: Path):
@@ -760,6 +803,7 @@ def test_public_bundle_reader_preserves_legacy_frequency_evidence(tmp_path: Path
 
 
 def test_family_pages_are_unique_hdf5_based_and_label_open_contracts(tmp_path: Path):
+    telemetry_table = fixed_telemetry()
     bundle = SimpleNamespace(
         layout_version=3,
         spectra=np.zeros((2, 16, 8), dtype=np.float32),
@@ -784,20 +828,8 @@ def test_family_pages_are_unique_hdf5_based_and_label_open_contracts(tmp_path: P
         grimm_spectra=np.ones((1, 16, 32), dtype=np.float32),
         grimm_unique_ids=np.array([30], dtype=np.int64),
         grimm_raw_times=np.array([40.0]),
-        dcb_fpga={
-            "mission_seconds": np.array([100.0, 101.0]),
-            "lusee_subsecs": np.array([0.0, 1.0]),
-            "THERM_DCB": np.array([1.0, 2.0]),
-            "VMON_1V8": np.array([3.0, 4.0]),
-            "SPE_P5_C": np.array([5.0, 6.0]),
-            "ADC_PWR": np.array([0.0, 2.0]),
-        },
-        dcb_encoder={
-            "mission_seconds": np.array([100.0, 101.0]),
-            "lusee_subsecs": np.array([0.0, 1.0]),
-            "enc_pos": np.array([10, 12], dtype=np.int64),
-            "enc_status": np.array([1, 1], dtype=np.int64),
-        },
+        telemetry=telemetry_table,
+        telemetry_sessions=(telemetry_table,),
         housekeeping={
             2: {
                 "raw_seconds": np.array([200.0, 203.0]),
@@ -851,28 +883,12 @@ def test_family_pages_are_unique_hdf5_based_and_label_open_contracts(tmp_path: P
         assert any(issue["code"] == "plot.frequency_axis_unresolved" for issue in issues)
         assert any(issue["code"] == "plot.grimm_layout_unsupported" for issue in issues)
         telemetry = next(page for page in pages if page.family == "telemetry")
-        assert any("ADC time unmapped" in text.get_text() for text in telemetry.figure.texts)
         telemetry_text = "\n".join(text.get_text() for text in telemetry.figure.texts)
-        assert "assumed DCB FPGA seconds from landing" in telemetry_text
-        assert "assumed DCB encoder seconds from landing" in telemetry_text
-        assert telemetry_text.count("sampling_gap_median") == 2
-        assert telemetry_text.count("sampling_gap_maximum") == 2
-        assert "FPGA ADC_PWR" in telemetry_text
-        assert "valid=2" in telemetry_text
-        assert "missing=0" in telemetry_text
-        assert "minimum=0" in telemetry_text
-        assert "maximum=2" in telemetry_text
-        assert "mean=1" in telemetry_text
-        assert "unit unestablished" in telemetry_text
-        assert "ENC enc_pos:" in telemetry_text
-        assert "ENC enc_status:" in telemetry_text
-        encoder_summary = report.categorical_summary_text(
-            bundle.dcb_encoder["enc_status"],
-            "unestablished",
-        )
-        assert "mode=1" in encoder_summary
-        assert "counts={1:2}" in encoder_summary
-        assert "mean=" not in encoder_summary
+        assert "telemetry_status=decoded" in telemetry_text
+        assert "telemetry_source=legacy_binary_sidecar" in telemetry_text
+        assert "n_telemetry_rows=2" in telemetry_text
+        assert "field_count=57" in telemetry_text
+        assert "canonical table parity" in telemetry_text
         housekeeping = next(page for page in pages if page.family == "housekeeping")
         housekeeping_text = "\n".join(
             text.get_text() for text in housekeeping.figure.texts
@@ -890,7 +906,7 @@ def test_family_pages_are_unique_hdf5_based_and_label_open_contracts(tmp_path: P
         assert "sampling_gap_median=3" in housekeeping_text
         waveform = next(page for page in pages if page.family == "waveform")
         assert waveform.count == 1
-        for family in ("normal", "tr", "zoom", "waveform", "grimm", "telemetry"):
+        for family in ("normal", "tr", "zoom", "waveform", "grimm"):
             page = next(item for item in pages if item.family == family)
             page_text = "\n".join(text.get_text() for text in page.figure.texts)
             assert "sampling_gap_median" in page_text
@@ -920,15 +936,10 @@ def test_family_pages_are_unique_hdf5_based_and_label_open_contracts(tmp_path: P
             plt.close(page.figure)
 
 
-def test_encoder_status_metrics_jsonl_uses_counts_and_mode(
+def test_fixed_telemetry_metrics_use_flat_diagnostics_and_table_fields(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    assert report.categorical_field_path("telemetry/encoder/enc_status")
-    assert not report.categorical_field_path("telemetry/encoder/enc_pos")
-    assert not report.categorical_field_path(
-        "telemetry/encoder/mission_seconds"
-    )
     assert report.categorical_field_path("housekeeping/type_2/ok")
     assert "TIME-004" in report.field_units("normal/mjd_times")
     assert "TIME-004" in report.field_units(
@@ -948,16 +959,13 @@ def test_encoder_status_metrics_jsonl_uses_counts_and_mode(
             observed_family_metadata=observed_metadata,
         ),),
     )
+    telemetry = fixed_telemetry(3)
     bundle = SimpleNamespace(
         layout_version=3,
         waveforms={0: np.zeros((3, 4), dtype=np.int16)},
         waveform_times={0: np.array([100.0, 102.0, 103.0])},
-        dcb_encoder={
-            "mission_seconds": np.array([100.0, 102.0, 103.0]),
-            "lusee_subsecs": np.array([0.0, 0.0, 0.0]),
-            "enc_pos": np.array([10, 20, 30], dtype=np.int64),
-            "enc_status": np.array([1, 2, 2], dtype=np.int64),
-        },
+        telemetry=telemetry,
+        telemetry_sessions=(telemetry,),
     )
 
     page = report.telemetry_page(
@@ -969,13 +977,10 @@ def test_encoder_status_metrics_jsonl_uses_counts_and_mode(
     assert page is not None
     try:
         page_text = "\n".join(text.get_text() for text in page.figure.texts)
-        assert "assumed DCB encoder seconds from landing" in page_text
-        assert "ENC enc_pos:" in page_text
-        assert "minimum=10" in page_text
-        assert "maximum=30" in page_text
-        assert "mean=20" in page_text
-        assert "ENC enc_status:" in page_text
-        assert "counts={2:2,1:1}" in page_text
+        assert "telemetry_status=decoded" in page_text
+        assert "telemetry_source=legacy_binary_sidecar" in page_text
+        assert "n_telemetry_rows=3" in page_text
+        assert "field_count=57" in page_text
     finally:
         import matplotlib.pyplot as plt
 
@@ -991,7 +996,9 @@ def test_encoder_status_metrics_jsonl_uses_counts_and_mode(
             decoded_summary=observed,
             h5_path=h5_path,
             fits_path=None,
-            telemetry_state="decoded",
+            telemetry_status="decoded",
+            telemetry_source="legacy_binary_sidecar",
+            n_telemetry_rows=3,
         )]
 
     monkeypatch.setattr(
@@ -1003,48 +1010,43 @@ def test_encoder_status_metrics_jsonl_uses_counts_and_mode(
     report.run_qualification(config, output, target_executor=executor)
 
     metrics = read_jsonl(output / "metrics.jsonl")
-    metric = next(
+    diagnostic = next(
         row
         for row in metrics
+        if row.get("record_type") == "telemetry"
+    )
+    assert diagnostic == {
+        "record_type": "telemetry",
+        "target_id": "categorical",
+        "session_id": "session_000",
+        "telemetry_status": "decoded",
+        "telemetry_source": "legacy_binary_sidecar",
+        "telemetry_reason": None,
+        "n_telemetry_rows": 3,
+    }
+    table_paths = {
+        str(row.get("field_path"))
+        for row in metrics
         if row.get("record_type") == "array"
-        and row.get("field_path") == "telemetry/encoder/enc_status"
+        and str(row.get("field_path", "")).startswith("telemetry/")
+    }
+    assert table_paths == {
+        "telemetry/field_names",
+        "telemetry/lusee_subsecs",
+        "telemetry/mjd_times",
+        "telemetry/mission_seconds",
+        "telemetry/raw_counts",
+        "telemetry/source_indices",
+        "telemetry/source_kind",
+        "telemetry/units",
+        "telemetry/valid",
+        "telemetry/values",
+    }
+    assert not any(
+        token in path
+        for path in table_paths
+        for token in ("encoder", "interpolated", "display", "raw_seconds")
     )
-    assert metric["counts"] == {"1": 1, "2": 2}
-    assert metric["mode"] == "2"
-    assert metric["mode_count"] == 2
-    assert "minimum" not in metric
-    assert "maximum" not in metric
-    assert "mean" not in metric
-    evidence = report.comparison_evidence(metric)
-    assert evidence["counts"] == metric["counts"]
-    assert evidence["mode"] == "2"
-    assert evidence["mode_count"] == 2
-    position = next(
-        row for row in metrics
-        if row.get("field_path") == "telemetry/encoder/enc_pos"
-    )
-    assert position["minimum"] == 10
-    assert position["maximum"] == 30
-    assert position["mean"] == 20.0
-    assert "counts" not in position
-    encoder_time = next(
-        row for row in metrics
-        if row.get("field_path") == "telemetry/encoder/mission_seconds"
-    )
-    assert encoder_time["time_minimum"] == 100.0
-    assert encoder_time["time_maximum"] == 103.0
-    assert encoder_time["sampling_gap_median"] == 1.5
-    assumed_mjd = next(
-        row for row in metrics
-        if row.get("field_path") == "telemetry/display/assumed_mjd"
-    )
-    assert "TIME-004" in assumed_mjd["units"]
-    time_source = next(
-        row for row in metrics
-        if row.get("field_path") == "telemetry/display/time_source"
-    )
-    assert time_source["counts"] == {"encoder": 1}
-    assert time_source["mode"] == "encoder"
     waveform_time = next(
         row for row in metrics
         if row.get("field_path") == "waveform/channel_0/times"

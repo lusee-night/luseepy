@@ -63,13 +63,12 @@ def concrete_products() -> Products:
     )
 
 
-def install_one_session_flash(monkeypatch, telemetry=None):
-    telemetry = telemetry or pipeline.telemetry_mod.TelemetryDecodeResult.absent()
-
+def install_one_session_flash(monkeypatch, telemetry=None, *, recognized=False):
     def parse_flash(path, *, clock_reference_set, issue_collector, capture):
         session = pipeline.Session(ordinal=0, telemetry=telemetry)
         capture.session_count = 1
-        return [session], telemetry, None
+        capture.telemetry_0x314_packets = int(recognized)
+        return [session], telemetry
 
     monkeypatch.setattr(pipeline, "_parse_flash_loaded", parse_flash)
     monkeypatch.setattr(
@@ -193,7 +192,6 @@ def test_flash_manifest_records_source_identity_failure_reasons(
         capture.record_unreadable_bank(bank="b03", reason="not_regular_file")
         return (
             [],
-            pipeline.telemetry_mod.TelemetryDecodeResult.absent(),
             None,
         )
 
@@ -243,33 +241,18 @@ def test_flash_is_failed_when_every_session_decode_is_failed(
     assert result[0].status == "failed"
 
 
-@pytest.mark.parametrize("captured_present", [False, True])
-def test_flash_uses_captured_b01_state(
+@pytest.mark.parametrize("recognized", [False, True])
+def test_flash_records_flat_b01_outcome_without_degrading_science(
     tmp_path,
     monkeypatch,
-    captured_present,
+    recognized,
 ):
     collector = IssueCollector()
-    issue = collector.record(
-        code="telemetry_adapter.synthetic_unavailable",
-        severity="warning",
-        stage="telemetry_decode",
-        message="synthetic telemetry is unavailable",
-        action="kept",
+    install_one_session_flash(
+        monkeypatch,
+        telemetry=None,
+        recognized=recognized,
     )
-    present = pipeline.telemetry_mod.TelemetryDecodeResult(
-        input_source="b01",
-        input_state=pipeline.telemetry_mod.TelemetryInputState.PRESENT_EMPTY,
-        decoder_status=pipeline.telemetry_mod.TelemetryDecoderStatus.UNAVAILABLE,
-        coverage=pipeline.telemetry_mod.TelemetryCoverage.UNAVAILABLE,
-        issues=(issue,),
-    )
-    captured = (
-        present
-        if captured_present
-        else pipeline.telemetry_mod.TelemetryDecodeResult.absent()
-    )
-    install_one_session_flash(monkeypatch, telemetry=captured)
     result = pipeline.process_flash(
         tmp_path / "flash",
         landing_time_file=write_landing_reference(tmp_path),
@@ -277,8 +260,17 @@ def test_flash_uses_captured_b01_state(
         issue_collector=collector,
     )
 
-    expected = ["b01"] if captured.input_source == "b01" else []
-    assert result[0].telemetry_input_sources == expected
+    assert result.status == "clean"
+    assert result[0].status == "clean"
+    assert result[0].telemetry_status == (
+        "skipped" if recognized else "absent"
+    )
+    assert result[0].telemetry_source == (
+        "b01_0x314" if recognized else None
+    )
+    assert (result[0].telemetry_reason is not None) is recognized
+    assert result[0].n_telemetry_rows == 0
+    assert collector.issues == ()
 
 
 @pytest.mark.parametrize("bad_value", [1, 0, "yes", None])
@@ -390,7 +382,6 @@ def test_flash_decoder_exception_propagates_without_failure_manifests(
         capture.session_count = 1
         return (
             [pipeline.Session(ordinal=0)],
-            pipeline.telemetry_mod.TelemetryDecodeResult.absent(),
             None,
         )
 
@@ -446,7 +437,6 @@ def test_session_decoder_exception_propagates_without_failure_manifest(
             session_dir,
             landing_time_file=write_landing_reference(tmp_path),
             manifest_dir=tmp_path / "manifests",
-            rederive_telemetry=False,
             issue_collector=IssueCollector("strict") if strict else None,
         )
 
@@ -488,7 +478,6 @@ def test_flash_explicit_overwrite_replaces_existing_session_coherently(
         capture.session_count = 1
         return (
             [pipeline.Session(ordinal=0)],
-            pipeline.telemetry_mod.TelemetryDecodeResult.absent(),
             None,
         )
 

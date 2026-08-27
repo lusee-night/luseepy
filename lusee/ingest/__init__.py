@@ -69,25 +69,11 @@ _LAZY_EXPORTS = {
     "raw_seconds_from_split_time": ("session", "raw_seconds_from_split_time"),
     "split_sessions": ("session", "split_sessions"),
     "write_uncrater_session": ("session", "write_uncrater_session"),
-    # Optional private-decoder boundary and typed public telemetry
-    "TelemetryBlock": ("telemetry", "TelemetryBlock"),
-    "TelemetryCollection": ("telemetry", "TelemetryCollection"),
-    "TelemetryCounts": ("telemetry", "TelemetryCounts"),
-    "TelemetryCoverage": ("telemetry", "TelemetryCoverage"),
-    "TelemetryDecodeResult": ("telemetry", "TelemetryDecodeResult"),
-    "TelemetryDecoderInfo": ("telemetry", "TelemetryDecoderInfo"),
-    "TelemetryDecoderStatus": ("telemetry", "TelemetryDecoderStatus"),
-    "TelemetryFieldMetadata": ("telemetry", "TelemetryFieldMetadata"),
-    "TelemetryInputState": ("telemetry", "TelemetryInputState"),
+    # Optional private-decoder boundary and fixed public telemetry table
+    "TelemetryData": ("telemetry", "TelemetryData"),
     "decode_b01_packets": ("telemetry", "decode_b01_packets"),
     "decode_legacy_sidecar": ("telemetry", "decode_legacy_sidecar"),
-    "field_groups": ("telemetry", "field_groups"),
     "find_legacy_sidecar": ("telemetry", "find_legacy_sidecar"),
-    "has_decoder": ("telemetry", "has_decoder"),
-    "parse_b01_packets": ("telemetry", "parse_b01_packets"),
-    "parse_legacy_sidecar": ("telemetry", "parse_legacy_sidecar"),
-    "slice_arrays_by_window": ("telemetry", "slice_arrays_by_window"),
-    "telemetry_apids": ("telemetry", "telemetry_apids"),
     # Decoder products
     "CalDataSample": ("decode", "CalDataSample"),
     "Products": ("decode", "Products"),
@@ -145,15 +131,11 @@ _LAZY_EXPORTS = {
     # Validated layout-v4 writer request
     "FamilyCoverage": ("write_request", "FamilyCoverage"),
     "FamilyStatus": ("write_request", "FamilyStatus"),
-    "InterpolationPolicy": ("write_request", "InterpolationPolicy"),
     "LunarLocation": ("write_request", "LunarLocation"),
     "RunProvenance": ("write_request", "RunProvenance"),
     "WriteRequest": ("write_request", "WriteRequest"),
     "family_statuses_for_products": (
         "write_request", "family_statuses_for_products"
-    ),
-    "family_status_for_telemetry": (
-        "write_request", "family_status_for_telemetry"
     ),
     # Writers and orchestration
     "write_hdf5": ("hdf5_writer", "write_hdf5"),
@@ -222,14 +204,9 @@ __all__ = [
     # session
     "Session", "raw_seconds_from_split_time",
     "split_sessions", "write_uncrater_session",
-    # typed telemetry plus established loose-array compatibility wrappers
-    "TelemetryBlock", "TelemetryCollection", "TelemetryCounts",
-    "TelemetryCoverage", "TelemetryDecodeResult", "TelemetryDecoderInfo",
-    "TelemetryDecoderStatus", "TelemetryFieldMetadata", "TelemetryInputState",
-    "decode_b01_packets", "decode_legacy_sidecar", "field_groups",
-    "find_legacy_sidecar", "has_decoder", "parse_b01_packets",
-    "parse_legacy_sidecar",
-    "slice_arrays_by_window", "telemetry_apids",
+    # fixed optional telemetry boundary
+    "TelemetryData", "decode_b01_packets", "decode_legacy_sidecar",
+    "find_legacy_sidecar",
     # decode
     "CalDataSample", "Products", "read_uncrater_session",
     # product/decode provenance
@@ -248,9 +225,9 @@ __all__ = [
     "FrequencyWindowContract", "UnresolvedFrequencyCoordinateError",
     "spectrometer_frequency_window",
     # layout-v4 writer request
-    "FamilyCoverage", "FamilyStatus", "InterpolationPolicy",
+    "FamilyCoverage", "FamilyStatus",
     "LunarLocation", "RunProvenance", "WriteRequest",
-    "family_status_for_telemetry", "family_statuses_for_products",
+    "family_statuses_for_products",
     # hdf5
     "write_hdf5",
     # fits

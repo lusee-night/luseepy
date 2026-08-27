@@ -79,7 +79,7 @@ def test_failed_hello_sw_version_is_recorded_once(tmp_path, monkeypatch):
     collector = IssueCollector()
 
     with pytest.warns(RuntimeWarning, match="failed to read SW_version") as seen:
-        sessions, _telemetry, _unassigned = pipeline.parse_flash(
+        sessions, _telemetry = pipeline.parse_flash(
             tmp_path,
             landing_time_file=write_landing_reference(tmp_path),
             issue_collector=collector,
@@ -92,7 +92,7 @@ def test_failed_hello_sw_version_is_recorded_once(tmp_path, monkeypatch):
     ]
 
 
-def test_parse_flash_threads_one_collector_through_science_and_telemetry(
+def test_parse_flash_isolates_telemetry_issues_from_science_quality(
     tmp_path,
     monkeypatch,
 ):
@@ -104,6 +104,15 @@ def test_parse_flash_threads_one_collector_through_science_and_telemetry(
 
     def fake_parse_bank_file(path, *, bank=None, issue_collector=None):
         calls.append((path, bank, issue_collector))
+        if bank == TELEMETRY_BANK:
+            issue_collector.record(
+                code="framing.synthetic_b01_damage",
+                severity="warning",
+                stage="framing",
+                message="synthetic b01 framing damage",
+                action="dropped",
+                bank=bank,
+            )
         return iter(())
 
     monkeypatch.setattr(pipeline, "parse_bank_file", fake_parse_bank_file)
@@ -123,131 +132,24 @@ def test_parse_flash_threads_one_collector_through_science_and_telemetry(
         lambda packets, *, issue_collector=None: [],
     )
     telemetry_seen = []
-
-    def fake_decode(packets, *, issue_collector=None):
-        telemetry_seen.append((packets, issue_collector))
-        return pipeline.telemetry_mod.TelemetryDecodeResult.absent()
-
-    monkeypatch.setattr(pipeline.telemetry_mod, "decode_b01_packets", fake_decode)
     monkeypatch.setattr(
-        pipeline,
-        "assign_telemetry_to_sessions",
-        lambda sessions, telemetry, *, clock_reference_set, issue_collector: None,
+        pipeline.telemetry_mod,
+        "decode_b01_packets",
+        lambda packets: telemetry_seen.append(tuple(packets)) or None,
     )
 
-    result = pipeline.parse_flash(
+    assert pipeline.parse_flash(
         tmp_path,
         landing_time_file=write_landing_reference(tmp_path),
         issue_collector=collector,
-    )
+    ) == ([], None)
 
-    assert result == (
-        [],
-        pipeline.telemetry_mod.TelemetryDecodeResult.absent(),
-        None,
-    )
-    assert [call[1] for call in calls] == [science_bank, TELEMETRY_BANK]
-    assert all(call[2] is collector for call in calls)
-    assert telemetry_seen == [([], collector)]
-
-
-def test_b01_framing_issues_are_attached_to_typed_telemetry(
-    tmp_path,
-    monkeypatch,
-):
-    make_bank(tmp_path, TELEMETRY_BANK)
-    collector = IssueCollector()
-
-    def fake_parse_bank_file(path, *, bank=None, issue_collector=None):
-        issue_collector.record(
-            code="framing.synthetic_b01_damage",
-            severity="warning",
-            stage="framing",
-            message="synthetic b01 framing damage",
-            action="dropped",
-            bank=bank,
-        )
-        return iter(())
-
-    def fake_decode(packets, *, issue_collector=None):
-        issue = issue_collector.record(
-            code="telemetry_adapter.decoder_unavailable",
-            severity="error",
-            stage="telemetry_decode",
-            message="synthetic decoder failure",
-            action="kept",
-        )
-        return pipeline.telemetry_mod.TelemetryDecodeResult(
-            input_source="b01",
-            input_state=pipeline.telemetry_mod.TelemetryInputState.PRESENT_EMPTY,
-            decoder_status=(
-                pipeline.telemetry_mod.TelemetryDecoderStatus.UNAVAILABLE
-            ),
-            coverage=pipeline.telemetry_mod.TelemetryCoverage.UNAVAILABLE,
-            issues=(issue,),
-        )
-
-    monkeypatch.setattr(pipeline, "parse_bank_file", fake_parse_bank_file)
-    monkeypatch.setattr(
-        pipeline,
-        "detect_sw_version",
-        lambda packets, *, issue_collector=None: None,
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "assign_identities",
-        lambda packets, **kwargs: packets,
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "split_sessions",
-        lambda packets, *, issue_collector=None: [],
-    )
-    monkeypatch.setattr(pipeline.telemetry_mod, "decode_b01_packets", fake_decode)
-
-    _, telemetry, _ = pipeline.parse_flash(
-        tmp_path,
-        landing_time_file=write_landing_reference(tmp_path),
-        issue_collector=collector,
-    )
-
-    assert [issue.code for issue in telemetry.issues] == [
-        "framing.synthetic_b01_damage",
-        "telemetry_adapter.decoder_unavailable",
-    ]
-
-
-def test_dangling_b01_source_is_broken_not_absent(tmp_path, monkeypatch):
-    bank_dir = tmp_path / TELEMETRY_BANK
-    bank_dir.mkdir()
-    (bank_dir / BANK_FILENAME).symlink_to("missing-bank")
-    monkeypatch.setattr(
-        pipeline,
-        "detect_sw_version",
-        lambda packets, *, issue_collector=None: None,
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "assign_identities",
-        lambda packets, **kwargs: packets,
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "split_sessions",
-        lambda packets, *, issue_collector=None: [],
-    )
-
-    _, telemetry, _ = pipeline.parse_flash(
-        tmp_path,
-        landing_time_file=write_landing_reference(tmp_path),
-    )
-
-    assert telemetry.input_state is pipeline.telemetry_mod.TelemetryInputState.PRESENT
-    assert (
-        telemetry.decoder_status
-        is pipeline.telemetry_mod.TelemetryDecoderStatus.BROKEN
-    )
-    assert telemetry.issues[0].code == "telemetry_input.b01_unreadable"
+    science_call, telemetry_call = calls
+    assert science_call[1:] == (science_bank, collector)
+    assert telemetry_call[1] == TELEMETRY_BANK
+    assert telemetry_call[2] is not collector
+    assert collector.issues == ()
+    assert telemetry_seen == [()]
 
 
 def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch):
@@ -269,7 +171,6 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
         parse_seen.append((path, issue_collector))
         return (
             [pipeline.Session(ordinal=0)],
-            pipeline.telemetry_mod.TelemetryDecodeResult.absent(),
             None,
         )
 
@@ -316,39 +217,6 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
     assert worker_seen[0]["issue_collector"] is collector
 
 
-def test_telemetry_rederive_uses_the_shared_collector(tmp_path, monkeypatch):
-    make_bank(tmp_path, TELEMETRY_BANK)
-    collector = IssueCollector()
-    seen = []
-
-    def fake_parse_bank_file(path, *, bank=None, issue_collector=None):
-        seen.append((path, bank, issue_collector))
-        return iter(())
-
-    monkeypatch.setattr(pipeline, "parse_bank_file", fake_parse_bank_file)
-    decoder_seen = []
-
-    def fake_decode(packets, *, issue_collector=None):
-        decoder_seen.append((packets, issue_collector))
-        return pipeline.telemetry_mod.TelemetryDecodeResult.absent()
-
-    monkeypatch.setattr(pipeline.telemetry_mod, "decode_b01_packets", fake_decode)
-
-    result = pipeline._rederive_telemetry_from_flash(
-        tmp_path,
-        window_lower_elapsed_seconds=None,
-        window_upper_elapsed_seconds=None,
-        clock_reference_set=None,
-        issue_collector=collector,
-    )
-
-    assert result == pipeline.telemetry_mod.TelemetryDecodeResult.absent()
-    assert len(seen) == 1
-    assert seen[0][1] == TELEMETRY_BANK
-    assert seen[0][2] is collector
-    assert decoder_seen == [([], collector)]
-
-
 def test_process_session_forwards_decoder_policy(tmp_path, monkeypatch):
     session_dir = tmp_path / "session"
     session_dir.mkdir()
@@ -376,7 +244,6 @@ def test_process_session_forwards_decoder_policy(tmp_path, monkeypatch):
         decoder_strict=True,
         diagnostic_override=True,
         schema_variant="early",
-        rederive_telemetry=False,
         issue_collector=collector,
     )
 

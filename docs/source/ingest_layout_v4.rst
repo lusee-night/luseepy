@@ -11,9 +11,9 @@ Write contract
 The request is validated in full before an output file is opened. It contains
 strict decoded ``Products``, the complete issue set, one status for every known
 product family, lunar location, clock-reference availability, portable input
-identity or an explicit reason it is unavailable, interpolation policy, and
-writer options. Legacy mutable decoder rows, anonymous calibrator arrays, and
-untyped telemetry mappings are not accepted.
+identity or an explicit reason it is unavailable, optional fixed
+``TelemetryData``, and writer options. Legacy mutable decoder rows, anonymous
+calibrator arrays, and untyped telemetry mappings are not accepted.
 
 Existing destinations are refused by default. An explicit ``overwrite=True``
 is recorded in run provenance. Writers write directly to the requested path
@@ -33,8 +33,8 @@ The layout-4 serializations preserve:
 * per-family support, coverage, quality, row counts, and issue references;
 * the complete external clock-reference record, or an explicit unavailable
   reason; and
-* portable run/input identity, optional absolute source path, interpolation
-  policy, compression policy, and overwrite provenance.
+* portable run/input identity, optional absolute source path, compression
+  policy, and overwrite provenance.
 
 Required values are never replaced with plausible zeroes. Optional scalar
 metadata uses explicit presence information. Raw mission time and its clock
@@ -73,6 +73,30 @@ as paired real and imaginary arrays. Every calibrator page retains its raw
 clock and optional calibrated time. A known family that is not implemented is
 listed explicitly as unsupported rather than silently omitted.
 
+Optional DCB telemetry
+----------------------
+
+``/telemetry`` is present only when the optional private decoder returned one
+valid fixed ``TelemetryData`` table. A decoded zero-byte legacy sidecar still
+creates the group with zero rows. Telemetry is not a science product family,
+does not contribute issues to root quality, and has no interpolation policy.
+
+The group attribute ``source_kind`` is ``b01_0x314`` or
+``legacy_binary_sidecar``. It contains exactly ``field_names``, ``units``,
+``source_indices``, ``mission_seconds``, ``lusee_subsecs``, ``mjd_times``,
+``raw_counts``, ``values``, and ``valid``. There are exactly 57 columns in
+decoder order. Source time and counts retain their integer dtypes; engineering
+values are ``float64`` and invalid cells are NaN exactly where ``valid`` is
+false. ``raw_seconds`` is derived by the reader and is not persisted. Decoder
+identity, dynamic metadata, private issues, encoder data, unassigned rows, and
+interpolated telemetry are not part of layout 4.
+
+Finite telemetry MJD values require a DCB entry in the stored clock-reference
+set and must equal that reference applied to
+``mission_seconds + lusee_subsecs / 65536``. Without a DCB entry every
+telemetry MJD value is NaN. The strict HDF5 and FITS readers repeat this check,
+and format parity covers the complete fixed table.
+
 HDF5 organization
 -----------------
 
@@ -83,6 +107,7 @@ families use ``/spectra``, ``/tr_spectra``, ``/waveform``,
 ``/grimm_spectra``, ``/housekeeping``, and ``/calibrator``. Each emitted family
 has a row count plus row-aligned identity, raw-time validity, optional MJD
 validity, original-index, and product-provenance references.
+The optional fixed DCB table uses ``/telemetry`` as described above.
 
 FITS organization
 -----------------

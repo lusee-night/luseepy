@@ -9,13 +9,105 @@ import pytest
 
 from lusee.ingest import fits_writer, hdf5_writer, pipeline, viz
 from lusee.ingest.decode import Products
-from lusee.ingest.issues import IssueAction, IssueCollector, IssueSeverity
+from lusee.ingest.issues import IssueAction, IssueCollector
 from lusee.ingest.products import (
     DataQuality,
     DecodeProvenance,
     ExecutionMode,
     ValidatedCounts,
 )
+
+
+ABSENT_TELEMETRY_DIAGNOSTICS = {
+    "telemetry_status": "absent",
+    "telemetry_reason": None,
+    "telemetry_source": None,
+    "n_telemetry_rows": 0,
+}
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        ABSENT_TELEMETRY_DIAGNOSTICS,
+        {
+            "telemetry_status": "decoded",
+            "telemetry_reason": None,
+            "telemetry_source": "b01_0x314",
+            "n_telemetry_rows": 0,
+        },
+        {
+            "telemetry_status": "decoded",
+            "telemetry_reason": None,
+            "telemetry_source": "legacy_binary_sidecar",
+            "n_telemetry_rows": 3,
+        },
+        {
+            "telemetry_status": "skipped",
+            "telemetry_reason": "decoder unavailable",
+            "telemetry_source": "b01_0x314",
+            "n_telemetry_rows": 0,
+        },
+    ],
+)
+def test_current_manifest_accepts_coherent_telemetry_diagnostics(record):
+    pipeline._validate_manifest_telemetry_fields(record)
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"telemetry_status": "unknown"},
+        {"telemetry_source": "unknown"},
+        {"n_telemetry_rows": True},
+        {"n_telemetry_rows": -1},
+        {"telemetry_source": "b01_0x314"},
+        {
+            "telemetry_status": "decoded",
+            "telemetry_source": None,
+        },
+        {
+            "telemetry_status": "skipped",
+            "telemetry_source": "b01_0x314",
+            "telemetry_reason": None,
+        },
+        {
+            "telemetry_status": "skipped",
+            "telemetry_source": "b01_0x314",
+            "telemetry_reason": "decoder unavailable",
+            "n_telemetry_rows": 1,
+        },
+    ],
+)
+def test_current_manifest_rejects_invalid_telemetry_diagnostics(update):
+    record = dict(ABSENT_TELEMETRY_DIAGNOSTICS)
+    record.update(update)
+
+    with pytest.raises(ValueError, match="telemetry"):
+        pipeline._validate_manifest_telemetry_fields(record)
+
+
+def test_legacy_v3_telemetry_diagnostics_remain_readable():
+    pipeline._validate_manifest_telemetry_fields({
+        "telemetry_decoder_status": "not_needed",
+        "telemetry_coverage": "absent",
+        "telemetry_source": None,
+        "n_telemetry_rows": 0,
+    })
+
+
+def test_current_session_manifest_rejects_missing_discriminators(tmp_path):
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    (session_dir / "session.json").write_text(json.dumps({
+        "manifest_kind": "session",
+        "manifest_schema_version": pipeline.MANIFEST_SCHEMA_VERSION,
+        "telemetry_source": "b01_0x314",
+        "n_telemetry_rows": 2,
+    }), encoding="ascii")
+
+    with pytest.raises(ValueError, match="telemetry diagnostics"):
+        pipeline._read_in_session_manifest(session_dir, strict=True)
 
 
 def write_landing_reference(tmp_path: Path) -> Path:
@@ -146,14 +238,9 @@ def test_present_nonregular_science_bank_is_partial(tmp_path, monkeypatch):
         "split_sessions",
         lambda packets, *, issue_collector=None: [],
     )
-    monkeypatch.setattr(
-        pipeline,
-        "assign_telemetry_to_sessions",
-        lambda *args, **kwargs: None,
-    )
     collector = IssueCollector()
 
-    sessions, _telemetry, _unassigned = pipeline.parse_flash(
+    sessions, _telemetry = pipeline.parse_flash(
         flash_dir,
         landing_time_file=write_landing_reference(tmp_path),
         issue_collector=collector,
@@ -167,89 +254,6 @@ def test_present_nonregular_science_bank_is_partial(tmp_path, monkeypatch):
     )
     assert issue.bank == pipeline.SCIENCE_BANKS[0]
     assert issue.action is IssueAction.REJECTED
-
-
-@pytest.mark.parametrize(
-    ("allow_changed", "expected_status", "expected_action", "decode_calls"),
-    [
-        (False, "broken", IssueAction.REJECTED, 0),
-        (True, "unavailable", IssueAction.OVERRIDDEN, 1),
-    ],
-)
-def test_rederive_changed_b01_requires_recorded_override(
-    tmp_path,
-    monkeypatch,
-    allow_changed,
-    expected_status,
-    expected_action,
-    decode_calls,
-):
-    bank_dir = tmp_path / pipeline.TELEMETRY_BANK
-    bank_dir.mkdir()
-    payload = b"changed b01 bytes"
-    (bank_dir / pipeline.BANK_FILENAME).write_bytes(payload)
-    observed_sha256 = hashlib.sha256(payload).hexdigest()
-    monkeypatch.setattr(
-        pipeline,
-        "parse_bank_file_diagnostic",
-        lambda *args, **kwargs: SimpleNamespace(
-            input_size_bytes=len(payload),
-            input_sha256=observed_sha256,
-            frames=(),
-        ),
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "reassemble_logical_packets",
-        lambda *args, **kwargs: iter(()),
-    )
-    calls = []
-
-    def decode(packets, *, issue_collector):
-        calls.append((packets, issue_collector))
-        issue = issue_collector.record(
-            code="telemetry_adapter.synthetic_unavailable",
-            severity="error",
-            stage="telemetry_decode",
-            message="synthetic decoder is unavailable",
-            action="kept",
-        )
-        return pipeline.telemetry_mod.TelemetryDecodeResult(
-            input_source="b01",
-            input_state=pipeline.telemetry_mod.TelemetryInputState.PRESENT_EMPTY,
-            decoder_status=(
-                pipeline.telemetry_mod.TelemetryDecoderStatus.UNAVAILABLE
-            ),
-            coverage=pipeline.telemetry_mod.TelemetryCoverage.UNAVAILABLE,
-            issues=(issue,),
-        )
-
-    monkeypatch.setattr(pipeline.telemetry_mod, "decode_b01_packets", decode)
-    collector = IssueCollector()
-    result = pipeline._rederive_telemetry_from_flash(
-        tmp_path,
-        window_lower_elapsed_seconds=None,
-        window_upper_elapsed_seconds=None,
-        clock_reference_set=None,
-        issue_collector=collector,
-        expected_source_fingerprint={
-            f"{pipeline.TELEMETRY_BANK}/{pipeline.BANK_FILENAME}": {
-                "size_bytes": len(payload),
-                "sha256": "0" * 64,
-            },
-        },
-        allow_changed_flash_source=allow_changed,
-    )
-
-    assert result.decoder_status.value == expected_status
-    assert len(calls) == decode_calls
-    changed = next(
-        issue for issue in result.issues if issue.code == "source.flash_changed"
-    )
-    assert changed.action is expected_action
-    assert changed.severity is (
-        IssueSeverity.WARNING if allow_changed else IssueSeverity.ERROR
-    )
 
 
 def test_manifest_refuses_an_existing_destination(tmp_path):
@@ -305,6 +309,10 @@ def test_legacy_size_mtime_fingerprint_is_read_only(tmp_path):
     (session_dir / "session.json").write_text(json.dumps({
         "manifest_schema_version": 3,
         "flash_source_fingerprint": legacy_fingerprint,
+        "telemetry_decoder_status": "not_needed",
+        "telemetry_coverage": "absent",
+        "telemetry_source": None,
+        "n_telemetry_rows": 0,
     }), encoding="ascii")
 
     manifest = pipeline._read_in_session_manifest(session_dir, strict=True)
@@ -312,23 +320,6 @@ def test_legacy_size_mtime_fingerprint_is_read_only(tmp_path):
     assert manifest is not None
     assert manifest["flash_source_fingerprint"] == legacy_fingerprint
     assert manifest["_legacy_flash_source_fingerprint"] is True
-
-    flash_dir = tmp_path / "flash"
-    bank_dir = flash_dir / pipeline.TELEMETRY_BANK
-    bank_dir.mkdir(parents=True)
-    (bank_dir / pipeline.BANK_FILENAME).write_bytes(b"present source")
-    telemetry = pipeline._rederive_telemetry_from_flash(
-        flash_dir,
-        window_lower_elapsed_seconds=None,
-        window_upper_elapsed_seconds=None,
-        clock_reference_set=None,
-        expected_source_fingerprint=legacy_fingerprint,
-    )
-    assert (
-        telemetry.decoder_status
-        is pipeline.telemetry_mod.TelemetryDecoderStatus.BROKEN
-    )
-    assert telemetry.issues[0].code == "source.flash_fingerprint_invalid"
 
 
 @pytest.mark.parametrize(
@@ -348,6 +339,7 @@ def test_session_manifest_rejects_invalid_flash_link_identifiers(
     (session_dir / "session.json").write_text(json.dumps({
         "manifest_kind": "session",
         "manifest_schema_version": 3,
+        **ABSENT_TELEMETRY_DIAGNOSTICS,
         field: value,
     }), encoding="ascii")
 
@@ -368,6 +360,7 @@ def test_session_manifest_requires_complete_flash_link(tmp_path, missing_field):
         "flash_result_id": f"flash-{'a' * 16}",
         "flash_manifest_sha256": "b" * 64,
         "flash_input_identity_sha256": "c" * 64,
+        **ABSENT_TELEMETRY_DIAGNOSTICS,
     }
     del manifest[missing_field]
     (session_dir / "session.json").write_text(
@@ -402,6 +395,7 @@ def test_session_manifest_binds_source_identity_without_sibling(
             pipeline._flash_source_identity_sha256(fingerprint)
         ),
         "flash_source_fingerprint": fingerprint,
+        **ABSENT_TELEMETRY_DIAGNOSTICS,
     }
     if damage == "malformed_fingerprint":
         manifest["flash_source_fingerprint"] = []
@@ -424,14 +418,14 @@ def test_session_manifest_binds_source_identity_without_sibling(
         "source_identity",
         "locator",
         "clock_reference",
-        "telemetry_window",
         "h5_locator",
         "fits_locator",
         "plot_locator",
         "start_time_utc",
+        "telemetry_status",
+        "telemetry_reason",
+        "telemetry_source",
         "telemetry_rows",
-        "unassigned_telemetry_rows",
-        "telemetry_provenance",
     ],
 )
 def test_session_manifest_verifies_sibling_flash_manifest(tmp_path, mismatch):
@@ -473,10 +467,10 @@ def test_session_manifest_verifies_sibling_flash_manifest(tmp_path, mismatch):
             "fits_path": "../fits/session_000.fits",
             "plot_paths": ["../plots/session_000/spectra.png"],
             "start_time_utc": "2026-08-25T00:00:00.000",
+            "telemetry_status": "decoded",
+            "telemetry_reason": None,
+            "telemetry_source": "b01_0x314",
             "n_telemetry_rows": 2,
-            "n_unassigned_telemetry_rows": 1,
-            "telemetry_provenance": {"source": "b01"},
-            "telemetry_window_lower_elapsed_seconds": 1.0,
         }],
     }).encode("ascii")
     (sessions_root / "flash.json").write_bytes(flash_payload)
@@ -494,10 +488,10 @@ def test_session_manifest_verifies_sibling_flash_manifest(tmp_path, mismatch):
         "fits_path": "../../fits/session_000.fits",
         "plot_paths": ["../../plots/session_000/spectra.png"],
         "start_time_utc": "2026-08-25T00:00:00.000",
+        "telemetry_status": "decoded",
+        "telemetry_reason": None,
+        "telemetry_source": "b01_0x314",
         "n_telemetry_rows": 2,
-        "n_unassigned_telemetry_rows": 1,
-        "telemetry_provenance": {"source": "b01"},
-        "telemetry_window_lower_elapsed_seconds": 1.0,
     }
     if mismatch == "digest":
         session_manifest["flash_manifest_sha256"] = "d" * 64
@@ -507,8 +501,6 @@ def test_session_manifest_verifies_sibling_flash_manifest(tmp_path, mismatch):
         session_manifest["flash_input_identity_sha256"] = "f" * 64
     elif mismatch == "clock_reference":
         session_manifest["clock_reference"] = {"source_sha256": "e" * 64}
-    elif mismatch == "telemetry_window":
-        session_manifest["telemetry_window_lower_elapsed_seconds"] = 2.0
     elif mismatch == "h5_locator":
         session_manifest["h5_path"] = "../../h5/other.h5"
     elif mismatch == "fits_locator":
@@ -519,12 +511,22 @@ def test_session_manifest_verifies_sibling_flash_manifest(tmp_path, mismatch):
         ]
     elif mismatch == "start_time_utc":
         session_manifest["start_time_utc"] = "2026-08-25T00:00:01.000"
+    elif mismatch == "telemetry_status":
+        session_manifest.update({
+            "telemetry_status": "skipped",
+            "telemetry_reason": "decoder unavailable",
+            "n_telemetry_rows": 0,
+        })
+    elif mismatch == "telemetry_reason":
+        session_manifest.update({
+            "telemetry_status": "skipped",
+            "telemetry_reason": "different decoder failure",
+            "n_telemetry_rows": 0,
+        })
+    elif mismatch == "telemetry_source":
+        session_manifest["telemetry_source"] = "legacy_binary_sidecar"
     elif mismatch == "telemetry_rows":
         session_manifest["n_telemetry_rows"] = 3
-    elif mismatch == "unassigned_telemetry_rows":
-        session_manifest["n_unassigned_telemetry_rows"] = 2
-    else:
-        session_manifest["telemetry_provenance"] = {"source": "sidecar"}
     (session_dir / "session.json").write_text(
         json.dumps(session_manifest),
         encoding="ascii",
@@ -560,6 +562,7 @@ def test_process_session_uses_source_only_flash_identity(tmp_path, monkeypatch):
         "flash_input_identity_sha256": input_identity,
         "flash_source_fingerprint": source_fingerprint,
         "clock_reference": clock_reference,
+        **ABSENT_TELEMETRY_DIAGNOSTICS,
     }), encoding="ascii")
     monkeypatch.setattr(
         pipeline,
@@ -578,7 +581,6 @@ def test_process_session_uses_source_only_flash_identity(tmp_path, monkeypatch):
         session_dir,
         landing_time_file=landing_time_file,
         h5_dir=tmp_path / "h5",
-        rederive_telemetry=False,
     )
 
     assert len(requests) == 1
@@ -744,7 +746,6 @@ def test_session_targeted_parse_issue_marks_only_its_session(
         )
         return (
             [pipeline.Session(ordinal=0), pipeline.Session(ordinal=1)],
-            pipeline.telemetry_mod.TelemetryDecodeResult.absent(),
             None,
         )
 
@@ -812,7 +813,6 @@ def test_session_writer_exception_leaves_output_for_manual_rerun(
             h5_dir=tmp_path / "h5",
             fits_dir=tmp_path / "fits",
             manifest_dir=tmp_path / "manifests",
-            rederive_telemetry=False,
         )
 
     h5_path = tmp_path / "h5" / "session_000.h5"
@@ -844,7 +844,6 @@ def test_flash_writer_exception_leaves_output_for_manual_rerun(
         capture.session_count = 1
         return (
             [pipeline.Session(ordinal=0)],
-            pipeline.telemetry_mod.TelemetryDecodeResult.absent(),
             None,
         )
 
@@ -913,7 +912,6 @@ def test_flash_manifests_are_final_once_portable_and_digest_linked(
         )
         return (
             [pipeline.Session(ordinal=0)],
-            pipeline.telemetry_mod.TelemetryDecodeResult.absent(),
             None,
         )
 

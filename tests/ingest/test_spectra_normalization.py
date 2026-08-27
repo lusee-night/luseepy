@@ -310,14 +310,29 @@ def test_lazy_conversion_and_indexing_keep_distinct_unit_decorations():
     assert data[:, (0, 1, "C"), :].units == SPECTRA_UNITS
     assert data[:, (1, 0, "C"), :].units == SPECTRA_UNITS
 
-    asd = data.to_physical(chunk_size=1)
-    psd = data.to_physical_psd(chunk_size=1)
+    asd = data.to_physical(telemetry=data.interp_telemetry, chunk_size=1)
+    psd = data.to_physical_psd(
+        telemetry=data.interp_telemetry,
+        chunk_size=1,
+    )
+    scalar_asd = data.to_physical(telemetry=telemetry_values, chunk_size=1)
+    scalar_psd = data.to_physical_psd(
+        telemetry=telemetry_values,
+        chunk_size=1,
+    )
     native_psd = data.to_psd(units="nV^2/Hz")
     assert asd.units == "nV/sqrt(Hz)" and asd.frame == "topo"
     assert psd.units == "V^2/Hz" and psd.frame == "topo"
     assert native_psd.units == "nV^2/Hz" and native_psd.frame == "topo"
+    np.testing.assert_array_equal(scalar_asd, asd)
+    np.testing.assert_array_equal(scalar_psd, psd)
     np.testing.assert_array_equal(np.asarray(data.spectra), raw)
     assert data.spectra.units == SPECTRA_UNITS
+
+    data.interp_telemetry = {}
+    for convert in (data.to_physical, data.to_physical_psd):
+        with pytest.raises(ValueError, match="no row-aligned gain telemetry"):
+            convert()
 
 
 def test_realized_gain_codes_are_not_silently_rounded():

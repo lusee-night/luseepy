@@ -161,6 +161,7 @@ def validate_manifest(
         session_status = record.get("status")
         if session_status not in VALID_STATUSES:
             raise ValueError("FLASH session status is invalid")
+        pipeline._validate_manifest_telemetry_fields(record)
         session_statuses.append(session_status)
         locator = record.get("session_dir")
         if locator is None:
@@ -246,8 +247,6 @@ def process_session_command(args: argparse.Namespace) -> int:
         name=args.name,
         ordinal=args.ordinal,
         overwrite=args.overwrite,
-        flash_root=args.flash_root,
-        rederive_telemetry=not args.no_rederive_telemetry,
         issue_collector=collector,
         decoder_strict=args.decoder_strict,
         schema_variant=args.schema_variant,
@@ -317,8 +316,6 @@ def build_parser() -> argparse.ArgumentParser:
     session_parser.add_argument("--manifest-dir", type=Path, required=True)
     session_parser.add_argument("--name")
     session_parser.add_argument("--ordinal", type=int, default=0)
-    session_parser.add_argument("--flash-root", type=Path)
-    session_parser.add_argument("--no-rederive-telemetry", action="store_true")
     session_parser.add_argument("--h5-dir", type=Path)
     session_parser.add_argument("--fits-dir", type=Path)
     session_parser.add_argument("--plots-dir", type=Path)

@@ -130,7 +130,10 @@ class SessionArtifacts:
     decoded_summary: Mapping[str, int]
     h5_path: Path | None
     fits_path: Path | None
-    telemetry_state: str = "absent"
+    telemetry_status: Literal["absent", "decoded", "skipped"] = "absent"
+    telemetry_source: str | None = None
+    telemetry_reason: str | None = None
+    n_telemetry_rows: int = 0
     issues: tuple[Mapping[str, object], ...] = field(default_factory=tuple)
 
 
@@ -622,7 +625,7 @@ def capture_call(
 
 
 def products_summary(
-    products: object, telemetry_state: str = "absent"
+    products: object, telemetry: object | None = None
 ) -> dict[str, int]:
     calibrator_count = sum(
         len(getattr(products, name, ()))
@@ -640,7 +643,7 @@ def products_summary(
         "zoom": len(getattr(products, "zoom_spectra", ())),
         "waveform": len(getattr(products, "waveforms", ())),
         "grimm": len(getattr(products, "grimm_spectra", ())),
-        "telemetry": int(telemetry_state == "decoded"),
+        "telemetry": int(getattr(telemetry, "row_count", 0)),
         "housekeeping": len(getattr(products, "housekeeping", ())),
         "calibrator": calibrator_count,
     }
@@ -648,13 +651,11 @@ def products_summary(
 
 def ingest_issue_union(
     products: object,
-    telemetry: object | None,
     context_issues: Sequence[object] = (),
 ) -> tuple[object, ...]:
     issue_by_id = {}
     for issue in (
         *products.issues,
-        *(() if telemetry is None else telemetry.issues),
         *context_issues,
     ):
         existing = issue_by_id.get(issue.issue_id)
@@ -692,10 +693,8 @@ def make_write_request(
     context_issues: Sequence[object] = (),
 ):
     from lusee.ingest import (
-        InterpolationPolicy,
         LunarLocation,
         RunProvenance,
-        TelemetryDecodeResult,
         WriteRequest,
         family_statuses_for_products,
         load_clock_reference_set,
@@ -707,11 +706,9 @@ def make_write_request(
     )
     from lusee.ingest.write_request import FAMILY_TYPES
 
-    request_telemetry = telemetry or TelemetryDecodeResult.absent()
     normalized_context_issues = tuple(context_issues)
     issues = ingest_issue_union(
         products,
-        request_telemetry,
         normalized_context_issues,
     )
     family_issue_ids = {}
@@ -726,7 +723,6 @@ def make_write_request(
     family_statuses = family_statuses_for_products(
         products,
         family_issue_ids=family_issue_ids,
-        telemetry=request_telemetry,
     )
     return WriteRequest(
         products=products,
@@ -751,31 +747,35 @@ def make_write_request(
         ),
         issues=issues,
         family_statuses=family_statuses,
-        telemetry=request_telemetry,
-        interpolation_policy=InterpolationPolicy(),
+        telemetry=telemetry,
         context_issues=normalized_context_issues,
     )
 
 
-def telemetry_state(result: object | None) -> str:
-    from lusee.ingest import (
-        TelemetryCoverage,
-        TelemetryDecoderStatus,
-        TelemetryInputState,
-    )
+def telemetry_diagnostics(
+    telemetry: object | None,
+    *,
+    selected_source: str | None = None,
+    skipped_reason: str | None = None,
+) -> tuple[str, str | None, str | None, int]:
+    """Return the four flat telemetry diagnostics used by the report."""
 
-    if result is None or result.input_state is TelemetryInputState.ABSENT:
-        return "absent"
-    if result.decoder_status is TelemetryDecoderStatus.UNAVAILABLE:
-        return "decoder_unavailable"
-    if result.decoder_status in (
-        TelemetryDecoderStatus.BROKEN,
-        TelemetryDecoderStatus.INCOMPATIBLE,
-    ):
-        return "decoder_broken"
-    if result.coverage is TelemetryCoverage.PRESENT_EMPTY:
-        return "present_empty"
-    return "decoded"
+    if telemetry is not None:
+        return (
+            "decoded",
+            str(telemetry.source_kind),
+            None,
+            int(telemetry.row_count),
+        )
+    if selected_source is not None:
+        return (
+            "skipped",
+            selected_source,
+            skipped_reason
+            or "private telemetry decoder unavailable, failed, or returned invalid data",
+            0,
+        )
+    return "absent", None, None, 0
 
 
 def qualification_issue_record(
@@ -805,7 +805,9 @@ def write_one_session(
     *,
     telemetry: object | None = None,
     context_issues: Sequence[object] = (),
-    telemetry_state: str = "absent",
+    telemetry_status: str | None = None,
+    telemetry_source: str | None = None,
+    telemetry_reason: str | None = None,
     initial_issues: Sequence[Mapping[str, object]] = (),
     reported_issue_ids: set[str] | None = None,
 ) -> SessionArtifacts:
@@ -823,7 +825,7 @@ def write_one_session(
     )
     append_ingest_issue_records(
         issues,
-        ingest_issue_union(products, telemetry, context_issues),
+        ingest_issue_union(products, context_issues),
         target.target_id,
         session_id,
         reported,
@@ -865,15 +867,25 @@ def write_one_session(
         private_paths=paths,
     )
     issues.extend(found)
+    if telemetry_status is None:
+        (
+            telemetry_status,
+            telemetry_source,
+            telemetry_reason,
+            n_telemetry_rows,
+        ) = telemetry_diagnostics(telemetry)
+    else:
+        n_telemetry_rows = int(getattr(telemetry, "row_count", 0))
     return SessionArtifacts(
         target_id=target.target_id,
         session_id=session_id,
-        decoded_summary=products_summary(
-            products, telemetry_state
-        ),
+        decoded_summary=products_summary(products, telemetry),
         h5_path=h5_path if ok_h5 else None,
         fits_path=fits_path if ok_fits else None,
-        telemetry_state=telemetry_state,
+        telemetry_status=telemetry_status,
+        telemetry_source=telemetry_source,
+        telemetry_reason=telemetry_reason,
+        n_telemetry_rows=n_telemetry_rows,
         issues=tuple(issues),
     )
 
@@ -919,20 +931,22 @@ def execute_target_default(
                 issues=tuple(decode_issues),
             )]
         telemetry = None
-        state = "absent"
+        status = "absent"
+        source = None
+        reason = None
         sidecar_issues: list[dict[str, object]] = list(decode_issues)
         if target.telemetry_sidecar is not None:
             def decode_sidecar():
                 value = decode_legacy_sidecar(
                     target.telemetry_sidecar,
-                    issue_collector=issue_collector,
                 )
+                if value is None:
+                    return None
                 return map_dcb_absolute_time(
                     value,
                     clock_reference_set=load_clock_reference_set(
                         clock_adapter.landing_time_file
                     ),
-                    issue_collector=issue_collector,
                 )
 
             ok, value, found = capture_call(
@@ -944,12 +958,20 @@ def execute_target_default(
                     target.source_path, target.telemetry_sidecar, work_dir
                 ],
             )
-            sidecar_issues.extend(found)
-            if ok:
-                telemetry = value
-                state = telemetry_state(value)
-            else:
-                state = "decoder_broken"
+            telemetry = value if ok else None
+            captured_reason = next(
+                (
+                    str(item.get("message"))
+                    for item in found
+                    if item.get("message")
+                ),
+                None,
+            )
+            status, source, reason, _ = telemetry_diagnostics(
+                telemetry,
+                selected_source="legacy_binary_sidecar",
+                skipped_reason=captured_reason,
+            )
         return [write_one_session(
             target,
             "session_000",
@@ -957,7 +979,9 @@ def execute_target_default(
             work_dir,
             clock_adapter,
             telemetry=telemetry,
-            telemetry_state=state,
+            telemetry_status=status,
+            telemetry_source=source,
+            telemetry_reason=reason,
             initial_issues=sidecar_issues,
         )]
 
@@ -982,7 +1006,23 @@ def execute_target_default(
             fits_path=None,
             issues=tuple(parse_issues),
         )]
-    sessions, _, _ = parsed
+    sessions, source_telemetry = parsed
+    telemetry_warnings = [
+        item
+        for item in parse_issues
+        if "telemetry" in str(item.get("message", "")).casefold()
+        and any(
+            word in str(item.get("message", "")).casefold()
+            for word in ("skipped", "omitted")
+        )
+    ]
+    parse_issues = [
+        item for item in parse_issues if item not in telemetry_warnings
+    ]
+    skipped_reason = next(
+        (str(item.get("message")) for item in telemetry_warnings),
+        None,
+    )
     raw_context_issues = issue_collector.since(raw_context_marker)
     ordered_sessions = sorted(sessions, key=lambda item: item.ordinal)
     session_contexts = [
@@ -1080,6 +1120,15 @@ def execute_target_default(
                 issues=tuple(session_issues),
             ))
             continue
+        status, source, reason, _ = telemetry_diagnostics(
+            session.telemetry,
+            selected_source=(
+                "b01_0x314"
+                if source_telemetry is not None or telemetry_warnings
+                else None
+            ),
+            skipped_reason=skipped_reason,
+        )
         artifacts.append(write_one_session(
             target,
             session_id,
@@ -1088,7 +1137,9 @@ def execute_target_default(
             clock_adapter,
             telemetry=session.telemetry,
             context_issues=context_issues,
-            telemetry_state=telemetry_state(session.telemetry),
+            telemetry_status=status,
+            telemetry_source=source,
+            telemetry_reason=reason,
             initial_issues=session_issues,
             reported_issue_ids=reported_issue_ids,
         ))
@@ -1111,6 +1162,16 @@ def add_mapping(
 ) -> None:
     for name in sorted(values, key=lambda item: str(item).casefold()):
         output[f"{prefix}/{semantic_name(name)}"] = values[name]
+
+
+def bundle_telemetry_tables(bundle: object) -> tuple[object, ...]:
+    """Return the fixed per-file telemetry tables exposed by the reader."""
+
+    tables = tuple(getattr(bundle, "telemetry_sessions", ()))
+    if tables:
+        return tuple(table for table in tables if table is not None)
+    table = getattr(bundle, "telemetry", None)
+    return () if table is None else (table,)
 
 
 def bundle_semantics(
@@ -1167,32 +1228,28 @@ def bundle_semantics(
         output[f"waveform/channel_{channel}/times"] = value
     for type_id, values in sorted(getattr(bundle, "housekeeping", {}).items()):
         add_mapping(output, f"housekeeping/type_{type_id}", values)
-    add_mapping(output, "telemetry/fpga", getattr(bundle, "dcb_fpga", {}))
-    add_mapping(output, "telemetry/encoder", getattr(bundle, "dcb_encoder", {}))
-    add_mapping(output, "telemetry/interpolated", getattr(bundle, "interp_telemetry", {}))
+    telemetry_tables = bundle_telemetry_tables(bundle)
+    for index, table in enumerate(telemetry_tables):
+        prefix = (
+            "telemetry"
+            if len(telemetry_tables) == 1
+            else f"telemetry/session_{index:03d}"
+        )
+        output[f"{prefix}/source_kind"] = table.source_kind
+        for name in (
+            "field_names",
+            "units",
+            "source_indices",
+            "mission_seconds",
+            "lusee_subsecs",
+            "mjd_times",
+            "raw_counts",
+            "values",
+            "valid",
+        ):
+            output[f"{prefix}/{name}"] = getattr(table, name)
     if frequency_mhz is not None:
         output["normal/frequency_mhz"] = frequency_mhz
-    fpga = getattr(bundle, "dcb_fpga", {})
-    encoder = getattr(bundle, "dcb_encoder", {})
-    time_values = fpga
-    time_source = "fpga"
-    if "mission_seconds" not in time_values:
-        time_values = encoder
-        time_source = "encoder"
-    if (
-        clock_adapter is not None
-        and "mission_seconds" in time_values
-        and "lusee_subsecs" in time_values
-    ):
-        raw_seconds = (
-            np.asarray(time_values["mission_seconds"], dtype=np.float64)
-            + np.asarray(time_values["lusee_subsecs"], dtype=np.float64) / 65536.0
-        )
-        output["telemetry/display/assumed_mjd"] = (
-            (raw_seconds - clock_adapter.dcb_raw_seconds) / 86400.0
-            + clock_adapter.mjd_epoch_offset_days
-        )
-        output["telemetry/display/time_source"] = time_source
     return output
 
 
@@ -1207,11 +1264,9 @@ def field_units(field_path: str, bundle: object | None = None) -> str:
         return "raw clock second anchor (qualification assumption; TIME-004)"
     if field_path in ("constants/clock_source", "constants/time_scale"):
         return "qualification clock convention (TIME-004)"
-    if field_path == "telemetry/display/time_source":
-        return "qualification display provenance (TIME-004)"
     if field_path.endswith("frequency_mhz"):
         return "MHz (legacy reader-derived; FREQ-001 open)"
-    if field_path.endswith("mjd_times") or field_path.endswith("assumed_mjd"):
+    if field_path.endswith("mjd_times"):
         return "MJD day (qualification assumption; TIME-004)"
     if (
         field_path.endswith("raw_times")
@@ -1221,13 +1276,24 @@ def field_units(field_path: str, bundle: object | None = None) -> str:
         return "raw clock second"
     if field_path.endswith("lusee_subsecs"):
         return "raw 1/65536-second tick"
+    if field_path.startswith("telemetry/"):
+        name = field_path.rsplit("/", 1)[-1]
+        if name == "raw_counts":
+            return "raw 12-bit count"
+        if name == "values":
+            return "engineering units recorded in telemetry/units"
+        if name == "valid":
+            return "engineering-value validity"
+        if name == "source_indices":
+            return "source record ordinal"
+        return "not applicable"
     if field_path.startswith("housekeeping/") and time_field_path(field_path):
         return "raw seconds (native HK counter)"
     if field_path.startswith("waveform/") and time_field_path(field_path):
         return "raw ADC clock second (unmapped; not absolute time)"
     if field_path.startswith(("tr/", "zoom/", "waveform/", "grimm/")):
         return "raw count (UNITS-001 open)"
-    if field_path.startswith(("telemetry/", "housekeeping/")):
+    if field_path.startswith("housekeeping/"):
         return "unit unestablished (UNITS-001 open)"
     return "not applicable or unestablished"
 
@@ -1275,8 +1341,8 @@ def categorical_field_path(field_path: str) -> bool:
     """Return whether a flattened reader field has categorical semantics."""
 
     name = field_path.rsplit("/", 1)[-1].casefold()
-    if field_path.startswith("telemetry/encoder/"):
-        return name in ("enc_status", "status") or "status" in name
+    if field_path.startswith("telemetry/") and name == "valid":
+        return True
     if not field_path.startswith(("telemetry/", "housekeeping/")):
         return False
     return (
@@ -1505,6 +1571,9 @@ def family_counts_from_bundle(bundle: object) -> dict[str, int]:
     def rows(value: object) -> int:
         return int(np.asarray(value).shape[0]) if value is not None else 0
 
+    telemetry_rows = sum(
+        int(table.row_count) for table in bundle_telemetry_tables(bundle)
+    )
     family_status = getattr(bundle, "family_status", {})
     status_families = np.asarray(family_status.get("family", ()))
     persisted_rows = np.asarray(family_status.get("persisted_rows", ()))
@@ -1519,7 +1588,7 @@ def family_counts_from_bundle(bundle: object) -> dict[str, int]:
             "zoom": by_family.get("zoom_spectra", 0),
             "waveform": by_family.get("waveforms", 0),
             "grimm": by_family.get("grimm_spectra", 0),
-            "telemetry": int(by_family.get("dcb_telemetry", 0) > 0),
+            "telemetry": telemetry_rows,
             "housekeeping": by_family.get("housekeeping", 0),
             "calibrator": sum(
                 by_family.get(family, 0)
@@ -1540,7 +1609,7 @@ def family_counts_from_bundle(bundle: object) -> dict[str, int]:
             rows(value) for value in getattr(bundle, "waveforms", {}).values()
         ),
         "grimm": rows(getattr(bundle, "grimm_spectra", None)),
-        "telemetry": int(bool(getattr(bundle, "dcb_fpga", {})) or bool(getattr(bundle, "dcb_encoder", {}))),
+        "telemetry": telemetry_rows,
         "housekeeping": sum(
             rows(next(iter(values.values()))) if values else 0
             for values in getattr(bundle, "housekeeping", {}).values()
@@ -1652,7 +1721,6 @@ def build_target_coverage(
     plotted_counts: Mapping[str, int],
     failed_stages: set[str],
     *,
-    telemetry_state: str = "absent",
     failed_plot_families: set[str] | None = None,
 ) -> list[dict[str, object]]:
     failed_plot_families = failed_plot_families or set()
@@ -1660,15 +1728,11 @@ def build_target_coverage(
     for family in sorted(target.observed_families):
         observed = int(target.observed_families[family])
         evidence = observed_family_evidence(target, family)
-        decoded_supported = not (
-            family == "telemetry" and telemetry_state == "decoder_unavailable"
-        )
         decoded_failed = (
             "target_execute" in failed_stages
             or "raw_reassembly" in failed_stages
             or "decoded" in failed_stages
             or "target_report" in failed_stages
-            or (family == "telemetry" and telemetry_state == "decoder_broken")
         )
         both_writers_failed = (
             "hdf5" in failed_stages and "fits" in failed_stages
@@ -1688,7 +1752,7 @@ def build_target_coverage(
             "decoded": (
                 int(decoded_counts.get(family, 0)),
                 decoded_failed,
-                decoded_supported,
+                True,
             ),
             "hdf5": (
                 int(h5_counts.get(family, 0)),
@@ -2388,161 +2452,45 @@ def telemetry_page(
     clock_adapter: BaselineClockAdapter,
 ) -> FamilyPage | None:
     available = [
-        session for session in sessions
-        if getattr(session.bundle, "dcb_fpga", {}) or getattr(session.bundle, "dcb_encoder", {})
+        (session, table)
+        for session in sessions
+        for table in bundle_telemetry_tables(session.bundle)
     ]
     if not available:
         return None
     if frozen is not None:
         if not isinstance(frozen, dict):
             return unavailable_selection_page(target, "telemetry", frozen)
-        session = next((item for item in available if item.session_id == frozen.get("session_id")), None)
-        if session is None:
+        selected = next(
+            (
+                item
+                for item in available
+                if item[0].session_id == frozen.get("session_id")
+            ),
+            None,
+        )
+        if selected is None:
             return unavailable_selection_page(target, "telemetry", frozen)
     else:
-        session = sorted(available, key=lambda item: item.session_id)[0]
-    fpga = getattr(session.bundle, "dcb_fpga", {})
-    encoder = getattr(session.bundle, "dcb_encoder", {})
-    fpga_mission = np.asarray(fpga.get("mission_seconds", ()), dtype=np.float64)
-    fpga_subsecs = np.asarray(
-        fpga.get("lusee_subsecs", np.zeros(fpga_mission.shape)),
-        dtype=np.float64,
-    )
-    if fpga_mission.size and fpga_subsecs.shape == fpga_mission.shape:
-        fpga_elapsed = (
-            fpga_mission + fpga_subsecs / 65536.0 - clock_adapter.dcb_raw_seconds
-        )
-        x = fpga_elapsed - fpga_elapsed[0]
-        x_label = "seconds since first displayed DCB FPGA sample"
-    else:
-        longest = max((np.asarray(value).size for value in fpga.values()), default=0)
-        x = np.arange(longest)
-        x_label = "sample index; DCB FPGA time unavailable"
-
-    time_details: list[str] = []
-    for time_source, time_mapping in (("FPGA", fpga), ("encoder", encoder)):
-        if not time_mapping:
-            continue
-        mission = np.asarray(
-            time_mapping.get("mission_seconds", ()),
-            dtype=np.float64,
-        )
-        subsecs = np.asarray(
-            time_mapping.get("lusee_subsecs", np.zeros(mission.shape)),
-            dtype=np.float64,
-        )
-        if mission.size and subsecs.shape == mission.shape:
-            assumed_elapsed = (
-                mission + subsecs / 65536.0 - clock_adapter.dcb_raw_seconds
-            )
-            time_details.append(time_summary_text(
-                assumed_elapsed,
-                f"assumed DCB {time_source} seconds from landing "
-                "(display only; TIME-004)",
-                "s",
-            ))
-        else:
-            time_details.append(f"DCB {time_source} display time unavailable")
-    if not time_details:
-        time_details.append("DCB FPGA and encoder display time unavailable")
-    groups = {
-        "temperature-like fields": [name for name in fpga if "THERM" in name.upper() or name.upper().endswith("_T") or "TEMP" in name.upper()],
-        "voltage-like fields": [name for name in fpga if "VMON" in name.upper() or name.upper().endswith("_V")],
-        "current-like fields": [name for name in fpga if name.upper().endswith("_C") or name.upper().endswith("_A")],
-    }
-    plt = import_pyplot()
-    figure, axes = plt.subplots(1, 3, figsize=(11, 8.5))
-    figure.subplots_adjust(top=0.79, bottom=0.53, wspace=0.3)
-    for axis, (title, names) in zip(axes, groups.items()):
-        for name in sorted(names):
-            values = np.asarray(fpga[name])
-            count = min(x.size, values.size)
-            if count >= 2:
-                axis.plot(x[:count], values[:count], lw=0.55, label=name)
-        axis.set_title(title, fontsize=8)
-        axis.set_xlabel(x_label, fontsize=6)
-        axis.set_ylabel("unit unestablished", fontsize=6)
-        if axis.lines:
-            axis.legend(fontsize=3.7, ncol=2, loc="best")
-        else:
-            axis.text(0.5, 0.5, "fewer than two valid times", ha="center", va="center")
-    field_lines = ["All public-reader fields; native uncropped statistics; units unestablished"]
-    for name in sorted(fpga):
-        field_path = f"telemetry/fpga/{semantic_name(name)}"
-        detail = (
-            categorical_summary_text(fpga[name], field_units(field_path))
-            if categorical_field_path(field_path)
-            else summary_text(fpga[name], field_units(field_path))
-        )
-        field_lines.append(
-            f"FPGA {name}: {detail}"
-        )
-    field_lines.append("Encoder/status (TELEMETRY-003 open)")
-    for name in sorted(encoder):
-        field_path = f"telemetry/encoder/{semantic_name(name)}"
-        detail = (
-            categorical_summary_text(encoder[name], field_units(field_path))
-            if categorical_field_path(field_path)
-            else summary_text(encoder[name], field_units(field_path))
-        )
-        field_lines.append(
-            f"ENC {name}: {detail}"
-        )
-    if not encoder:
-        field_lines.append("ENC absent")
-    wrapped_lines: list[str] = []
-    for line in field_lines:
-        wrapped_lines.extend(
-            textwrap.wrap(
-                line,
-                width=66,
-                subsequent_indent="  ",
-                replace_whitespace=False,
-                drop_whitespace=False,
-            ) or [""]
-        )
-    columns = min(4, max(1, math.ceil(len(wrapped_lines) / 28)))
-    block = max(1, math.ceil(len(wrapped_lines) / columns))
-    for column in range(columns):
-        chunk = wrapped_lines[column * block:(column + 1) * block]
-        figure.text(
-            0.025 + column * (0.95 / columns),
-            0.47,
-            "\n".join(chunk),
-            family="monospace",
-            fontsize=3.7,
-            va="top",
-        )
+        selected = sorted(available, key=lambda item: item[0].session_id)[0]
+    session, table = selected
     selection = {"session_id": session.session_id}
-    figure.suptitle(f"{target.target_id}: telemetry", fontsize=13, y=0.98)
-    header_lines: list[str] = []
-    for line in (
-        f"source={target.target_id}; selection={canonical_json(selection)}; "
-        f"layout={getattr(session.bundle, 'layout_version', None)}; field-name "
-        "groups are presentation-only; units unestablished (UNITS-001)",
-        *time_details,
-        "display equation: assumed_mjd=(mission_seconds+lusee_subsecs/65536-"
-        "dcb_anchor)/86400+reference_mjd; ADC time unmapped",
-    ):
-        header_lines.extend(
-            textwrap.wrap(
-                line,
-                width=178,
-                subsequent_indent="  ",
-                replace_whitespace=False,
-                drop_whitespace=False,
-            ) or [""]
-        )
-    figure.text(
-        0.04,
-        0.92,
-        "\n".join(header_lines),
-        fontsize=5.8,
-        va="top",
+    figure = text_figure(
+        f"{target.target_id}: telemetry",
+        [
+            f"source={target.target_id}; selection={canonical_json(selection)}; "
+            "fixed optional telemetry table",
+        ],
+        [
+            "telemetry_status=decoded",
+            f"telemetry_source={table.source_kind}",
+            f"n_telemetry_rows={table.row_count}",
+            "field_count=57",
+            "HDF5/FITS values, counts, masks, units, and times are checked "
+            "by canonical table parity",
+        ],
     )
-    count = max((np.asarray(value).size for value in fpga.values()), default=0)
-    count = max(count, max((np.asarray(value).size for value in encoder.values()), default=0))
-    return FamilyPage("telemetry", count, selection, figure)
+    return FamilyPage("telemetry", int(table.row_count), selection, figure)
 
 
 def housekeeping_page(
@@ -3681,7 +3629,6 @@ def process_target_report(
         for item in found
         if str(item.get("code", "")).startswith("stage_failed.")
     }
-    telemetry_states: list[str] = []
     plot_sessions: list[PlotSession] = []
     target_layout_versions: set[str] = set()
     target_source_formats: set[str] = set()
@@ -3690,7 +3637,15 @@ def process_target_report(
     for artifact in artifacts:
         target_issues.extend(dict(item) for item in artifact.issues)
         add_family_counts(decoded_total, artifact.decoded_summary)
-        telemetry_states.append(artifact.telemetry_state)
+        target_metrics.append({
+            "record_type": "telemetry",
+            "target_id": target.target_id,
+            "session_id": artifact.session_id,
+            "telemetry_status": artifact.telemetry_status,
+            "telemetry_source": artifact.telemetry_source,
+            "telemetry_reason": artifact.telemetry_reason,
+            "n_telemetry_rows": artifact.n_telemetry_rows,
+        })
         failed_stages.update(
             str(item.get("stage"))
             for item in artifact.issues
@@ -3826,16 +3781,6 @@ def process_target_report(
         if page.family in plotted_total and page.family not in failed_plot_families:
             plotted_total[page.family] += int(page.count)
 
-    telemetry_state = "absent"
-    for candidate_state in (
-        "decoded",
-        "decoder_broken",
-        "decoder_unavailable",
-        "present_empty",
-    ):
-        if candidate_state in telemetry_states:
-            telemetry_state = candidate_state
-            break
     target_coverage = build_target_coverage(
         target,
         decoded_total,
@@ -3844,7 +3789,6 @@ def process_target_report(
         reader_total,
         plotted_total,
         failed_stages,
-        telemetry_state=telemetry_state,
         failed_plot_families=failed_plot_families,
     )
     target_issues.extend(coverage_consistency_issues(target, target_coverage))
@@ -4148,8 +4092,6 @@ def run_qualification(
             "spectrometer_raw_seconds": clock_adapter.spectrometer_raw_seconds,
             "dcb_clock_source": clock_adapter.dcb_clock_source,
             "dcb_raw_seconds": clock_adapter.dcb_raw_seconds,
-            "dcb_display_equation": "assumed_mjd=(mission_seconds+lusee_subsecs/65536-dcb_reference_raw_seconds)/86400+reference_mjd",
-            "dcb_display_only": True,
             "adc_clock_mapped": False,
             "assumed": clock_adapter.assumed,
         },
@@ -4167,7 +4109,7 @@ def run_qualification(
         "semantic_options": {
             "plot_source_policy": "hdf5_public_reader_preferred_fits_fallback",
             "actual_plot_source_formats": sorted(reader_source_formats),
-            "telemetry_interpolation": False,
+            "telemetry_contract": "fixed_optional_57_column_table",
             "frequency_coordinate": "legacy_reader_derived_or_stored_bin_index",
             "reader_layout_versions": sorted(reader_layout_versions),
             "selected_decoder_schema": "unavailable_in_layout_v3_reader",

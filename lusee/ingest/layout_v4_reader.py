@@ -8,9 +8,11 @@ from pathlib import Path
 
 import numpy as np
 
+from .clock_reference import ClockSource, clock_reference_set_from_record
 from .constants import INGEST_LAYOUT_VERSION
 from .dependencies import import_optional_dependency
 from .layout_v4_tree import LayoutDataset, LayoutGroup
+from .telemetry import TELEMETRY_FIELD_COUNT, TelemetryData
 from .write_request import LunarLocation
 
 
@@ -422,28 +424,6 @@ def _validate_common_provenance(validator: LayoutV4Validator) -> None:
         )
     _bool_attr(validator, run_path, "overwrite_requested")
     _bool_attr(validator, run_path, "destination_preexisted")
-    _string_attr(validator, run_path, "interpolation_mode")
-    _bool_attr(validator, run_path, "interpolation_extrapolate")
-    maximum_gap_valid = _bool_attr(
-        validator, run_path, "interpolation_maximum_gap_seconds_valid"
-    )
-    if maximum_gap_valid:
-        value = float(
-            _scalar_attr(
-                validator,
-                run_path,
-                "interpolation_maximum_gap_seconds",
-                np.float64,
-            )
-        )
-        if not np.isfinite(value) or value <= 0.0:
-            raise LayoutV4ValidationError(
-                "layout-v4 interpolation maximum gap is invalid"
-            )
-    elif "interpolation_maximum_gap_seconds" in validator.group(run_path).attrs:
-        raise LayoutV4ValidationError(
-            "layout-v4 interpolation maximum gap presence disagrees"
-        )
 
     decoder_path = "/provenance/decoder"
     _scalar_attr(validator, decoder_path, "selected_schema_id", np.uint16)
@@ -529,6 +509,166 @@ def _validate_common_provenance(validator: LayoutV4Validator) -> None:
         )
 
 
+def _validate_telemetry(validator: LayoutV4Validator) -> None:
+    path = "/telemetry"
+    if not validator.has(path):
+        return
+    group = validator.group(path)
+    expected_children = {
+        "field_names",
+        "units",
+        "source_indices",
+        "mission_seconds",
+        "lusee_subsecs",
+        "mjd_times",
+        "raw_counts",
+        "values",
+        "valid",
+    }
+    if (
+        set(group.attrs) != {"source_kind"}
+        or set(group.children) != expected_children
+    ):
+        raise LayoutV4ValidationError(
+            "layout-v4 telemetry tree is not canonical"
+        )
+
+    field_names = validator.dataset(
+        f"{path}/field_names",
+        utf8=True,
+        shape=(TELEMETRY_FIELD_COUNT,),
+    ).data
+    units = validator.dataset(
+        f"{path}/units",
+        utf8=True,
+        shape=(TELEMETRY_FIELD_COUNT,),
+    ).data
+    mission_seconds = validator.dataset(
+        f"{path}/mission_seconds",
+        dtype=np.uint32,
+        ndim=1,
+    ).data
+    row_count = mission_seconds.size
+    arrays = {
+        "source_indices": validator.dataset(
+            f"{path}/source_indices",
+            dtype=np.int64,
+            shape=(row_count,),
+        ).data,
+        "lusee_subsecs": validator.dataset(
+            f"{path}/lusee_subsecs",
+            dtype=np.uint16,
+            shape=(row_count,),
+        ).data,
+        "mjd_times": validator.dataset(
+            f"{path}/mjd_times",
+            dtype=np.float64,
+            shape=(row_count,),
+        ).data,
+        "raw_counts": validator.dataset(
+            f"{path}/raw_counts",
+            dtype=np.uint16,
+            shape=(row_count, TELEMETRY_FIELD_COUNT),
+        ).data,
+        "values": validator.dataset(
+            f"{path}/values",
+            dtype=np.float64,
+            shape=(row_count, TELEMETRY_FIELD_COUNT),
+        ).data,
+        "valid": validator.dataset(
+            f"{path}/valid",
+            dtype=np.bool_,
+            shape=(row_count, TELEMETRY_FIELD_COUNT),
+        ).data,
+    }
+    try:
+        telemetry = TelemetryData(
+            source_kind=_string_attr(validator, path, "source_kind"),
+            field_names=tuple(field_names.tolist()),
+            units=tuple(units.tolist()),
+            source_indices=arrays["source_indices"],
+            mission_seconds=mission_seconds,
+            lusee_subsecs=arrays["lusee_subsecs"],
+            mjd_times=arrays["mjd_times"],
+            raw_counts=arrays["raw_counts"],
+            values=arrays["values"],
+            valid=arrays["valid"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise LayoutV4ValidationError(
+            f"layout-v4 telemetry table is invalid: {exc}"
+        ) from exc
+
+    clock_path = "/clock_reference"
+    reference_set = None
+    if _bool_attr(validator, clock_path, "available"):
+        try:
+            record = json.loads(
+                _string_attr(
+                    validator,
+                    clock_path,
+                    "canonical_record_json",
+                )
+            )
+            reference_set = clock_reference_set_from_record(record)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise LayoutV4ValidationError(
+                f"layout-v4 clock reference is invalid: {exc}"
+            ) from exc
+        sources = validator.dataset(
+            f"{clock_path}/clock_sources",
+            utf8=True,
+            ndim=1,
+        ).data
+        raw_seconds = validator.dataset(
+            f"{clock_path}/clock_reference_raw_seconds",
+            dtype=np.float64,
+            shape=(sources.size,),
+        ).data
+        if tuple(sources.tolist()) != tuple(
+            item.clock_source.value for item in reference_set.clocks
+        ) or not np.array_equal(
+            raw_seconds,
+            np.asarray(
+                [
+                    item.clock_reference_raw_seconds
+                    for item in reference_set.clocks
+                ],
+                dtype=np.float64,
+            ),
+        ):
+            raise LayoutV4ValidationError(
+                "layout-v4 clock-reference datasets disagree"
+            )
+
+    dcb_reference = (
+        reference_set.reference_for(ClockSource.DCB)
+        if reference_set is not None
+        else None
+    )
+    if dcb_reference is None:
+        if not np.isnan(telemetry.mjd_times).all():
+            raise LayoutV4ValidationError(
+                "layout-v4 telemetry MJD requires a DCB clock reference"
+            )
+        return
+    if not np.isfinite(telemetry.mjd_times).all():
+        raise LayoutV4ValidationError(
+            "layout-v4 DCB-referenced telemetry has missing MJD times"
+        )
+    expected = np.asarray(
+        reference_set.to_mjd(
+            telemetry.raw_seconds,
+            clock_source=ClockSource.DCB,
+        ),
+        dtype=np.float64,
+    )
+    if not np.array_equal(telemetry.mjd_times, expected):
+        raise LayoutV4ValidationError(
+            "layout-v4 telemetry MJD contradicts the DCB clock reference"
+        )
+
+
 def _validate_counted_groups(validator: LayoutV4Validator) -> None:
     def visit(group: LayoutGroup) -> None:
         if "count" in group.attrs and group.path != "/issues":
@@ -552,6 +692,7 @@ def validate_layout_v4_tree(root: LayoutGroup) -> LayoutV4Validator:
     _validate_tree_structure(root)
     validator = LayoutV4Validator(root)
     _validate_common_provenance(validator)
+    _validate_telemetry(validator)
     _validate_counted_groups(validator)
     return validator
 

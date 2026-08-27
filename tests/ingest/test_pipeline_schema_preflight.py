@@ -66,7 +66,6 @@ def install_synthetic_flash(monkeypatch, products):
         "_parse_flash_loaded",
         lambda *args, **kwargs: (
             sessions,
-            pipeline.telemetry_mod.TelemetryDecodeResult.absent(),
             None,
         ),
     )

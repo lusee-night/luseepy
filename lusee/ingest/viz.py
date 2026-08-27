@@ -19,7 +19,6 @@ from typing import List, Optional, Sequence
 
 import numpy as np
 
-from .constants import INGEST_LAYOUT_VERSION
 from .obs_factory import LegacyIngestWarning, SessionBundle, load_bundle
 
 log = logging.getLogger(__name__)
@@ -386,46 +385,33 @@ def plot_adc_stats(source, out_path: Path | str) -> Path:
 # Plot: DCB telemetry summary
 # ---------------------------------------------------------------------------
 
-def _telemetry_field_groups(bundle: SessionBundle) -> dict[str, tuple[str, ...]]:
-    if bundle.layout_version == INGEST_LAYOUT_VERSION:
-        collection = bundle.telemetry_fpga
-        if collection is None:
-            return {}
-        grouped: dict[str, list[str]] = {}
-        for item in collection.field_metadata:
-            grouped.setdefault(item.display_group or "other", []).append(item.name)
-        return {name: tuple(fields) for name, fields in grouped.items()}
-    from . import telemetry as telemetry_mod
-
-    return telemetry_mod.field_groups()
-
-
-def _unassigned_telemetry_values(bundle: SessionBundle) -> dict[str, np.ndarray]:
-    collection = bundle.telemetry_fpga
-    if bundle.layout_version != INGEST_LAYOUT_VERSION or collection is None:
-        return {}
-    return collection.unassigned_engineering_values()
+_TELEMETRY_PLOT_GROUPS = {
+    "temperatures": (
+        "THERM_FPGA",
+        "THERM_DCB",
+        "SPE_ADC0_T",
+        "SPE_ADC1_T",
+    ),
+    "voltages and currents": (
+        "VMON_6V",
+        "SPE_1VAD8_V",
+        "VMON_1V2D",
+        "SPE_1VAD8_C",
+    ),
+}
 
 
 def plot_dcb_telemetry(source, out_path: Path | str) -> Path:
     """Summary plot of representative DCB telemetry channels.
 
-    Layout-v4 panel grouping comes from persisted field metadata. Legacy
-    layouts use the optional decoder's compatibility grouping when available.
-
-    Raises ``FileNotFoundError`` if ``/DCB_telemetry`` is missing.
+    Raises ``FileNotFoundError`` when the fixed telemetry table is absent.
     """
     out_path = Path(out_path)
     bundle = _as_bundle(source)
-    panel_groups = _telemetry_field_groups(bundle)
     telemetry = bundle.dcb_fpga
-    unassigned_only = False
-    if not telemetry or not any(np.asarray(value).size for value in telemetry.values()):
-        unassigned = _unassigned_telemetry_values(bundle)
-        if unassigned:
-            telemetry = unassigned
-            unassigned_only = True
-    if not telemetry:
+    if not telemetry or not any(
+        np.asarray(value).size for value in telemetry.values()
+    ):
         raise FileNotFoundError("DCB telemetry is absent")
     if "raw_seconds" in telemetry:
         t = np.asarray(telemetry["raw_seconds"], dtype=np.float64)
@@ -441,25 +427,15 @@ def plot_dcb_telemetry(source, out_path: Path | str) -> Path:
     if t.size == 0:
         raise FileNotFoundError("FPGA telemetry has zero samples")
     t = t - t[0]
-    if panel_groups:
-        groups = []
-        for title, fields in panel_groups.items():
-            present: List[tuple] = []
-            for name in fields:
-                if name in telemetry:
-                    present.append((name, np.asarray(telemetry[name])))
-            if present:
-                groups.append(
-                    (f"{title} (unassigned)" if unassigned_only else title, present)
-                )
-    else:
-        present = [
+    groups = []
+    for title, fields in _TELEMETRY_PLOT_GROUPS.items():
+        present: List[tuple] = [
             (name, np.asarray(telemetry[name]))
-            for name in sorted(telemetry)
-            if name not in ("mission_seconds", "lusee_subsecs", "raw_seconds")
+            for name in fields
+            if name in telemetry
         ]
-        title = "FPGA telemetry (unassigned)" if unassigned_only else "FPGA telemetry"
-        groups = [(title, present)] if present else []
+        if present:
+            groups.append((title, present))
 
     if not groups:
         raise FileNotFoundError("no DCB telemetry channels found")
@@ -474,8 +450,7 @@ def plot_dcb_telemetry(source, out_path: Path | str) -> Path:
             ax.plot(t, arr, lw=0.8, label=fname)
         ax.set_title(title)
         ax.legend(fontsize=7, ncol=3, loc="upper right")
-    sample_kind = "unassigned telemetry" if unassigned_only else "telemetry"
-    axes[-1].set_xlabel(f"seconds since first {sample_kind} sample")
+    axes[-1].set_xlabel("seconds since first telemetry sample")
     fig.tight_layout()
     fig.savefig(out_path, dpi=110, bbox_inches="tight")
     plt.close(fig)
