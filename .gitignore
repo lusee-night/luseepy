@@ -8,6 +8,7 @@
 !lusee/data/gain/*.csv
 !beam_conversion/*.py
 !scripts/ingest_qualification_report.py
+!scripts/telemetry_corpus_report.py
 !tests/*.py
 !tests/ingest/
 !tests/ingest/*.py
