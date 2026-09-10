@@ -226,7 +226,7 @@ def test_present_nonregular_science_bank_is_partial(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "detect_sw_version",
-        lambda packets, *, issue_collector=None: None,
+        lambda packets, *, issue_collector=None, schema_resolution=None: None,
     )
     monkeypatch.setattr(
         pipeline,
@@ -236,7 +236,7 @@ def test_present_nonregular_science_bank_is_partial(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "split_sessions",
-        lambda packets, *, issue_collector=None: [],
+        lambda packets, *, issue_collector=None, schema_resolution=None: [],
     )
     collector = IssueCollector()
 

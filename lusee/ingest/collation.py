@@ -25,7 +25,7 @@ from typing import Callable, Iterable, List, Optional
 
 from .issues import IssueAction, IssueCollector, IssueSeverity
 from .reassembly import LogicalPacket, reassemble_logical_packets
-from .uncrater_adapter import load_uncrater, read_packet
+from .uncrater_adapter import load_uncrater, read_packet, packet_schema_options
 
 log = logging.getLogger(__name__)
 
@@ -170,10 +170,12 @@ def _uncrater_typed_uid_extractor(
     issue_collector: IssueCollector | None = None,
     packet: LogicalPacket | None = None,
     packet_index: int | None = None,
+    schema_resolution=None,
 ) -> Optional[int]:
     """Default uid-typed extractor; reads the typed C-struct via uncrater."""
     try:
-        pkt = load_uncrater().Packet(appid, blob=blob, version=sw_version)
+        pkt = load_uncrater().Packet(appid, blob=blob, version=sw_version,
+                                     **packet_schema_options(schema_resolution))
         read_packet(pkt)
         return int(getattr(pkt, "unique_packet_id"))
     except Exception as exc:    # noqa: BLE001
@@ -207,6 +209,7 @@ def _uncrater_typed_uid_extractor(
 def detect_sw_version(
     packets: Iterable[LogicalPacket],
     *,
+    schema_resolution=None,
     issue_collector: IssueCollector | None = None,
 ) -> Optional[int]:
     """Scan packets for the first Hello and report its SW_version.
@@ -221,7 +224,7 @@ def detect_sw_version(
     for fallback_index, p in enumerate(packets):
         if decoder.appid_is_hello(p.appid):
             try:
-                hello = decoder.Packet(p.appid, blob=p.blob)
+                hello = decoder.Packet(p.appid, blob=p.blob, **packet_schema_options(schema_resolution))
                 read_packet(hello)
                 return int(getattr(hello, "SW_version"))
             except Exception as exc:    # noqa: BLE001
@@ -249,6 +252,7 @@ def assign_identities(
     packets: List[LogicalPacket],
     *,
     sw_version: Optional[int] = None,
+    schema_resolution=None,
     auto_detect_sw_version: bool = True,
     typed_uid_extractor: Optional[TypedUidExtractor] = None,
     sort: bool = True,
@@ -277,6 +281,7 @@ def assign_identities(
     if sw_version is None and auto_detect_sw_version:
         sw_version = detect_sw_version(
             packets,
+            **({"schema_resolution": schema_resolution} if schema_resolution is not None else {}),
             issue_collector=issue_collector,
         )
 
@@ -321,6 +326,7 @@ def assign_identities(
                     pkt.appid,
                     pkt.blob,
                     sw_version,
+                    schema_resolution=schema_resolution,
                     issue_collector=issue_collector,
                     packet=pkt,
                     packet_index=packet_index,

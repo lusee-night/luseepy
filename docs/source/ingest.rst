@@ -42,16 +42,19 @@ manual reruns may remove it or use ``--overwrite``.
 
 ``--issue-policy`` controls whether the shared issue collector accumulates
 findings or stops at the first one. ``--decoder-strict`` separately controls
-the repaired decoder's execution mode. ``--schema-variant`` is an explicit
-decoder override, including the reviewed early/final 306 distinction. One raw
-FLASH input must select one binding across all derived sessions; a mismatch is
-reported before any science product is written.
+the repaired decoder's execution mode. ``--schema-variant`` checks the reviewed
+early/final 306 selection against structural packet evidence; a label alone
+does not replace that evidence. FLASH resolves one binding from the complete
+input before extracting typed UIDs. The same binding and evidence are used for
+Hello, metadata, housekeeping, and every derived session. Conflicting versions
+or evidence are rejected before science products are written.
 
 Pipeline, manifests, and manual operation
 -----------------------------------------
 
 Raw FLASH processing uses the existing legacy frame recovery and logical
-packet reassembly, then the established UID/order heuristic, session split,
+packet reassembly, input-wide schema resolution, the established UID/order
+heuristic, session split,
 repaired decoder, and layout-v4 writers. The CLI does not activate an
 alternate CCSDS profile or comparison path. Extracted-session processing
 starts at the repaired-decoder stage.
@@ -158,7 +161,11 @@ Quality and execution mode
 Decoder execution mode is either ``collect`` or ``strict`` and is independent
 of aggregate data quality. Issue-collecting operation retains usable products;
 any decoder issue or rejected packet makes a usable aggregate ``partial``.
-An aggregate with no usable payload is ``failed``. A fully usable aggregate
+An aggregate with no usable payload is ``failed``. Requesting HDF5 or FITS
+for such a session still returns a failed result and diagnostic manifest,
+without creating a science product file. With ``overwrite=True``, existing
+files at the requested science-product paths are removed so stale results are
+not left in place. A fully usable aggregate
 with no reported decoder damage is ``clean``. Caller-built ``Products`` remain
 unassessed (``quality_status is None``) until a decoder boundary classifies
 them.
@@ -223,9 +230,11 @@ association diagnostics remain in the stored canonical decoder report.
 FLASH extraction validates associations across the full input in original
 order within each bank. Matched samples are routed to their metadata packet's
 session; unresolved samples retain their heuristic session placement. UIDs
-are repaired after ordering and before writing the packet map. Format-2 maps
-preserve source order, CCSDS spans, and an explicit metadata reference or null
-for every waveform. Subsequent decoding replays those decisions without
+are repaired after ordering and before writing the packet map. Format-3 maps
+preserve source order, CCSDS spans, an explicit metadata reference or null
+for every waveform, and the full-input schema proof. Reopening a session
+re-resolves this proof and checks its binding fingerprint and local packet
+evidence, including when the discriminating 306 packet was in another session. Subsequent decoding replays those decisions without
 rematching session subsets. Bank concatenation cannot establish cross-bank
 Hello/EOS placement, and the CCSDS counters are not assumed to be per APID.
 Observed framing damage or relevant reassembly loss leaves waveform metadata

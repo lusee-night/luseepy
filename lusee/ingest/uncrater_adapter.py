@@ -201,7 +201,7 @@ def load_uncrater() -> ModuleType:
     parameters = inspect.signature(decoder.Collection).parameters
     missing_parameters = [
         name
-        for name in ("strict", "diagnostic_override", "schema_variant", "waveform_packet_context")
+        for name in ("strict", "diagnostic_override", "schema_variant", "waveform_packet_context", "schema_resolution")
         if name not in parameters
     ]
     if missing_parameters:
@@ -215,7 +215,8 @@ def load_uncrater() -> ModuleType:
         )
 
     registry = _required_submodule("uncrater.schema_registry")
-    for name in ("LATEST_BINDING", "binding_for_key", "resolve_wire_version"):
+    for name in ("LATEST_BINDING", "binding_for_key", "resolve_wire_version", "resolve_packet_stream",
+                 "schema_resolution_record", "schema_resolution_from_record"):
         if not hasattr(registry, name):
             raise IncompatibleUncraterError(
                 f"installed uncrater.schema_registry lacks {name}"
@@ -265,6 +266,38 @@ def decoder_info() -> DecoderInfo:
     )
 
 
+def resolve_input_schema(packets, *, schema_variant=None):
+    """Resolve the complete logical input through uncrater's public schema API."""
+    load_uncrater()
+    registry = _required_submodule("uncrater.schema_registry")
+    return registry.resolve_packet_stream(
+        ((packet.appid, packet.blob) for packet in packets), variant=schema_variant,
+    )
+
+
+def schema_record(resolution):
+    """Return a portable, verifiable record of the input schema proof."""
+    if resolution is None:
+        return None
+    return _required_submodule("uncrater.schema_registry").schema_resolution_record(resolution)
+
+
+def schema_from_record(record, *, diagnostic_override=False):
+    """Restore a recorded selection by re-resolving its structural evidence."""
+    if record is None:
+        return None
+    return _required_submodule("uncrater.schema_registry").schema_resolution_from_record(
+        record, diagnostic_override=diagnostic_override,
+    )
+
+
+def packet_schema_options(resolution):
+    """Carry the selected binding and its full evidence into individual reads."""
+    if resolution is None:
+        return {}
+    return {"schema": resolution.binding, "evidence": resolution.evidence or None}
+
+
 def make_collection(
     path: Path | str,
     *,
@@ -272,6 +305,7 @@ def make_collection(
     diagnostic_override: bool = False,
     schema_variant: str | None = None,
     waveform_packet_context: Mapping[int, Mapping[str, object]] | None = None,
+    schema_resolution=None,
 ) -> Any:
     """Construct a Collection using only reviewed public options."""
     decoder = load_uncrater()
@@ -281,6 +315,7 @@ def make_collection(
         diagnostic_override=diagnostic_override,
         schema_variant=schema_variant,
         waveform_packet_context=waveform_packet_context,
+        schema_resolution=schema_resolution,
     )
 
 

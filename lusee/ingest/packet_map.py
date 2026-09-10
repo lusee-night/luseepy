@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 PACKET_MAP_FILENAME = "packet_map.json"
-PACKET_MAP_FORMAT_VERSION = 2
+PACKET_MAP_FORMAT_VERSION = 3
 
 _PACKET_FILENAME_RE = re.compile(
     r"^(?P<index>[0-9]+)_(?P<appid>[0-9a-f]{4})\.bin$"
@@ -28,6 +28,7 @@ _TOP_LEVEL_KEYS = {
     "packets",
     "provenance_limits",
     "reassembly_profile",
+    "schema_resolution",
 }
 _ENTRY_KEYS = {
     "content_sha256",
@@ -167,11 +168,16 @@ class PacketMapEntry:
 
 @dataclass(frozen=True, slots=True)
 class PacketMap:
-    """Validated format-2 packet map in deterministic output order."""
+    """Validated format-3 packet map in deterministic output order."""
 
     entries: tuple[PacketMapEntry, ...]
+    schema_resolution_json: str | None = None
 
     def __post_init__(self) -> None:
+        if self.schema_resolution_json is not None and not isinstance(
+            json.loads(self.schema_resolution_json), dict
+        ):
+            raise PacketMapError("schema_resolution must be an object or null")
         entries = tuple(self.entries)
         for index, entry in enumerate(entries):
             if not isinstance(entry, PacketMapEntry):
@@ -206,6 +212,7 @@ class PacketMap:
     def as_dict(self) -> dict[str, object]:
         return {
             "format_version": PACKET_MAP_FORMAT_VERSION,
+            "schema_resolution": self.schema_resolution,
             "packet_order": {
                 "chronological": _PACKET_ORDER["chronological"],
                 "key": list(_PACKET_ORDER["key"]),
@@ -215,6 +222,11 @@ class PacketMap:
             "provenance_limits": dict(_PROVENANCE_LIMITS),
             "reassembly_profile": "legacy",
         }
+
+    @property
+    def schema_resolution(self):
+        """Full-input schema evidence for independent session replay."""
+        return None if self.schema_resolution_json is None else json.loads(self.schema_resolution_json)
 
     @property
     def waveform_packet_context(self) -> dict[int, dict[str, object]]:
@@ -279,6 +291,7 @@ def build_packet_map(
     filenames: Sequence[str],
     *,
     normalize_appid: Callable[[int], int],
+    schema_resolution: Mapping[str, object] | None = None,
 ) -> PacketMap:
     """Build a map without changing packet order or identity assignment."""
     if len(packets) != len(filenames):
@@ -308,7 +321,8 @@ def build_packet_map(
             waveform_metadata_source_order=packet.waveform_metadata_source_order,
             unavailable_fields=unavailable,
         ))
-    return PacketMap(tuple(entries))
+    return PacketMap(tuple(entries), None if schema_resolution is None else
+                     json.dumps(schema_resolution, sort_keys=True, allow_nan=False))
 
 
 def write_packet_map(packet_map: PacketMap, path: Path | str) -> Path:
@@ -409,7 +423,9 @@ def _parse_packet_map(
         if type(expected_appid) is not int or expected_appid != entry.normalized_appid:
             raise PacketMapError("packet map normalized AppID disagrees with uncrater")
         entries.append(entry)
-    return PacketMap(tuple(entries))
+    schema_resolution = document["schema_resolution"]
+    return PacketMap(tuple(entries), None if schema_resolution is None else
+                     json.dumps(schema_resolution, sort_keys=True, allow_nan=False))
 
 
 def _validate_packet_inventory(packet_map: PacketMap, cdi_dir: Path) -> None:

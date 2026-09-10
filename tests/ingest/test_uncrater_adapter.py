@@ -71,6 +71,7 @@ class FakeCollection:
         diagnostic_override=False,
         schema_variant=None,
         waveform_packet_context=None,
+        schema_resolution=None,
     ):
         self.calls.append(
             (directory, strict, diagnostic_override, schema_variant)
@@ -122,6 +123,9 @@ def fake_decoder(monkeypatch):
     registry.LATEST_BINDING = FakeBinding()
     registry.binding_for_key = lambda key: FakeBinding()
     registry.resolve_wire_version = lambda version: None
+    registry.resolve_packet_stream = lambda *args, **kwargs: None
+    registry.schema_resolution_record = lambda value: {}
+    registry.schema_resolution_from_record = lambda value, **kwargs: None
 
     status = ModuleType("uncrater.decode_status")
     status.DecodeIssue = FakeDecodeIssue

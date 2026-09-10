@@ -63,6 +63,7 @@ from .issues import (
     IssueCollector,
     IssueSeverity,
 )
+from .products import DataQuality
 from .packet_map import PACKET_MAP_FILENAME
 from .reassembly import LogicalPacket, reassemble_logical_packets
 from .session import (
@@ -72,6 +73,7 @@ from .session import (
     mark_waveform_transport_loss,
     write_uncrater_session,
 )
+from .uncrater_adapter import resolve_input_schema
 from .write_request import (
     FAMILY_TYPES,
     LunarLocation,
@@ -622,13 +624,16 @@ def _parse_flash_loaded(
         capture.identity_input_packets = (
             len(science_packets) + capture.identity_policy_dropped_packets
         )
+    schema_resolution = resolve_input_schema(science_packets, schema_variant=schema_variant)
     sw_version = detect_sw_version(
         science_packets,
+        schema_resolution=schema_resolution,
         issue_collector=issue_collector,
     )
     science_packets = assign_identities(
         science_packets,
         sw_version=sw_version,
+        schema_resolution=schema_resolution,
         auto_detect_sw_version=False,
         issue_collector=issue_collector,
     )
@@ -638,6 +643,7 @@ def _parse_flash_loaded(
     mark_waveform_transport_loss(science_packets, issue_collector.since(parse_marker))
     sessions = split_sessions(
         science_packets,
+        schema_resolution=schema_resolution,
         **({"schema_variant": schema_variant} if schema_variant is not None else {}),
         issue_collector=issue_collector,
     )
@@ -1237,19 +1243,16 @@ def _process_one_session(
         if existing is not None and existing != issue:
             raise ValueError("context issues reuse an ID with different records")
         context_by_id[issue.issue_id] = issue
-    normalized_context_issues = tuple(
-        context_by_id[issue_id] for issue_id in sorted(context_by_id)
-    )
     product_issues = list(products.issues)
     if (
         products.quality_status is not None
         and products.quality_status.value == "failed"
         and not any(
             issue.code == "decode.no_usable_products"
-            for issue in product_issues
+            for issue in (*product_issues, *context_by_id.values())
         )
     ):
-        product_issues.append(issue_collector.record(
+        issue = issue_collector.record(
             code="decode.no_usable_products",
             severity=IssueSeverity.ERROR,
             stage="decode",
@@ -1260,7 +1263,11 @@ def _process_one_session(
                 "input_packets": products.decode_provenance.input_packet_count,
                 "valid_packets": products.decode_provenance.valid_packet_count,
             },
-        ))
+        )
+        context_by_id[issue.issue_id] = issue
+    normalized_context_issues = tuple(
+        context_by_id[issue_id] for issue_id in sorted(context_by_id)
+    )
     issue_by_id: Dict[str, IngestIssue] = {}
     for issue in (
         *product_issues,
@@ -1415,6 +1422,7 @@ def _process_one_session(
             persisted_rows=persistable_rows,
         )
 
+    writable = products.quality_status is not DataQuality.FAILED
     h5_path = h5_dir / f"{name}.h5" if h5_dir is not None else None
     fits_path = fits_dir / f"{name}.fits" if fits_dir is not None else None
     manifest_path = (
@@ -1429,10 +1437,23 @@ def _process_one_session(
     )
     if manifest_path is not None:
         result.manifest_path = str(manifest_path.resolve())
+    if not writable:
+        previous_outputs = [path for path in (h5_path, fits_path)
+                            if path is not None and (path.exists() or path.is_symlink())]
+        for path in previous_outputs:
+            if not overwrite:
+                raise FileExistsError(path)
+            if path.is_dir() and not path.is_symlink():
+                raise IsADirectoryError(path)
+        for path in previous_outputs:
+            path.unlink()
+        h5_path = fits_path = None
     if plot_dest is not None and plot_dest.exists():
         if not overwrite:
             raise FileExistsError(plot_dest)
         shutil.rmtree(plot_dest)
+    if not writable:
+        plot_dest = None
 
     request = None
     if h5_path is not None or fits_path is not None:

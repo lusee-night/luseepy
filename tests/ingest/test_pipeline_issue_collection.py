@@ -40,7 +40,7 @@ def test_failed_hello_sw_version_is_recorded_once(tmp_path, monkeypatch):
             return appid == 0x100
 
         @staticmethod
-        def Packet(appid, *, blob):
+        def Packet(appid, *, blob, **kwargs):
             raise ValueError("synthetic failed Hello")
 
     source = LogicalPacket(
@@ -74,7 +74,7 @@ def test_failed_hello_sw_version_is_recorded_once(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "split_sessions",
-        lambda packets, *, issue_collector=None: [],
+        lambda packets, *, issue_collector=None, schema_resolution=None: [],
     )
     collector = IssueCollector()
 
@@ -119,7 +119,7 @@ def test_parse_flash_isolates_telemetry_issues_from_science_quality(
     monkeypatch.setattr(
         pipeline,
         "detect_sw_version",
-        lambda packets, *, issue_collector=None: None,
+        lambda packets, *, issue_collector=None, schema_resolution=None: None,
     )
     monkeypatch.setattr(
         pipeline,
@@ -129,7 +129,7 @@ def test_parse_flash_isolates_telemetry_issues_from_science_quality(
     monkeypatch.setattr(
         pipeline,
         "split_sessions",
-        lambda packets, *, issue_collector=None: [],
+        lambda packets, *, issue_collector=None, schema_resolution=None: [],
     )
     telemetry_seen = []
     monkeypatch.setattr(

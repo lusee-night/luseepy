@@ -35,7 +35,7 @@ from .packet_map import (
 )
 from .reassembly import LogicalPacket
 from .telemetry import TelemetryData, map_dcb_absolute_time
-from .uncrater_adapter import load_uncrater, read_packet
+from .uncrater_adapter import load_uncrater, read_packet, packet_schema_options, schema_record
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ class Session:
     start_time_32: Optional[int] = None
     start_time_16: Optional[int] = None
     telemetry: TelemetryData | None = None
+    schema_resolution: object | None = None
 
     @property
     def has_startup(self) -> bool:
@@ -86,12 +87,14 @@ def _read_hello(
     packet: LogicalPacket | None = None,
     packet_index: int | None = None,
     session_ordinal: int | None = None,
+    schema_resolution=None,
 ) -> Optional[dict]:
     """Decode a Hello packet's identity / time fields. Returns None on failure."""
     decoder = load_uncrater()
     try:
         pkt = decoder.Packet(
-            int(decoder.id.AppID_uC_Start), blob=blob, version=sw_version
+            int(decoder.id.AppID_uC_Start), blob=blob, version=sw_version,
+            **packet_schema_options(schema_resolution),
         )
         read_packet(pkt)
     except Exception as exc:    # noqa: BLE001
@@ -152,6 +155,7 @@ def _populate_session_start(
             fields = _read_hello(
                 p.blob,
                 sw_version=session.sw_version,
+                schema_resolution=session.schema_resolution,
                 issue_collector=issue_collector,
                 packet=p,
                 packet_index=packet_index,
@@ -183,6 +187,7 @@ def split_sessions(
     packets: Sequence[LogicalPacket],
     *,
     schema_variant: str | None = None,
+    schema_resolution=None,
     issue_collector: IssueCollector | None = None,
 ) -> List[Session]:
     """Split a sorted, identity-assigned packet stream into sessions.
@@ -217,6 +222,7 @@ def split_sessions(
             seen_non_hello = True
 
     for s in sessions:
+        s.schema_resolution = schema_resolution
         _populate_session_start(s, issue_collector=issue_collector)
     associate_session_waveforms(sessions, schema_variant=schema_variant)
     return sessions
@@ -291,6 +297,7 @@ def associate_session_waveforms(sessions, *, schema_variant=None):
         for index, packet in enumerate(selected):
             (Path(directory) / packet_filename(index, packet.appid)).write_bytes(packet.blob)
         collection = decoder.Collection(directory, schema_variant=schema_variant,
+                                        schema_resolution=sessions[0].schema_resolution,
                                         waveform_packet_context=waveform_context(selected))
     targets = {
         selected[packet.packet_index].file_index: selected[group["meta"].packet_index].file_index
@@ -468,6 +475,7 @@ def write_uncrater_session(
         collection = decoder.Collection(
             str(cdi), waveform_packet_context=waveform_context(session.packets),
             diagnostic_override=diagnostic_override, schema_variant=schema_variant,
+            schema_resolution=session.schema_resolution,
         )
         waveform_targets = {
             packet.packet_index: session.packets[group["meta"].packet_index].file_index
@@ -489,6 +497,7 @@ def write_uncrater_session(
         session.packets,
         filenames,
         normalize_appid=decoder.normalize_dcb_appid,
+        schema_resolution=schema_record(session.schema_resolution),
     )
     write_packet_map(packet_map, dest / PACKET_MAP_FILENAME)
     log.info("wrote %d packets to %s", len(session.packets), cdi)

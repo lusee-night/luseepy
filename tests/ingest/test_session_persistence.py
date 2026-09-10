@@ -56,7 +56,7 @@ def test_packet_map_records_only_retained_packet_provenance(tmp_path):
 
     document = json.loads((cdi.parent / "packet_map.json").read_text("ascii"))
 
-    assert document["format_version"] == 2
+    assert document["format_version"] == 3
     assert document["reassembly_profile"] == "legacy"
     assert document["packet_order"] == {
         "chronological": False,

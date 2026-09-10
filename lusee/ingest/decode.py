@@ -66,6 +66,7 @@ from .uncrater_adapter import (
     import_decode_issues,
     load_uncrater,
     make_collection,
+    schema_from_record,
     read_packet,
     source_packet_provenance,
 )
@@ -3622,6 +3623,10 @@ def read_uncrater_session(
         schema_variant=schema_variant,
         waveform_packet_context=(
             None if packet_map is None else packet_map.waveform_packet_context
+        ),
+        schema_resolution=schema_from_record(
+            None if packet_map is None else packet_map.schema_resolution,
+            diagnostic_override=diagnostic_override,
         ),
     )
     selected_binding = binding_info(coll)
