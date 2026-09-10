@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sys
+import tomllib
 from collections import Counter
 from dataclasses import FrozenInstanceError, dataclass, replace
+from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -764,10 +766,16 @@ def test_real_empty_collection_matches_pinned_decoder(tmp_path):
     assert decoder.__version__ == "1.0.0"
     decoder_provenance = adapter.decoder_info()
     assert decoder_provenance.distribution_version == "1.0.0"
-    assert decoder_provenance.source_commit in (
-        None,
-        "00bed15f18d62530e3f706c9ce5be61255ce4740",
+    project = tomllib.loads(
+        (Path(__file__).resolve().parents[2] / "pyproject.toml").read_text("utf-8")
     )
+    uncrater_dependency, = (
+        dependency
+        for dependency in project["project"]["optional-dependencies"]["ingest"]
+        if dependency.startswith("uncrater @ ")
+    )
+    pinned_commit = uncrater_dependency.rsplit("@", 1)[1]
+    assert decoder_provenance.source_commit in (None, pinned_commit)
     assert collection.reported_schema_ids == ()
     assert collection.selected_schema_ids == (0x307,)
     assert collection.selected_schema_bindings == ("307",)
