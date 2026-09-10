@@ -84,7 +84,7 @@ def valid_products(*, packet_map_verified=True):
         packet_map_status=(
             "verified" if packet_map_verified else "unavailable"
         ),
-        packet_map_format_version=1 if packet_map_verified else None,
+        packet_map_format_version=2 if packet_map_verified else None,
         raw_flash_provenance_unavailable_reason=(
             None if packet_map_verified else "packet_map_missing_legacy_session"
         ),
@@ -376,7 +376,7 @@ def test_manifest_v3_records_clock_digest_and_packet_map_state(tmp_path):
     assert manifest["clock_reference"]["source_sha256"] == reference.source_sha256
     assert manifest["clock_reference"]["assumed"] is True
     assert manifest["packet_map_status"] == "verified"
-    assert manifest["packet_map_format_version"] == 1
+    assert manifest["packet_map_format_version"] == 2
     assert manifest["raw_flash_provenance_unavailable_reason"] is None
     assert manifest["telemetry_status"] == "absent"
     assert manifest["telemetry_reason"] is None

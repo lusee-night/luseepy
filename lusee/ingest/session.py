@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import shutil
 import warnings
+from tempfile import TemporaryDirectory
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence
@@ -181,6 +182,7 @@ def _populate_session_start(
 def split_sessions(
     packets: Sequence[LogicalPacket],
     *,
+    schema_variant: str | None = None,
     issue_collector: IssueCollector | None = None,
 ) -> List[Session]:
     """Split a sorted, identity-assigned packet stream into sessions.
@@ -216,7 +218,97 @@ def split_sessions(
 
     for s in sessions:
         _populate_session_start(s, issue_collector=issue_collector)
+    associate_session_waveforms(sessions, schema_variant=schema_variant)
     return sessions
+
+
+def waveform_context(packets):
+    """Original bank order, optionally with complete-input metadata decisions."""
+    by_source = {packet.file_index: index for index, packet in enumerate(packets)}
+    checked = any(packet.waveform_association_checked for packet in packets)
+    decoder = load_uncrater()
+    if checked and any(decoder.appid_is_raw_adc(packet.appid)
+                       and not packet.waveform_association_checked for packet in packets):
+        raise ValueError("waveform associations must cover the complete input")
+    context = {}
+    for index, packet in enumerate(packets):
+        entry = {"order": index if packet.file_index is None else packet.file_index,
+                 "stream": packet.bank or "",
+                 "start_sequence_count": packet.start_seq,
+                 "last_sequence_count": packet.seq}
+        if checked:
+            target = packet.waveform_metadata_source_order
+            entry["metadata_packet_index"] = None if target is None else by_source[target]
+        context[index] = entry
+    return context
+
+
+def mark_waveform_transport_loss(packets, issues):
+    """Do not infer a capture mode from a bank with observed relevant loss."""
+    decoder = load_uncrater()
+    uncertain_banks = set()
+    for issue in issues:
+        if issue.stage == "framing":
+            # A failed CRC does not establish the header's AppID either
+            uncertain_banks.add(issue.bank)
+        elif issue.stage == "reassembly":
+            appids = (issue.appid, dict(issue.details).get("new_appid", issue.appid))
+            if any(appid is None or decoder.appid_is_raw_adc(appid)
+                   or decoder.appid_is_raw_adc_metadata(appid) for appid in appids):
+                uncertain_banks.add(issue.bank)
+    for packet in packets:
+        if decoder.appid_is_raw_adc(packet.appid):
+            packet.waveform_transport_uncertain = (
+                None in uncertain_banks or packet.bank in uncertain_banks
+            )
+
+
+def associate_session_waveforms(sessions, *, schema_variant=None):
+    """Route invariant full-input matches to their metadata's session.
+
+    Bank concatenation is not chronology. Only same-bank Hello/EOS positions
+    delimit waveform matching. Unresolved packets retain their heuristic
+    session placement and an explicit null metadata reference.
+    """
+    decoder = load_uncrater()
+    packets = [packet for session in sessions for packet in session.packets]
+    if not any(decoder.appid_is_raw_adc(packet.appid) for packet in packets):
+        return
+    for index, packet in enumerate(packets):
+        if packet.file_index is None:
+            packet.file_index = index
+    # Include all schema evidence, but avoid copying large spectra into this pass
+    selected = [packet for packet in packets if (
+        decoder.appid_is_raw_adc(packet.appid)
+        or decoder.appid_is_raw_adc_metadata(packet.appid)
+        or decoder.appid_is_hello(packet.appid)
+        or packet.appid == int(decoder.id.AppID_End_Of_Sequence)
+        or decoder.appid_is_housekeeping(packet.appid)
+        or decoder.appid_is_metadata(packet.appid)
+        or decoder.appid_is_cal_metadata(packet.appid)
+    )]
+    with TemporaryDirectory(prefix="lusee-waveform-association-") as directory:
+        for index, packet in enumerate(selected):
+            (Path(directory) / packet_filename(index, packet.appid)).write_bytes(packet.blob)
+        collection = decoder.Collection(directory, schema_variant=schema_variant,
+                                        waveform_packet_context=waveform_context(selected))
+    targets = {
+        selected[packet.packet_index].file_index: selected[group["meta"].packet_index].file_index
+        for group in collection.waveform_groups for packet in group["packets"].values()
+        if not selected[packet.packet_index].waveform_transport_uncertain
+    }
+    owners = {packet.file_index: session for session in sessions for packet in session.packets}
+    for session in sessions:
+        session.packets = []
+    for packet in packets:
+        if decoder.appid_is_raw_adc(packet.appid):
+            packet.waveform_association_checked = True
+            packet.waveform_metadata_source_order = targets.get(packet.file_index)
+        owner = owners[targets.get(packet.file_index, packet.file_index)]
+        owner.packets.append(packet)
+    sessions[:] = [session for session in sessions if session.packets]
+    for ordinal, session in enumerate(sessions):
+        session.ordinal = ordinal
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +431,8 @@ def write_uncrater_session(
     dest_dir: Path | str,
     *,
     overwrite: bool = False,
+    diagnostic_override: bool = False,
+    schema_variant: str | None = None,
 ) -> Path:
     """Write a Session to disk in uncrater session format.
 
@@ -361,17 +455,41 @@ def write_uncrater_session(
         packet_filename(index, packet.appid, width=width)
         for index, packet in enumerate(session.packets)
     ]
-    normalize_appid = load_uncrater().normalize_dcb_appid
-    packet_map = build_packet_map(
-        session.packets,
-        filenames,
-        normalize_appid=normalize_appid,
-    )
+    decoder = load_uncrater()
     cdi = dest / "cdi_output"
     cdi.mkdir(parents=True)
     for packet, filename in zip(session.packets, filenames):
         with (cdi / filename).open("wb") as output:
             output.write(packet.blob)
+    if any(decoder.appid_is_raw_adc(packet.appid) for packet in session.packets):
+        for index, packet in enumerate(session.packets):
+            if packet.file_index is None:
+                packet.file_index = index
+        collection = decoder.Collection(
+            str(cdi), waveform_packet_context=waveform_context(session.packets),
+            diagnostic_override=diagnostic_override, schema_variant=schema_variant,
+        )
+        waveform_targets = {
+            packet.packet_index: session.packets[group["meta"].packet_index].file_index
+            for group in collection.waveform_groups
+            for packet in group["packets"].values()
+        }
+        waveform_uids = {
+            packet.packet_index: group["meta"].unique_packet_id
+            for group in collection.waveform_groups
+            for packet in group["packets"].values()
+        }
+        # Repair identities after ordering; never sort by these repaired UIDs
+        for index, packet in enumerate(session.packets):
+            if decoder.appid_is_raw_adc(packet.appid):
+                packet.unique_packet_id = waveform_uids.get(index, 0)
+                packet.waveform_association_checked = True
+                packet.waveform_metadata_source_order = waveform_targets.get(index)
+    packet_map = build_packet_map(
+        session.packets,
+        filenames,
+        normalize_appid=decoder.normalize_dcb_appid,
+    )
     write_packet_map(packet_map, dest / PACKET_MAP_FILENAME)
     log.info("wrote %d packets to %s", len(session.packets), cdi)
     return cdi

@@ -70,6 +70,7 @@ class FakeCollection:
         strict=False,
         diagnostic_override=False,
         schema_variant=None,
+        waveform_packet_context=None,
     ):
         self.calls.append(
             (directory, strict, diagnostic_override, schema_variant)

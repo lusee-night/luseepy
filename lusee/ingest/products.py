@@ -216,7 +216,9 @@ class ProductProvenance:
         if any(not isinstance(item, SourcePacketProvenance) for item in source_packets):
             raise TypeError("source_packets must contain SourcePacketProvenance records")
         uid = _optional_uid(self.uid)
-        uid_source = _optional_text(self.uid_source, "uid_source")
+        uid_source = (
+            "" if self.uid_source == "" else _optional_text(self.uid_source, "uid_source")
+        )
         uid_source_role = _optional_text(self.uid_source_role, "uid_source_role")
         if (uid is None) != (uid_source is None):
             raise ValueError("uid and uid_source must be recorded together")
@@ -270,6 +272,14 @@ class ProductProvenance:
             raise ValueError(
                 "concrete product provenance requires uid and uid_source"
             )
+        if uid_source == "" and (
+            uid != 0 or uid_source_role is not None
+            or len(source_packets) != 1
+            or source_packets[0].role not in {
+                f"waveform_channel_{channel}" for channel in range(4)
+            }
+        ):
+            raise ValueError("empty uid_source is reserved for unresolved waveforms")
         object.__setattr__(self, "source_packets", source_packets)
         object.__setattr__(self, "uid", uid)
         object.__setattr__(self, "uid_source", uid_source)
@@ -1009,7 +1019,7 @@ class WaveformSample:
     channel: int
     unique_packet_id: int
     raw_seconds: float | None
-    adc_timestamp: np.uint64
+    adc_timestamp: np.uint64 | None
     provenance: ProductProvenance
     units: str = field(init=False, default="raw_count")
     representation: str = field(init=False, default="native_int16")
@@ -1022,18 +1032,29 @@ class WaveformSample:
             name="waveform data",
         )
         channel = _required_uint(self.channel, 2, "channel")
-        if type(self.adc_timestamp) is not np.uint64:
-            raise TypeError("adc_timestamp must be a numpy.uint64")
+        if self.adc_timestamp is not None and type(self.adc_timestamp) is not np.uint64:
+            raise TypeError("adc_timestamp must be a numpy.uint64 or None")
         uid, raw_seconds = _auxiliary_identity(
             self.unique_packet_id,
             self.raw_seconds,
             self.provenance,
             "waveform",
         )
-        if len(self.provenance.source_packets) != 2:
-            raise ValueError(
-                "waveform provenance must link one waveform and one metadata packet"
-            )
+        if self.provenance.uid_source == "":
+            if (
+                tuple(packet.role for packet in self.provenance.source_packets)
+                != (f"waveform_channel_{channel}",)
+                or uid != 0 or raw_seconds is not None
+                or self.adc_timestamp is not None
+                or self.provenance.time_source is not None
+                or self.provenance.clock_source is not None
+            ):
+                raise ValueError("unresolved waveform metadata must remain absent")
+            object.__setattr__(self, "data", data)
+            object.__setattr__(self, "channel", channel)
+            return
+        if self.adc_timestamp is None:
+            raise ValueError("associated waveform requires an ADC timestamp")
         expected_roles = (
             f"waveform_channel_{channel}",
             "waveform_metadata",

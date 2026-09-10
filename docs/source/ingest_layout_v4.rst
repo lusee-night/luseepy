@@ -67,6 +67,15 @@ component labels and an explicit PFB bin. Waveforms are row-aligned signed
 ``uint64`` ADC timestamp kept distinct. Grimm products retain the native
 ``(time, Navg2_max, 16, 4)`` integer geometry and average-valid padding.
 
+Waveform rows without associated metadata retain their samples and channel.
+``unique_ids`` stays ``uint32`` and uses ``0`` with an empty provenance
+``uid_source`` for missing UID. Mission and MJD times are NaN with their
+existing validity flags false. ``adc_timestamps`` stays ``uint64`` and uses
+``0`` with ``adc_timestamp_valid=false``. Valid metadata containing zero UID
+or zero ADC timestamp remains valid and retains its metadata source reference.
+No additional datasets or layout-version change are required. The canonical
+decoder report also retains unmatched metadata values and association details.
+
 Housekeeping, calibrator metadata, and calibrator debug pages use a normalized
 field union with per-field presence. Calibrator complex arrays are serialized
 as paired real and imaginary arrays. Every calibrator page retains its raw

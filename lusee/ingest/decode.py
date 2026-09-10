@@ -1184,7 +1184,7 @@ def _auxiliary_provenance(
     roles: Sequence[str],
     unique_packet_id: int,
     uid_source: str,
-    uid_source_role: str,
+    uid_source_role: str | None,
     raw_seconds: float | None,
     time_source: str | None,
     time_source_role: str | None,
@@ -1993,6 +1993,44 @@ def _adapt_waveform_group(
             provenance=provenance,
         ))
     return samples
+
+
+def _adapt_unresolved_waveform(
+    packet, *, selected_binding, issue_ids_by_packet_index, issue_collector,
+) -> ValidatedWaveformSample | None:
+    """Preserve native samples while leaving all metadata explicitly absent."""
+    try:
+        if _packet_binding_key(packet) != selected_binding.binding_key:
+            raise ValueError("waveform packet binding disagrees with Collection")
+        channel = _required_uint(packet.ch, name="waveform channel", bits=2)
+        data = _exact_ndarray(
+            packet.waveform, name="waveform data", dtype=np.int16,
+            shape=(WAVEFORM_SAMPLES,),
+        )
+    except (TypeError, ValueError) as exc:
+        _record_adapter_issue(
+            issue_collector, code="decode_adapter.invalid_waveform",
+            message=f"waveform was dropped: {exc}", packet=packet, uid=None,
+            details={"error": str(exc)},
+        )
+        return None
+    issue_id = _record_kept_adapter_issue(
+        issue_collector, code="decode_adapter.waveform_metadata_unresolved",
+        message="waveform samples retained without UID, mission time, or ADC time",
+        packet=packet, uid=None, details={"channel": channel},
+    )
+    provenance = _auxiliary_provenance(
+        packets=(packet,), roles=(f"waveform_channel_{channel}",),
+        unique_packet_id=0, uid_source="", uid_source_role=None,
+        raw_seconds=None, time_source=None, time_source_role=None,
+        selected_binding=selected_binding,
+        issue_ids_by_packet_index=issue_ids_by_packet_index,
+        adapter_issue_ids=(issue_id,),
+    )
+    return ValidatedWaveformSample(
+        data=data, channel=channel, unique_packet_id=0, raw_seconds=None,
+        adc_timestamp=None, provenance=provenance,
+    )
 
 
 def _adapt_grimm_packet(
@@ -3452,6 +3490,7 @@ _DROPPED_ADAPTER_ISSUE_FAMILY = {
     "decode_adapter.invalid_zoom": "zoom_spectra",
     "decode_adapter.invalid_waveform_metadata": "waveforms",
     "decode_adapter.invalid_waveform": "waveforms",
+    "decode_adapter.waveform_metadata_unresolved": "waveforms",
     "decode_adapter.invalid_grimm": "grimm_spectra",
     "decode_adapter.invalid_housekeeping": "housekeeping",
     "decode_adapter.invalid_calibrator_metadata": "calibrator_metadata",
@@ -3581,6 +3620,9 @@ def read_uncrater_session(
         strict=strict,
         diagnostic_override=diagnostic_override,
         schema_variant=schema_variant,
+        waveform_packet_context=(
+            None if packet_map is None else packet_map.waveform_packet_context
+        ),
     )
     selected_binding = binding_info(coll)
     log.info(
@@ -3843,6 +3885,21 @@ def read_uncrater_session(
             issue_ids_by_packet_index=imported_issues.issue_ids_by_packet_index,
             issue_collector=issue_collector,
         ))
+
+    associated = {
+        row.provenance.source_packets[0].packet_index for row in products.waveforms
+    }
+    for packet in _required_public_attribute(coll, "waveform_packets"):
+        if packet.packet_index in associated:
+            continue
+        sample = _adapt_unresolved_waveform(
+            packet, selected_binding=selected_binding,
+            issue_ids_by_packet_index=imported_issues.issue_ids_by_packet_index,
+            issue_collector=issue_collector,
+        )
+        if sample is not None:
+            products.waveforms.append(sample)
+    products.waveforms.sort(key=lambda row: row.provenance.source_packets[0].packet_index)
 
     # ---- Housekeeping ----
     housekeeping_packets = _required_public_attribute(

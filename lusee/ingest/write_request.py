@@ -157,6 +157,8 @@ def _validate_product_provenance_for_storage(row: object) -> None:
         "time_source_role",
         "clock_source",
     ):
+        if name == "uid_source" and provenance.uid_source == "":
+            continue  # Validated unresolved waveform sentinel
         _optional_text(getattr(provenance, name), f"product provenance {name}")
     for packet in provenance.source_packets:
         for name in ("role", "filename", "bank"):

@@ -833,7 +833,10 @@ def _v4_parse_product_provenance(validator) -> Dict[str, object]:
         raise LayoutV4ValidationError(
             "layout-v4 product provenance names an unknown family"
         )
-    if np.any(np.asarray([not bool(value) for value in rows["uid_source"]])):
+    if any(
+        not source and family != "waveforms"
+        for source, family in zip(rows["uid_source"], rows["family"])
+    ):
         raise LayoutV4ValidationError(
             "layout-v4 provenance uid_source must be nonempty"
         )
@@ -1722,7 +1725,7 @@ def _v4_parse_waveforms(
     ).data
     if (
         np.any(channels >= _N_ADC_CHANNELS)
-        or not np.all(adc_valid)
+        or np.any(adc_timestamps[~adc_valid] != 0)
         or _v4_text_attr(validator, path, "adc_clock_source")
         != ClockSource.ADC.value
         or _v4_text_attr(validator, f"{path}/data", "units") != "raw_count"
@@ -1744,7 +1747,9 @@ def _v4_parse_waveforms(
                     channel=int(channels[row]),
                     unique_packet_id=int(common["unique_ids"][row]),
                     raw_seconds=raw_seconds,
-                    adc_timestamp=np.uint64(adc_timestamps[row]),
+                    adc_timestamp=(
+                        np.uint64(adc_timestamps[row]) if adc_valid[row] else None
+                    ),
                     provenance=_v4_product_record(
                         common, row, product_provenance
                     ),

@@ -161,14 +161,17 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
     decode_seen = []
     worker_seen = []
 
+    materialize_seen = []
+
     def fake_parse_flash(
         path,
         *,
         clock_reference_set=None,
         issue_collector=None,
         capture=None,
+        schema_variant=None,
     ):
-        parse_seen.append((path, issue_collector))
+        parse_seen.append((path, issue_collector, schema_variant))
         return (
             [pipeline.Session(ordinal=0)],
             None,
@@ -191,7 +194,9 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
     monkeypatch.setattr(
         pipeline,
         "write_uncrater_session",
-        lambda session, session_dir: session_dir,
+        lambda session, session_dir, **kwargs: (
+            materialize_seen.append(kwargs) or session_dir
+        ),
     )
     monkeypatch.setattr(pipeline, "read_uncrater_session", fake_read)
     monkeypatch.setattr(pipeline, "_binding_identity", lambda products: ("307",))
@@ -207,7 +212,8 @@ def test_process_flash_preserves_caller_collector_identity(tmp_path, monkeypatch
     )
 
     assert len(result) == 1
-    assert parse_seen == [(flash_dir.resolve(), collector)]
+    assert parse_seen == [(flash_dir.resolve(), collector, "early")]
+    assert materialize_seen == [{"schema_variant": "early"}]
     assert decode_seen == [(
         sessions_root / "session_000",
         collector,

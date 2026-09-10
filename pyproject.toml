@@ -42,7 +42,7 @@ ingest = [
     "h5py",
     "hexdump",
     "icecream",
-    "uncrater @ git+https://github.com/lusee-night/uncrater.git@00bed15f18d62530e3f706c9ce5be61255ce4740",
+    "uncrater @ git+https://github.com/lusee-night/uncrater.git@268ebfbc53dc9488a5ce5b73cdd0a74cd730732d",
 ]
 dev = ["pytest>=7"]
 

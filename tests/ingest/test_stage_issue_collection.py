@@ -242,6 +242,10 @@ def test_default_typed_uid_failure_records_rejection_and_drop(
     monkeypatch,
 ):
     class BrokenDecoder:
+        @staticmethod
+        def appid_is_raw_adc_metadata(appid):
+            return False
+
         def Packet(self, appid, *, blob, version):
             raise ValueError("bad typed header")
 
@@ -308,6 +312,10 @@ def test_session_start_decode_failure_keeps_session_and_records_context(
 ):
     class BrokenDecoder:
         id = SimpleNamespace(AppID_uC_Start=0x100)
+
+        @staticmethod
+        def appid_is_raw_adc(appid):
+            return False
 
         @staticmethod
         def appid_is_hello(appid):

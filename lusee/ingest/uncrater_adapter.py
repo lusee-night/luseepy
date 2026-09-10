@@ -201,7 +201,7 @@ def load_uncrater() -> ModuleType:
     parameters = inspect.signature(decoder.Collection).parameters
     missing_parameters = [
         name
-        for name in ("strict", "diagnostic_override", "schema_variant")
+        for name in ("strict", "diagnostic_override", "schema_variant", "waveform_packet_context")
         if name not in parameters
     ]
     if missing_parameters:
@@ -271,6 +271,7 @@ def make_collection(
     strict: bool = False,
     diagnostic_override: bool = False,
     schema_variant: str | None = None,
+    waveform_packet_context: Mapping[int, Mapping[str, object]] | None = None,
 ) -> Any:
     """Construct a Collection using only reviewed public options."""
     decoder = load_uncrater()
@@ -279,6 +280,7 @@ def make_collection(
         strict=strict,
         diagnostic_override=diagnostic_override,
         schema_variant=schema_variant,
+        waveform_packet_context=waveform_packet_context,
     )
 
 

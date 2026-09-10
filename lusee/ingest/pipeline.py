@@ -69,6 +69,7 @@ from .session import (
     Session,
     assign_telemetry_to_sessions,
     split_sessions,
+    mark_waveform_transport_loss,
     write_uncrater_session,
 )
 from .write_request import (
@@ -489,6 +490,7 @@ def _parse_flash_loaded(
     clock_reference_set: ClockReferenceSet | None,
     issue_collector: IssueCollector | None,
     capture: _FlashParseCapture | None = None,
+    schema_variant: str | None = None,
 ) -> Tuple[
     List[Session],
     telemetry_mod.TelemetryData | None,
@@ -497,6 +499,7 @@ def _parse_flash_loaded(
     flash_dir = Path(flash_dir)
     if issue_collector is None:
         issue_collector = IssueCollector()
+    parse_marker = issue_collector.mark()
     if not flash_dir.is_dir():
         raise NotADirectoryError(f"FLASH input is not a directory: {flash_dir}")
     science_packets: List[LogicalPacket] = []
@@ -632,8 +635,10 @@ def _parse_flash_loaded(
     if capture is not None:
         capture.identity_kept_packets = len(science_packets)
 
+    mark_waveform_transport_loss(science_packets, issue_collector.since(parse_marker))
     sessions = split_sessions(
         science_packets,
+        **({"schema_variant": schema_variant} if schema_variant is not None else {}),
         issue_collector=issue_collector,
     )
     if capture is not None:
@@ -2366,11 +2371,13 @@ def _process_flash_run(
         manifest_dir,
     )
 
+    decoder_options = {} if schema_variant is None else {"schema_variant": schema_variant}
     sessions, _source_telemetry = _parse_flash_loaded(
         flash_dir,
         clock_reference_set=clock_reference_set,
         issue_collector=issue_collector,
         capture=capture,
+        **decoder_options,
     )
     flash_fingerprint = _validate_flash_fingerprint(
         capture.source_fingerprint
@@ -2407,9 +2414,10 @@ def _process_flash_run(
                 session,
                 session_dir,
                 overwrite=True,
+                **decoder_options,
             )
         else:
-            write_uncrater_session(session, session_dir)
+            write_uncrater_session(session, session_dir, **decoder_options)
         products = read_uncrater_session(
             session_dir,
             strict=decoder_strict,

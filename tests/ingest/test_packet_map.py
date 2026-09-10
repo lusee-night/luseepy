@@ -75,7 +75,7 @@ def test_present_packet_map_damage_fails_closed(tmp_path, damage):
     else:
         path = session / PACKET_MAP_FILENAME
         document = json.loads(path.read_text("ascii"))
-        document["format_version"] = 2
+        document["format_version"] = 3
         path.write_text(json.dumps(document), encoding="ascii")
 
     with pytest.raises(PacketMapError):
@@ -128,8 +128,8 @@ def test_duplicate_json_keys_are_rejected(tmp_path):
     path = session / PACKET_MAP_FILENAME
     path.write_text(
         path.read_text("ascii").replace(
-            '"format_version": 1,',
-            '"format_version": 1, "format_version": 1,',
+            '"format_version": 2,',
+            '"format_version": 2, "format_version": 2,',
             1,
         ),
         encoding="ascii",
@@ -169,7 +169,7 @@ def test_packet_map_postprocess_enriches_only_available_source_fields():
     products = Products(
         housekeeping=[row],
         packet_map_status="verified",
-        packet_map_format_version=1,
+        packet_map_format_version=2,
         raw_flash_provenance_unavailable_reason=None,
     )
 
@@ -192,7 +192,7 @@ def test_packet_map_postprocess_enriches_only_available_source_fields():
     mismatched_products = Products(
         housekeeping=[row],
         packet_map_status="verified",
-        packet_map_format_version=1,
+        packet_map_format_version=2,
         raw_flash_provenance_unavailable_reason=None,
     )
     with pytest.raises(PacketMapError, match="product UID disagrees"):

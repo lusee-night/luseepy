@@ -961,13 +961,15 @@ def _write_waveforms(h5, request, provenance_index, h5py) -> None:
     _create_dataset(
         group,
         "adc_timestamps",
-        np.asarray([row.adc_timestamp for row in rows], dtype=np.uint64),
+        np.asarray([
+            0 if row.adc_timestamp is None else row.adc_timestamp for row in rows
+        ], dtype=np.uint64),
         request,
     )
     _create_dataset(
         group,
         "adc_timestamp_valid",
-        np.ones(len(rows), dtype=np.bool_),
+        np.asarray([row.adc_timestamp is not None for row in rows], dtype=np.bool_),
         request,
     )
     group.attrs["adc_clock_source"] = ClockSource.ADC.value

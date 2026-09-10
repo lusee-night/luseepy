@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 PACKET_MAP_FILENAME = "packet_map.json"
-PACKET_MAP_FORMAT_VERSION = 1
+PACKET_MAP_FORMAT_VERSION = 2
 
 _PACKET_FILENAME_RE = re.compile(
     r"^(?P<index>[0-9]+)_(?P<appid>[0-9a-f]{4})\.bin$"
@@ -37,6 +37,8 @@ _ENTRY_KEYS = {
     "output_filename",
     "output_index",
     "source_bank",
+    "source_order",
+    "waveform_metadata_source_order",
     "start_sequence_count",
     "terminal_groupflag",
     "unavailable_fields",
@@ -44,7 +46,7 @@ _ENTRY_KEYS = {
 }
 _PACKET_ORDER = MappingProxyType({
     "chronological": False,
-    "key": ("unique_packet_id", "last_sequence_count"),
+    "key": ("ordering_uid", "last_sequence_count"),
     "kind": "uid_sequence_heuristic",
 })
 _PROVENANCE_LIMITS = MappingProxyType({
@@ -56,8 +58,9 @@ _PROVENANCE_LIMITS = MappingProxyType({
     "packet_issue_references": (
         "packet_linked_reassembly_issues_are_not_retained"
     ),
-    "pre_sort_packet_ordinal": "not_retained_by_existing_pipeline",
-    "uid_source": "identity_assignment_source_is_not_retained",
+    "uid_source": "waveform_metadata_association_or_unrecorded_identity_source",
+    "cross_bank_boundary_placement": "unavailable_from_bank_concatenation",
+    "undetectable_packet_loss": "counts_may_fit_another_waveform_capture_grouping",
 })
 _OPTIONAL_FIELD_REASONS = {
     "source_bank": "logical_packet_bank_is_not_recorded",
@@ -83,6 +86,8 @@ class PacketMapEntry:
     start_sequence_count: int
     last_sequence_count: int
     terminal_groupflag: int
+    source_order: int
+    waveform_metadata_source_order: int | None = None
     unavailable_fields: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
@@ -92,6 +97,9 @@ class PacketMapEntry:
         if match is None:
             raise PacketMapError("packet map has an invalid output filename")
         _require_int(self.output_index, "output_index", minimum=0)
+        _require_int(self.source_order, "source_order", minimum=0)
+        if self.waveform_metadata_source_order is not None:
+            _require_int(self.waveform_metadata_source_order, "waveform_metadata_source_order", minimum=0)
         if int(match.group("index")) != self.output_index:
             raise PacketMapError("packet filename and output index disagree")
         _require_appid(self.original_appid, "original_appid")
@@ -148,6 +156,8 @@ class PacketMapEntry:
             "output_filename": self.output_filename,
             "output_index": self.output_index,
             "source_bank": self.source_bank,
+            "source_order": self.source_order,
+            "waveform_metadata_source_order": self.waveform_metadata_source_order,
             "start_sequence_count": self.start_sequence_count,
             "terminal_groupflag": self.terminal_groupflag,
             "unavailable_fields": dict(self.unavailable_fields),
@@ -157,7 +167,7 @@ class PacketMapEntry:
 
 @dataclass(frozen=True, slots=True)
 class PacketMap:
-    """Validated format-1 packet map in deterministic output order."""
+    """Validated format-2 packet map in deterministic output order."""
 
     entries: tuple[PacketMapEntry, ...]
 
@@ -168,6 +178,25 @@ class PacketMap:
                 raise TypeError("packet map entries must be PacketMapEntry records")
             if entry.output_index != index:
                 raise PacketMapError("packet map entries are not in output order")
+        if len({entry.source_order for entry in entries}) != len(entries):
+            raise PacketMapError("packet map source order must be unique")
+        by_source = {entry.source_order: entry for entry in entries}
+        channels = set()
+        for entry in entries:
+            target = entry.waveform_metadata_source_order
+            if target is None:
+                continue
+            meta = by_source.get(target)
+            if not 0x2F0 <= entry.normalized_appid <= 0x2F3 or meta is None or meta.normalized_appid != 0x2FA:
+                raise PacketMapError("invalid waveform metadata reference")
+            if entry.source_bank != meta.source_bank:
+                raise PacketMapError("waveform metadata reference crosses source banks")
+            if entry.unique_packet_id != meta.unique_packet_id:
+                raise PacketMapError("waveform product UID disagrees with referenced metadata")
+            channel = (target, entry.normalized_appid)
+            if channel in channels:
+                raise PacketMapError("waveform metadata reference repeats a channel")
+            channels.add(channel)
         object.__setattr__(self, "entries", entries)
 
     @property
@@ -185,6 +214,22 @@ class PacketMap:
             "packets": [entry.as_dict() for entry in self.entries],
             "provenance_limits": dict(_PROVENANCE_LIMITS),
             "reassembly_profile": "legacy",
+        }
+
+    @property
+    def waveform_packet_context(self) -> dict[int, dict[str, object]]:
+        """Replay complete-input decisions; null never enables local rematching."""
+        by_source = {entry.source_order: entry.output_index for entry in self.entries}
+        return {
+            entry.output_index: {
+                "order": entry.source_order,
+                "stream": entry.source_bank or "",
+                "start_sequence_count": entry.start_sequence_count,
+                "last_sequence_count": entry.last_sequence_count,
+                "metadata_packet_index": (None if entry.waveform_metadata_source_order is None
+                                          else by_source[entry.waveform_metadata_source_order]),
+            }
+            for entry in self.entries
         }
 
 
@@ -259,6 +304,8 @@ def build_packet_map(
             start_sequence_count=packet.start_seq,
             last_sequence_count=packet.seq,
             terminal_groupflag=3 if packet.single_packet else 1,
+            source_order=index if packet.file_index is None else packet.file_index,
+            waveform_metadata_source_order=packet.waveform_metadata_source_order,
             unavailable_fields=unavailable,
         ))
     return PacketMap(tuple(entries))
@@ -354,6 +401,8 @@ def _parse_packet_map(
             start_sequence_count=raw_entry["start_sequence_count"],
             last_sequence_count=raw_entry["last_sequence_count"],
             terminal_groupflag=raw_entry["terminal_groupflag"],
+            source_order=raw_entry["source_order"],
+            waveform_metadata_source_order=raw_entry["waveform_metadata_source_order"],
             unavailable_fields=tuple(sorted(unavailable.items())),
         )
         expected_appid = normalize_appid(entry.original_appid)

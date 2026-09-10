@@ -205,11 +205,39 @@ scaling. Either family receives mission time only from one exact-UID science
 metadata match. Missing or ambiguous association never borrows a preceding
 row's time.
 
-Waveforms are consumed from metadata-associated groups as signed ``int16
-(16384,)`` rows. Channel, UID, split mission time, and the independent
-``uint64`` ADC timestamp are validated without truthiness defaults. Provenance
-links the waveform and metadata packet. Orphans, duplicate channels, and
-groups rejected upstream create no waveform row.
+Every valid waveform is retained as a signed ``int16 (16384,)`` row, even
+when metadata is missing or ambiguous. The decoder considers the complete
+interval between same-stream Hello/EOS boundaries, independently of metadata arrival
+between waveform packets. Firmware sends one selected channel or an ordered
+four-channel capture; only associations shared by every possible grouping
+are accepted. Unexplained counts, duplicate metadata UIDs, or backward times leave metadata
+unresolved, without discarding the samples or interpolating any field.
+
+Associated rows retain the metadata UID, split mission time, exact ``uint64``
+ADC timestamp, and both packet references. Unresolved rows use ``uint32`` UID
+``0``, an empty UID source, NaN mission/absolute times, and an invalid ADC
+timestamp. A genuine metadata UID zero remains distinguishable through its
+nonempty source and metadata reference. Unmatched metadata values and
+association diagnostics remain in the stored canonical decoder report.
+
+FLASH extraction validates associations across the full input in original
+order within each bank. Matched samples are routed to their metadata packet's
+session; unresolved samples retain their heuristic session placement. UIDs
+are repaired after ordering and before writing the packet map. Format-2 maps
+preserve source order, CCSDS spans, and an explicit metadata reference or null
+for every waveform. Subsequent decoding replays those decisions without
+rematching session subsets. Bank concatenation cannot establish cross-bank
+Hello/EOS placement, and the CCSDS counters are not assumed to be per APID.
+Observed framing damage or relevant reassembly loss leaves waveform metadata
+unresolved for the affected bank; dropped packets cannot silently change the
+inferred capture mode.
+Re-ingest raw input to replace older packet maps. Run again with all accumulated packets
+and ``overwrite=True`` to replace incomplete outputs after late arrivals.
+An incomplete interval may leave earlier pairs ambiguous too; ingestion never
+assumes that all missing packets belong at the tail. Without reliable loss
+evidence, losses compatible with another capture grouping are undetectable:
+four singleton channels with three lost metadata packets resemble one intact
+four-channel capture.
 
 Housekeeping types ``0``, ``1``, ``2``, ``3``, ``100``, and ``101`` use one
 normalized field union with explicit per-field presence. ADC statistics retain

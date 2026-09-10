@@ -20,6 +20,9 @@ class LogicalPacket:
     unique_packet_id: Optional[int] = None
     bank: Optional[str] = None
     file_index: Optional[int] = None
+    waveform_association_checked: bool = False
+    waveform_transport_uncertain: bool = False
+    waveform_metadata_source_order: Optional[int] = None
 
 
 def _byteswap16(payload: bytes) -> bytes:

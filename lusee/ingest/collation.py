@@ -186,7 +186,8 @@ def _uncrater_typed_uid_extractor(
             code="identity.typed_uid_extraction_failed",
             severity=IssueSeverity.WARNING,
             message=message,
-            action=IssueAction.REJECTED,
+            action=(IssueAction.KEPT if load_uncrater().appid_is_raw_adc_metadata(appid)
+                    else IssueAction.REJECTED),
             packet=packet,
             packet_index=packet_index,
             appid=appid,
@@ -283,6 +284,8 @@ def assign_identities(
 
     # Pass 1: explicit extraction
     for fallback_index, pkt in enumerate(packets):
+        if pkt.file_index is None:
+            pkt.file_index = fallback_index
         packet_index = _packet_index(pkt, fallback_index)
         if is_dropped_appid(pkt.appid):
             pkt.unique_packet_id = None
@@ -335,12 +338,21 @@ def assign_identities(
     for fallback_index, pkt in enumerate(packets):
         if pkt.unique_packet_id is not None:
             last_id = pkt.unique_packet_id
+        elif load_uncrater().appid_is_raw_adc_metadata(pkt.appid):
+            # Preserve corrupt metadata as a slot; never shift later associations
+            pkt.unique_packet_id = last_id if last_id is not None else 0
+            drop_reasons[fallback_index] = None
         elif is_uid_derived(pkt.appid):
             if last_id is not None:
                 pkt.unique_packet_id = last_id
                 drop_reasons[fallback_index] = None
             else:
                 drop_reasons[fallback_index] = "no_preceding_unique_packet_id"
+            if load_uncrater().appid_is_raw_adc(pkt.appid):
+                # This is only an ordering hint; metadata association replaces it
+                if pkt.unique_packet_id is None:
+                    pkt.unique_packet_id = 0
+                drop_reasons[fallback_index] = None
         elif drop_reasons[fallback_index] is None:
             drop_reasons[fallback_index] = "unrecognized_appid"
         # otherwise leave None -> filtered below

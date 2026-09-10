@@ -1019,14 +1019,15 @@ def test_malformed_orphan_and_duplicate_inputs_create_no_zero_rows(tmp_path):
     products = read_uncrater_session(tmp_path)
 
     assert products.zoom_spectra == []
-    assert products.waveforms == []
+    assert len(products.waveforms) == 2
+    assert all(row.unique_packet_id == 0 and row.raw_seconds is None for row in products.waveforms)
     assert products.grimm_spectra == []
     assert products.calibrator_data == []
     assert products.calibrator_raw_pfb == []
     assert products.calibrator_debug == []
     codes = {issue.code for issue in products.issues}
     assert "decode.bad_blob_length" in codes
-    assert "decode.duplicate_waveform_channel" in codes
+    assert "decode_adapter.waveform_metadata_unresolved" in codes
     assert "decode.payload_decode_failed" in codes
     assert "decode.orphan_multipart_page" in codes
     assert "decode.missing_multipart_page" in codes

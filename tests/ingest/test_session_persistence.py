@@ -56,11 +56,11 @@ def test_packet_map_records_only_retained_packet_provenance(tmp_path):
 
     document = json.loads((cdi.parent / "packet_map.json").read_text("ascii"))
 
-    assert document["format_version"] == 1
+    assert document["format_version"] == 2
     assert document["reassembly_profile"] == "legacy"
     assert document["packet_order"] == {
         "chronological": False,
-        "key": ["unique_packet_id", "last_sequence_count"],
+        "key": ["ordering_uid", "last_sequence_count"],
         "kind": "uid_sequence_heuristic",
     }
     assert set(document["provenance_limits"]) == {
@@ -68,8 +68,9 @@ def test_packet_map_records_only_retained_packet_provenance(tmp_path):
         "contributing_frame_flags",
         "contributing_frame_ordinals",
         "packet_issue_references",
-        "pre_sort_packet_ordinal",
         "uid_source",
+        "cross_bank_boundary_placement",
+        "undetectable_packet_loss",
     }
     first = document["packets"][0]
     assert first == {
@@ -80,6 +81,8 @@ def test_packet_map_records_only_retained_packet_provenance(tmp_path):
         "output_filename": "00000_0001.bin",
         "output_index": 0,
         "source_bank": "b05",
+        "source_order": 0,
+        "waveform_metadata_source_order": None,
         "start_sequence_count": 0,
         "terminal_groupflag": 1,
         "unavailable_fields": {},
