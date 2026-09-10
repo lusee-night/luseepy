@@ -13,66 +13,63 @@ comes from:
 * uid-derived:  no embedded uid; inherit from the most recent preceding
                 uid-prefixed or uid-typed packet.
 
-AppID constants and the per-APID predicates come from the ``uncrater``
-package (which itself wraps ``pycoreloop`` and honors ``CORELOOP_DIR``).
-This is the single coreloop integration point for the whole pipeline.
+AppID constants and the per-APID predicates come from the public ``uncrater``
+API through :mod:`lusee.ingest.uncrater_adapter`.
 """
 
 from __future__ import annotations
 
 import logging
 import warnings
-from dataclasses import dataclass, field
-from typing import Callable, Iterable, Iterator, List, Optional
+from typing import Callable, Iterable, List, Optional
 
-from uncrater import (
-    Packet,
-    appid_is_cal_any,
-    appid_is_grimm_spectrum,
-    appid_is_heartbeat,
-    appid_is_hello,
-    appid_is_housekeeping,
-    appid_is_metadata,
-    appid_is_raw_adc,
-    appid_is_spectrum,
-    appid_is_tr_spectrum,
-    appid_is_watchdog,
-    appid_is_zoom_spectrum,
-)
-from uncrater.coreloop import pycoreloop
-
-appId = pycoreloop.appId
-
-from .ccsds import CcsdsFrame
+from .issues import IssueAction, IssueCollector, IssueSeverity
+from .reassembly import LogicalPacket, reassemble_logical_packets
+from .uncrater_adapter import load_uncrater, read_packet, packet_schema_options
 
 log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# AppID constants -- sourced from coreloop via uncrater
+# Compatibility AppID constants -- resolved lazily from public uncrater.id
 # ---------------------------------------------------------------------------
 
-APID_HK            = appId.AppID_uC_Housekeeping
-APID_EOS           = appId.AppID_End_Of_Sequence
-APID_BOOTLOADER    = appId.AppID_uC_Bootloader
-APID_HELLO         = appId.AppID_uC_Start
-APID_HEARTBEAT     = appId.AppID_uC_Heartbeat
-APID_WATCHDOG      = appId.AppID_Watchdog
-APID_METADATA      = appId.AppID_MetaData
-APID_SPECTRA_HIGH  = appId.AppID_SpectraHigh
-APID_SPECTRA_MED   = appId.AppID_SpectraMed
-APID_SPECTRA_LOW   = appId.AppID_SpectraLow
-APID_TR_HIGH       = appId.AppID_SpectraTRHigh
-APID_TR_MED        = appId.AppID_SpectraTRMed
-APID_TR_LOW        = appId.AppID_SpectraTRLow
-APID_ZOOM          = appId.AppID_ZoomSpectra
-APID_CAL_METADATA  = appId.AppID_Calibrator_MetaData
-APID_CAL_DATA      = appId.AppID_Calibrator_Data
-APID_CAL_RAW_PFB   = appId.AppID_Calibrator_RawPFB
-APID_CAL_DEBUG     = appId.AppID_Calibrator_Debug
-APID_GRIMM         = appId.AppID_SpectraGrimm
-APID_RAW_ADC       = appId.AppID_RawADC
-APID_RAW_ADC_META  = appId.AppID_RawADC_Meta
+_APID_ATTRIBUTES = {
+    "APID_HK": "AppID_uC_Housekeeping",
+    "APID_EOS": "AppID_End_Of_Sequence",
+    "APID_BOOTLOADER": "AppID_uC_Bootloader",
+    "APID_HELLO": "AppID_uC_Start",
+    "APID_HEARTBEAT": "AppID_uC_Heartbeat",
+    "APID_WATCHDOG": "AppID_Watchdog",
+    "APID_METADATA": "AppID_MetaData",
+    "APID_SPECTRA_HIGH": "AppID_SpectraHigh",
+    "APID_SPECTRA_MED": "AppID_SpectraMed",
+    "APID_SPECTRA_LOW": "AppID_SpectraLow",
+    "APID_TR_HIGH": "AppID_SpectraTRHigh",
+    "APID_TR_MED": "AppID_SpectraTRMed",
+    "APID_TR_LOW": "AppID_SpectraTRLow",
+    "APID_ZOOM": "AppID_ZoomSpectra",
+    "APID_CAL_METADATA": "AppID_Calibrator_MetaData",
+    "APID_CAL_DATA": "AppID_Calibrator_Data",
+    "APID_CAL_RAW_PFB": "AppID_Calibrator_RawPFB",
+    "APID_CAL_DEBUG": "AppID_Calibrator_Debug",
+    "APID_GRIMM": "AppID_SpectraGrimm",
+    "APID_RAW_ADC": "AppID_RawADC",
+    "APID_RAW_ADC_META": "AppID_RawADC_Meta",
+}
+
+
+def __getattr__(name: str):
+    attribute = _APID_ATTRIBUTES.get(name)
+    if attribute is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = int(getattr(load_uncrater().id, attribute))
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_APID_ATTRIBUTES))
 
 
 # ---------------------------------------------------------------------------
@@ -81,140 +78,42 @@ APID_RAW_ADC_META  = appId.AppID_RawADC_Meta
 
 def is_uid_prefixed(appid: int) -> bool:
     """APIDs whose blob[0:4] is a little-endian uint32 unique_packet_id."""
+    decoder = load_uncrater()
     return (
-        appid_is_spectrum(appid)
-        or appid_is_tr_spectrum(appid)
-        or appid_is_zoom_spectrum(appid)
-        or appid_is_grimm_spectrum(appid)
-        or appid_is_cal_any(appid)
+        decoder.appid_is_spectrum(appid)
+        or decoder.appid_is_tr_spectrum(appid)
+        or decoder.appid_is_zoom_spectrum(appid)
+        or decoder.appid_is_grimm_spectrum(appid)
+        or decoder.appid_is_cal_segmented_payload(appid)
     )
 
 
 def is_uid_typed(appid: int) -> bool:
     """APIDs whose blob starts with a typed C-struct header carrying the uid."""
+    decoder = load_uncrater()
     return (
-        appid_is_hello(appid)
-        or appid_is_housekeeping(appid)
-        or appid_is_metadata(appid)
-        or appid == APID_CAL_METADATA
-        or appid == APID_RAW_ADC_META
+        decoder.appid_is_hello(appid)
+        or decoder.appid_is_housekeeping(appid)
+        or decoder.appid_is_metadata(appid)
+        or decoder.appid_is_cal_metadata(appid)
+        or decoder.appid_is_raw_adc_metadata(appid)
     )
 
 
 def is_uid_derived(appid: int) -> bool:
     """APIDs whose uid is inherited from a preceding uid-prefixed/typed packet."""
+    decoder = load_uncrater()
     return (
-        appid_is_raw_adc(appid)
-        or appid_is_watchdog(appid)
-        or appid == APID_BOOTLOADER
-        or appid == APID_EOS
+        decoder.appid_is_raw_adc(appid)
+        or decoder.appid_is_watchdog(appid)
+        or appid == int(decoder.id.AppID_uC_Bootloader)
+        or appid == int(decoder.id.AppID_End_Of_Sequence)
     )
 
 
 def is_dropped_appid(appid: int) -> bool:
     """APIDs deliberately dropped from the science stream."""
-    return appid_is_heartbeat(appid)
-
-
-# ---------------------------------------------------------------------------
-# Logical packet record
-# ---------------------------------------------------------------------------
-
-@dataclass
-class LogicalPacket:
-    appid: int
-    start_seq: int
-    seq: int
-    blob: bytes
-    single_packet: bool
-    unique_packet_id: Optional[int] = None
-    bank: Optional[str] = None    # "b05".."b09" or "b01"; informational
-    file_index: Optional[int] = None  # index within the source bank stream
-
-
-# ---------------------------------------------------------------------------
-# Stage 2: reassembly
-# ---------------------------------------------------------------------------
-
-def _byteswap16(payload: bytes) -> bytes:
-    if len(payload) % 2:
-        raise ValueError(
-            f"science payload must be even-length for 16-bit byteswap "
-            f"(got {len(payload)})"
-        )
-    out = bytearray(len(payload))
-    out[0::2] = payload[1::2]
-    out[1::2] = payload[0::2]
-    return bytes(out)
-
-
-def reassemble_logical_packets(
-    frames: Iterable[CcsdsFrame],
-    *,
-    byteswap_pairs: bool,
-    bank: Optional[str] = None,
-) -> Iterator[LogicalPacket]:
-    """Stage 2: turn CCSDS frames into logical packets.
-
-    ``byteswap_pairs`` is True for science banks (b05..b09) and False for
-    the DCB telemetry bank (b01). Termination follows the standard CCSDS
-    rule: a logical packet ends on ``groupflags == 1`` or ``== 3``.
-    """
-    buf = bytearray()
-    start_seq: Optional[int] = None
-    current_appid: Optional[int] = None
-
-    def take_payload(p: bytes) -> bytes:
-        return _byteswap16(p) if byteswap_pairs else p
-
-    for frame in frames:
-        hdr = frame.header
-        if start_seq is None:
-            start_seq = hdr.sequence_cnt
-            current_appid = hdr.appid
-        elif hdr.appid != current_appid:
-            warnings.warn(
-                f"APID changed mid logical packet "
-                f"(was 0x{current_appid:03x}, now 0x{hdr.appid:03x}); "
-                f"continuing accumulation",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-        try:
-            buf.extend(take_payload(frame.payload))
-        except ValueError as exc:
-            warnings.warn(
-                f"discarding logical packet (bank={bank}, "
-                f"appid=0x{(current_appid or 0):03x}): {exc}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            buf.clear()
-            start_seq = None
-            current_appid = None
-            continue
-
-        gf = hdr.groupflags
-        if gf in (1, 3):
-            yield LogicalPacket(
-                appid=current_appid,    # type: ignore[arg-type]
-                start_seq=start_seq,    # type: ignore[arg-type]
-                seq=hdr.sequence_cnt,
-                blob=bytes(buf),
-                single_packet=(gf == 3),
-                bank=bank,
-            )
-            buf.clear()
-            start_seq = None
-            current_appid = None
-
-    if buf:
-        warnings.warn(
-            f"trailing partial logical packet (bank={bank}, "
-            f"appid=0x{(current_appid or 0):03x}); discarding",
-            RuntimeWarning,
-            stacklevel=2,
-        )
+    return load_uncrater().appid_is_heartbeat(appid)
 
 
 # ---------------------------------------------------------------------------
@@ -225,36 +124,123 @@ TypedUidExtractor = Callable[[int, bytes, Optional[int]], Optional[int]]
 """Signature: (appid, blob, sw_version) -> unique_packet_id or None."""
 
 
-def _uncrater_typed_uid_extractor(appid: int, blob: bytes, sw_version: Optional[int]) -> Optional[int]:
+def _packet_index(packet: LogicalPacket, fallback: int) -> int:
+    if type(packet.file_index) is int and packet.file_index >= 0:
+        return packet.file_index
+    return fallback
+
+
+def _record_identity_issue(
+    issue_collector: IssueCollector | None,
+    *,
+    code: str,
+    severity: IssueSeverity,
+    message: str,
+    action: IssueAction,
+    packet: LogicalPacket | None = None,
+    packet_index: int | None = None,
+    appid: int | None = None,
+    sequence_count: int | None = None,
+    details: dict[str, object] | None = None,
+) -> None:
+    if issue_collector is None:
+        return
+    issue_collector.record(
+        code=code,
+        severity=severity,
+        stage="identity",
+        message=message,
+        action=action,
+        bank=None if packet is None else packet.bank,
+        packet_index=packet_index,
+        appid=appid if packet is None else packet.appid,
+        sequence_count=(
+            sequence_count if packet is None else packet.seq
+        ),
+        uid=None if packet is None else packet.unique_packet_id,
+        details=details,
+    )
+
+
+def _uncrater_typed_uid_extractor(
+    appid: int,
+    blob: bytes,
+    sw_version: Optional[int],
+    *,
+    issue_collector: IssueCollector | None = None,
+    packet: LogicalPacket | None = None,
+    packet_index: int | None = None,
+    schema_resolution=None,
+) -> Optional[int]:
     """Default uid-typed extractor; reads the typed C-struct via uncrater."""
     try:
-        pkt = Packet(appid, blob=blob, version=sw_version)
-        pkt._read()
+        pkt = load_uncrater().Packet(appid, blob=blob, version=sw_version,
+                                     **packet_schema_options(schema_resolution))
+        read_packet(pkt)
         return int(getattr(pkt, "unique_packet_id"))
     except Exception as exc:    # noqa: BLE001
-        warnings.warn(
+        message = (
             f"failed to extract unique_packet_id from uid-typed packet "
-            f"(appid=0x{appid:03x}): {exc}",
+            f"(appid=0x{appid:03x}): {exc}"
+        )
+        _record_identity_issue(
+            issue_collector,
+            code="identity.typed_uid_extraction_failed",
+            severity=IssueSeverity.WARNING,
+            message=message,
+            action=(IssueAction.KEPT if load_uncrater().appid_is_raw_adc_metadata(appid)
+                    else IssueAction.REJECTED),
+            packet=packet,
+            packet_index=packet_index,
+            appid=appid,
+            details={
+                "exception_type": type(exc).__name__,
+                "sw_version": sw_version,
+            },
+        )
+        warnings.warn(
+            message,
             RuntimeWarning,
             stacklevel=2,
         )
         return None
 
 
-def detect_sw_version(packets: Iterable[LogicalPacket]) -> Optional[int]:
+def detect_sw_version(
+    packets: Iterable[LogicalPacket],
+    *,
+    schema_resolution=None,
+    issue_collector: IssueCollector | None = None,
+) -> Optional[int]:
     """Scan packets for the first Hello and report its SW_version.
 
     Used to seed uid-typed extraction. Returns None if no Hello is present.
     """
-    for p in packets:
-        if p.appid == APID_HELLO:
+    if issue_collector is not None and not isinstance(
+        issue_collector, IssueCollector
+    ):
+        raise TypeError("issue_collector must be an IssueCollector or None")
+    decoder = load_uncrater()
+    for fallback_index, p in enumerate(packets):
+        if decoder.appid_is_hello(p.appid):
             try:
-                hello = Packet(p.appid, blob=p.blob)
-                hello._read()
+                hello = decoder.Packet(p.appid, blob=p.blob, **packet_schema_options(schema_resolution))
+                read_packet(hello)
                 return int(getattr(hello, "SW_version"))
             except Exception as exc:    # noqa: BLE001
+                message = f"failed to read SW_version from Hello: {exc}"
+                _record_identity_issue(
+                    issue_collector,
+                    code="identity.hello_sw_version_decode_failed",
+                    severity=IssueSeverity.WARNING,
+                    message=message,
+                    action=IssueAction.KEPT,
+                    packet=p,
+                    packet_index=_packet_index(p, fallback_index),
+                    details={"exception_type": type(exc).__name__},
+                )
                 warnings.warn(
-                    f"failed to read SW_version from Hello: {exc}",
+                    message,
                     RuntimeWarning,
                     stacklevel=2,
                 )
@@ -266,8 +252,11 @@ def assign_identities(
     packets: List[LogicalPacket],
     *,
     sw_version: Optional[int] = None,
+    schema_resolution=None,
+    auto_detect_sw_version: bool = True,
     typed_uid_extractor: Optional[TypedUidExtractor] = None,
     sort: bool = True,
+    issue_collector: IssueCollector | None = None,
 ) -> List[LogicalPacket]:
     """Stage 3: assign ``unique_packet_id`` to each logical packet.
 
@@ -278,44 +267,140 @@ def assign_identities(
     returned list.
 
     With ``sort=True`` (default), the returned list is sorted by
-    ``(unique_packet_id, seq)`` -- the canonical chronological order.
+    ``(unique_packet_id, seq)`` using the existing deterministic heuristic.
+    This is not a canonical or global chronological order.
+
+    Set ``auto_detect_sw_version=False`` when detection was already attempted
+    and returned ``None``.
     """
-    if typed_uid_extractor is None:
-        typed_uid_extractor = _uncrater_typed_uid_extractor
-    if sw_version is None:
-        sw_version = detect_sw_version(packets)
+    if issue_collector is not None and not isinstance(
+        issue_collector, IssueCollector
+    ):
+        raise TypeError("issue_collector must be an IssueCollector or None")
+    use_default_typed_extractor = typed_uid_extractor is None
+    if sw_version is None and auto_detect_sw_version:
+        sw_version = detect_sw_version(
+            packets,
+            **({"schema_resolution": schema_resolution} if schema_resolution is not None else {}),
+            issue_collector=issue_collector,
+        )
+
+    drop_reasons: list[str | None] = [None] * len(packets)
 
     # Pass 1: explicit extraction
-    for pkt in packets:
+    for fallback_index, pkt in enumerate(packets):
+        if pkt.file_index is None:
+            pkt.file_index = fallback_index
+        packet_index = _packet_index(pkt, fallback_index)
         if is_dropped_appid(pkt.appid):
             pkt.unique_packet_id = None
+            drop_reasons[fallback_index] = "intentionally_filtered_appid"
             continue
         if is_uid_prefixed(pkt.appid):
             if len(pkt.blob) < 4:
-                warnings.warn(
+                message = (
                     f"uid-prefixed packet too short for u32 uid "
-                    f"(appid=0x{pkt.appid:03x}, len={len(pkt.blob)})",
+                    f"(appid=0x{pkt.appid:03x}, len={len(pkt.blob)})"
+                )
+                _record_identity_issue(
+                    issue_collector,
+                    code="identity.uid_prefix_too_short",
+                    severity=IssueSeverity.WARNING,
+                    message=message,
+                    action=IssueAction.REJECTED,
+                    packet=pkt,
+                    packet_index=packet_index,
+                    details={"blob_length": len(pkt.blob), "required_length": 4},
+                )
+                warnings.warn(
+                    message,
                     RuntimeWarning,
                     stacklevel=2,
                 )
+                drop_reasons[fallback_index] = "invalid_uid_prefix"
                 continue
             pkt.unique_packet_id = int.from_bytes(pkt.blob[0:4], "little")
         elif is_uid_typed(pkt.appid):
-            pkt.unique_packet_id = typed_uid_extractor(pkt.appid, pkt.blob, sw_version)
+            if use_default_typed_extractor:
+                pkt.unique_packet_id = _uncrater_typed_uid_extractor(
+                    pkt.appid,
+                    pkt.blob,
+                    sw_version,
+                    schema_resolution=schema_resolution,
+                    issue_collector=issue_collector,
+                    packet=pkt,
+                    packet_index=packet_index,
+                )
+            else:
+                assert typed_uid_extractor is not None
+                pkt.unique_packet_id = typed_uid_extractor(
+                    pkt.appid, pkt.blob, sw_version
+                )
+            if pkt.unique_packet_id is None:
+                drop_reasons[fallback_index] = "typed_uid_unavailable"
 
     # Pass 2: derive uid for uid-derived packets
     last_id: Optional[int] = None
-    for pkt in packets:
+    for fallback_index, pkt in enumerate(packets):
         if pkt.unique_packet_id is not None:
             last_id = pkt.unique_packet_id
-        elif is_uid_derived(pkt.appid) and last_id is not None:
-            pkt.unique_packet_id = last_id
+        elif load_uncrater().appid_is_raw_adc_metadata(pkt.appid):
+            # Preserve corrupt metadata as a slot; never shift later associations
+            pkt.unique_packet_id = last_id if last_id is not None else 0
+            drop_reasons[fallback_index] = None
+        elif is_uid_derived(pkt.appid):
+            if last_id is not None:
+                pkt.unique_packet_id = last_id
+                drop_reasons[fallback_index] = None
+            else:
+                drop_reasons[fallback_index] = "no_preceding_unique_packet_id"
+            if load_uncrater().appid_is_raw_adc(pkt.appid):
+                # This is only an ordering hint; metadata association replaces it
+                if pkt.unique_packet_id is None:
+                    pkt.unique_packet_id = 0
+                drop_reasons[fallback_index] = None
+        elif drop_reasons[fallback_index] is None:
+            drop_reasons[fallback_index] = "unrecognized_appid"
         # otherwise leave None -> filtered below
 
     kept = [p for p in packets if p.unique_packet_id is not None]
     n_dropped = len(packets) - len(kept)
     if n_dropped:
         log.info("dropped %d packet(s) with no extractable unique_packet_id", n_dropped)
+    for fallback_index, (pkt, reason) in enumerate(
+        zip(packets, drop_reasons, strict=True)
+    ):
+        if pkt.unique_packet_id is not None:
+            continue
+        packet_index = _packet_index(pkt, fallback_index)
+        if reason == "intentionally_filtered_appid":
+            _record_identity_issue(
+                issue_collector,
+                code="identity.appid_intentionally_dropped",
+                severity=IssueSeverity.INFO,
+                message=(
+                    f"packet AppID 0x{pkt.appid:03x} was intentionally dropped "
+                    "from the science stream"
+                ),
+                action=IssueAction.DROPPED,
+                packet=pkt,
+                packet_index=packet_index,
+                details={"reason": reason},
+            )
+            continue
+        _record_identity_issue(
+            issue_collector,
+            code="identity.packet_without_uid_dropped",
+            severity=IssueSeverity.WARNING,
+            message=(
+                f"packet AppID 0x{pkt.appid:03x} was dropped because no "
+                "unique_packet_id could be assigned"
+            ),
+            action=IssueAction.DROPPED,
+            packet=pkt,
+            packet_index=packet_index,
+            details={"reason": reason},
+        )
 
     if sort:
         kept.sort(key=lambda p: (p.unique_packet_id, p.seq))

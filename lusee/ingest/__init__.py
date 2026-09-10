@@ -18,10 +18,10 @@ Public API:
     split_sessions                       -- Stage 4
     write_uncrater_session               -- Stage 5 (writes a session dir)
     read_uncrater_session                -- Stage 6
-    write_hdf5                           -- Stage 7
+    write_hdf5                           -- validated WriteRequest -> layout-v4 HDF5
 
   Manifest
-    SessionResult, write_manifest
+    FlashResult, SessionResult, write_flash_manifest, write_manifest
 
   Visualization
     plot_session, plot_spectra_waterfall, plot_spectra_mean,
@@ -32,101 +32,171 @@ Most callers will only need ``process_flash`` or ``process_session``.
 
 from __future__ import annotations
 
+from importlib import import_module
+
 from .ccsds import (
     CcsdsFrame,
+    FrameLocation,
+    FramingResult,
     PrimaryHeader,
     crc16_ccitt,
     parse_bank_file,
+    parse_bank_file_diagnostic,
     parse_primary_header,
     parse_stream,
+    parse_stream_diagnostic,
 )
-from .collation import (
-    LogicalPacket,
-    assign_identities,
-    is_dropped_appid,
-    is_uid_derived,
-    is_uid_prefixed,
-    is_uid_typed,
-    reassemble_logical_packets,
+from .dependencies import MissingIngestExtraError
+from .issues import (
+    IngestIssue,
+    IngestIssueError,
+    IssueAction,
+    IssueCollector,
+    IssuePolicy,
+    IssueSeverity,
 )
-from .decode import (
-    CalDataSample,
-    HKSample,
-    Products,
-    SpectrumSample,
-    TRSpectrumSample,
-    WaveformSample,
-    ZoomSample,
-    read_uncrater_session,
-)
-from .fits_writer import write_fits
-from .hdf5_writer import write_hdf5
-from .pipeline import (
-    SessionResult,
-    parse_flash,
-    process_flash,
-    process_session,
-    write_manifest,
-)
-from .session import (
-    Session,
-    raw_seconds_from_split_time,
-    split_sessions,
-    write_uncrater_session,
-)
-from .telemetry import (
-    field_groups,
-    find_legacy_sidecar,
-    has_decoder,
-    parse_b01_packets,
-    parse_legacy_sidecar,
-    slice_arrays_by_window,
-    telemetry_apids,
-)
+from .reassembly import LogicalPacket, reassemble_logical_packets
 
-# Visualization is optional (matplotlib may be absent in some envs).
-try:
-    from .viz import (
-        plot_adc_stats,
-        plot_dcb_telemetry,
-        plot_session,
-        plot_spectra_mean,
-        plot_spectra_waterfall,
-    )
-except ImportError:    # pragma: no cover
-    plot_session = None    # type: ignore[assignment]
-    plot_spectra_waterfall = None    # type: ignore[assignment]
-    plot_spectra_mean = None    # type: ignore[assignment]
-    plot_adc_stats = None    # type: ignore[assignment]
-    plot_dcb_telemetry = None    # type: ignore[assignment]
+_LAZY_EXPORTS = {
+    # Stage 3 identity assignment
+    "assign_identities": ("collation", "assign_identities"),
+    "is_dropped_appid": ("collation", "is_dropped_appid"),
+    "is_uid_derived": ("collation", "is_uid_derived"),
+    "is_uid_prefixed": ("collation", "is_uid_prefixed"),
+    "is_uid_typed": ("collation", "is_uid_typed"),
+    # Session split and persistence
+    "Session": ("session", "Session"),
+    "raw_seconds_from_split_time": ("session", "raw_seconds_from_split_time"),
+    "split_sessions": ("session", "split_sessions"),
+    "write_uncrater_session": ("session", "write_uncrater_session"),
+    # Optional private-decoder boundary and fixed public telemetry table
+    "TelemetryData": ("telemetry", "TelemetryData"),
+    "decode_b01_packets": ("telemetry", "decode_b01_packets"),
+    "decode_legacy_sidecar": ("telemetry", "decode_legacy_sidecar"),
+    "find_legacy_sidecar": ("telemetry", "find_legacy_sidecar"),
+    # Decoder products
+    "CalDataSample": ("decode", "CalDataSample"),
+    "Products": ("decode", "Products"),
+    "read_uncrater_session": ("decode", "read_uncrater_session"),
+    # Validated product/decode provenance
+    "CalibratorDataSample": ("products", "CalibratorDataSample"),
+    "CalibratorDebugPage": ("products", "CalibratorDebugPage"),
+    "CalibratorDebugSample": ("products", "CalibratorDebugSample"),
+    "CalibratorMetadataSample": ("products", "CalibratorMetadataSample"),
+    "CalibratorRawPFBSample": ("products", "CalibratorRawPFBSample"),
+    "DataQuality": ("products", "DataQuality"),
+    "DecodeProvenance": ("products", "DecodeProvenance"),
+    "ExecutionMode": ("products", "ExecutionMode"),
+    "GrimmSample": ("products", "GrimmSample"),
+    "HKSample": ("products", "HKSample"),
+    "ProductProvenance": ("products", "ProductProvenance"),
+    "SourcePacketProvenance": ("products", "SourcePacketProvenance"),
+    "SpectrumMetadata": ("products", "SpectrumMetadata"),
+    "SpectrumSample": ("products", "SpectrumSample"),
+    "TRSpectrumSample": ("products", "TRSpectrumSample"),
+    "ValidatedCounts": ("products", "ValidatedCounts"),
+    "WaveformSample": ("products", "WaveformSample"),
+    "ZoomSample": ("products", "ZoomSample"),
+    # Versioned frequency-window and clock-reference contracts
+    "ClockReference": ("clock_reference", "ClockReference"),
+    "ClockReferenceFormatError": (
+        "clock_reference", "ClockReferenceFormatError"
+    ),
+    "ClockReferenceSet": ("clock_reference", "ClockReferenceSet"),
+    "LegacyClockReferenceSet": (
+        "clock_reference", "LegacyClockReferenceSet"
+    ),
+    "ClockReferenceUnavailableError": (
+        "clock_reference", "ClockReferenceUnavailableError"
+    ),
+    "ClockSource": ("clock_reference", "ClockSource"),
+    "UnsupportedClockSourceError": (
+        "clock_reference", "UnsupportedClockSourceError"
+    ),
+    "load_clock_reference_set": (
+        "clock_reference", "load_clock_reference_set"
+    ),
+    "clock_reference_set_from_record": (
+        "clock_reference", "clock_reference_set_from_record"
+    ),
+    "FrequencyWindowContract": (
+        "frequency_contract", "FrequencyWindowContract"
+    ),
+    "UnresolvedFrequencyCoordinateError": (
+        "frequency_contract", "UnresolvedFrequencyCoordinateError"
+    ),
+    "spectrometer_frequency_window": (
+        "frequency_contract", "spectrometer_frequency_window"
+    ),
+    # Validated layout-v4 writer request
+    "FamilyCoverage": ("write_request", "FamilyCoverage"),
+    "FamilyStatus": ("write_request", "FamilyStatus"),
+    "LunarLocation": ("write_request", "LunarLocation"),
+    "RunProvenance": ("write_request", "RunProvenance"),
+    "WriteRequest": ("write_request", "WriteRequest"),
+    "family_statuses_for_products": (
+        "write_request", "family_statuses_for_products"
+    ),
+    # Writers and orchestration
+    "write_hdf5": ("hdf5_writer", "write_hdf5"),
+    "write_fits": ("fits_writer", "write_fits"),
+    "FlashResult": ("pipeline", "FlashResult"),
+    "SessionResult": ("pipeline", "SessionResult"),
+    "parse_flash": ("pipeline", "parse_flash"),
+    "process_flash": ("pipeline", "process_flash"),
+    "process_session": ("pipeline", "process_session"),
+    "write_flash_manifest": ("pipeline", "write_flash_manifest"),
+    "write_manifest": ("pipeline", "write_manifest"),
+    # Visualization
+    "plot_adc_stats": ("viz", "plot_adc_stats"),
+    "plot_dcb_telemetry": ("viz", "plot_dcb_telemetry"),
+    "plot_session": ("viz", "plot_session"),
+    "plot_spectra_mean": ("viz", "plot_spectra_mean"),
+    "plot_spectra_waterfall": ("viz", "plot_spectra_waterfall"),
+    # Reader/factory
+    "IngestData": ("obs_factory", "IngestData"),
+    "LegacyIngestWarning": ("obs_factory", "LegacyIngestWarning"),
+    "MixedFrequencyGridError": ("obs_factory", "MixedFrequencyGridError"),
+    "load": ("obs_factory", "load"),
+    "load_bundle": ("obs_factory", "load_bundle"),
+    "SessionBundle": ("obs_factory", "SessionBundle"),
+    "LayoutV4ValidationError": (
+        "layout_v4_reader", "LayoutV4ValidationError"
+    ),
+    # Decoder boundary provenance
+    "DecoderInfo": ("uncrater_adapter", "DecoderInfo"),
+    "IncompatibleUncraterError": (
+        "uncrater_adapter", "IncompatibleUncraterError"
+    ),
+    "UncraterBindingInfo": ("uncrater_adapter", "UncraterBindingInfo"),
+    "binding_info": ("uncrater_adapter", "binding_info"),
+    "decoder_info": ("uncrater_adapter", "decoder_info"),
+}
 
 
-# IngestData / load are lazily imported via __getattr__ below: their
-# implementation lives in obs_factory.py, which depends on lusee.Observation
-# (and thus astropy + lunarsky + a SPICE-kernel download). Importing
-# lusee.ingest itself stays light; the heavy chain only triggers when a
-# user actually accesses lusee.ingest.IngestData or lusee.ingest.load.
-
-_LAZY_FROM_OBS_FACTORY = ("IngestData", "load", "SessionBundle")
-
-
-def __getattr__(name):
-    if name in _LAZY_FROM_OBS_FACTORY:
-        from . import obs_factory
-        value = getattr(obs_factory, name)
-        globals()[name] = value
-        return value
-    raise AttributeError(f"module 'lusee.ingest' has no attribute {name!r}")
+def __getattr__(name: str):
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module 'lusee.ingest' has no attribute {name!r}")
+    module_name, attribute = target
+    module = import_module(f".{module_name}", __name__)
+    value = getattr(module, attribute)
+    globals()[name] = value
+    return value
 
 
 def __dir__():
-    return sorted(set(globals().keys()) | set(_LAZY_FROM_OBS_FACTORY))
+    return sorted(set(globals()) | set(_LAZY_EXPORTS))
 
 
 __all__ = [
     # ccsds
-    "CcsdsFrame", "PrimaryHeader", "crc16_ccitt",
-    "parse_bank_file", "parse_primary_header", "parse_stream",
+    "CcsdsFrame", "FrameLocation", "FramingResult", "PrimaryHeader",
+    "crc16_ccitt", "parse_bank_file", "parse_bank_file_diagnostic",
+    "parse_primary_header", "parse_stream", "parse_stream_diagnostic",
+    # issues
+    "IngestIssue", "IngestIssueError", "IssueAction", "IssueCollector",
+    "IssuePolicy", "IssueSeverity", "MissingIngestExtraError",
     # collation
     "LogicalPacket", "assign_identities",
     "is_uid_prefixed", "is_uid_typed", "is_uid_derived", "is_dropped_appid",
@@ -134,24 +204,44 @@ __all__ = [
     # session
     "Session", "raw_seconds_from_split_time",
     "split_sessions", "write_uncrater_session",
-    # telemetry (thin proxy to the private lusee_telemetry decoder)
-    "field_groups", "find_legacy_sidecar", "has_decoder",
-    "parse_b01_packets", "parse_legacy_sidecar",
-    "slice_arrays_by_window", "telemetry_apids",
+    # fixed optional telemetry boundary
+    "TelemetryData", "decode_b01_packets", "decode_legacy_sidecar",
+    "find_legacy_sidecar",
     # decode
-    "CalDataSample", "HKSample", "Products", "SpectrumSample",
-    "TRSpectrumSample", "WaveformSample", "ZoomSample",
-    "read_uncrater_session",
+    "CalDataSample", "Products", "read_uncrater_session",
+    # product/decode provenance
+    "CalibratorDataSample", "CalibratorDebugPage", "CalibratorDebugSample",
+    "CalibratorMetadataSample", "CalibratorRawPFBSample", "DataQuality",
+    "DecodeProvenance", "ExecutionMode", "GrimmSample", "HKSample",
+    "ProductProvenance", "SourcePacketProvenance", "SpectrumMetadata",
+    "SpectrumSample", "TRSpectrumSample", "ValidatedCounts",
+    "WaveformSample", "ZoomSample",
+    # v4 clock and frequency contracts
+    "ClockReference", "ClockReferenceFormatError", "ClockReferenceSet",
+    "LegacyClockReferenceSet",
+    "ClockReferenceUnavailableError", "ClockSource",
+    "UnsupportedClockSourceError", "load_clock_reference_set",
+    "clock_reference_set_from_record",
+    "FrequencyWindowContract", "UnresolvedFrequencyCoordinateError",
+    "spectrometer_frequency_window",
+    # layout-v4 writer request
+    "FamilyCoverage", "FamilyStatus",
+    "LunarLocation", "RunProvenance", "WriteRequest",
+    "family_statuses_for_products",
     # hdf5
     "write_hdf5",
     # fits
     "write_fits",
     # pipeline
-    "SessionResult", "parse_flash", "process_flash", "process_session",
-    "write_manifest",
+    "FlashResult", "SessionResult", "parse_flash", "process_flash",
+    "process_session", "write_flash_manifest", "write_manifest",
     # viz
     "plot_session", "plot_spectra_waterfall", "plot_spectra_mean",
     "plot_adc_stats", "plot_dcb_telemetry",
     # obs_factory (lazy)
-    "IngestData", "load", "SessionBundle",
+    "IngestData", "LegacyIngestWarning", "LayoutV4ValidationError",
+    "MixedFrequencyGridError", "SessionBundle", "load", "load_bundle",
+    # uncrater adapter provenance (lazy)
+    "DecoderInfo", "IncompatibleUncraterError", "UncraterBindingInfo",
+    "binding_info", "decoder_info",
 ]

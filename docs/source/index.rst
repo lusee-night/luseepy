@@ -13,6 +13,8 @@ Contents
 .. toctree::
 
    usage
+   ingest
+   ingest_layout_v4
    api
    misc
 
