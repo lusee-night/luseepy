@@ -2,6 +2,8 @@
 
 import numpy as np
 
+from .constants import BITSLICE_REFERENCE, ZOOM_BINS, ZOOM_COMPONENTS
+
 
 def normalize_zoom(data, *, convention="sdu"):
     """Return a float64 copy of native (..., 4, 64) zoom power.
@@ -14,12 +16,14 @@ def normalize_zoom(data, *, convention="sdu"):
     if convention not in ("sdu", "pfb"):
         raise ValueError("zoom convention must be 'sdu' or 'pfb'")
     values = np.asarray(data)
-    if values.ndim < 2 or values.shape[-2:] != (4, 64):
-        raise ValueError("zoom data must have shape (..., 4, 64)")
+    if values.ndim < 2 or values.shape[-2:] != (ZOOM_COMPONENTS, ZOOM_BINS):
+        raise ValueError(
+            f"zoom data must have shape (..., {ZOOM_COMPONENTS}, {ZOOM_BINS})"
+        )
     if values.dtype.kind not in "iuf":
         raise TypeError("zoom components must be real numeric values")
-    exponent = -37 if convention == "sdu" else -6
-    return np.ldexp(values.astype(np.float64), exponent)
+    divisor = ZOOM_BINS * (2**BITSLICE_REFERENCE if convention == "sdu" else 1)
+    return values.astype(np.float64) / divisor
 
 
 def white_noise_notch_correction(notch):
