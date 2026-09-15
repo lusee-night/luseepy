@@ -55,6 +55,7 @@ from .constants import (
     ZOOM_BINS,
 )
 from .decode import canonical_actual_bitslice, restore_bitsliced_spectra
+from .normalization import normalize_zoom as normalize_zoom_array
 from .dependencies import import_optional_dependency
 from .frequency_contract import (
     FrequencyWindowContract,
@@ -4448,6 +4449,11 @@ class IngestData(Observation):
     The list of underlying per-file bundles is exposed at
     ``data.bundles`` for power users that need lower-level access.
 
+    Zoom remains native unless ``normalize_zoom=True`` or
+    ``data.normalize_zoom()`` is requested. Conversion replaces only the
+    analysis zoom array; ``data.bundle`` and ``data.bundles`` stay native.
+    ``zoom_representation`` identifies the current analysis convention.
+
     Absolute time requires a complete stored or caller clock-reference
     record. ``assume_scale=`` may resolve only the scale of a complete legacy
     subtract-plus-MJD mapping; it never supplies a missing epoch or raw-clock
@@ -4464,7 +4470,10 @@ class IngestData(Observation):
         mission_epoch=None,
         assume_scale=None,
         clock_reference_set: ClockReferenceSet | None = None,
+        normalize_zoom: bool = False,
     ):
+        if not isinstance(normalize_zoom, (bool, np.bool_)):
+            raise TypeError("normalize_zoom must be a boolean")
         if clock_reference_set is not None and not isinstance(
             clock_reference_set, ClockReferenceSet
         ):
@@ -4729,6 +4738,7 @@ class IngestData(Observation):
         self.tr_metadata = bundle.tr_metadata
 
         self.zoom_spectra = bundle.zoom_spectra
+        self._zoom_convention = None
         self.zoom_unique_ids = bundle.zoom_unique_ids
         self.zoom_pfb_indices = bundle.zoom_pfb_indices
         self.zoom_pfb_bins = bundle.zoom_pfb_bins
@@ -4824,6 +4834,36 @@ class IngestData(Observation):
             self.frequency_window = bundle.frequency_window_for_row(0)
             self.frequency_coordinate_status = "legacy_unverified"
             self.freq = self._derive_freq()
+
+        if normalize_zoom:
+            self.normalize_zoom()
+
+    @property
+    def zoom_representation(self) -> str:
+        """Representation of the analysis zoom array; bundles remain native."""
+        return {
+            None: "native_float32",
+            "sdu": "bit31_sdu",
+            "pfb": "pfb_power",
+        }[self._zoom_convention]
+
+    def normalize_zoom(self, *, convention="sdu") -> IngestData:
+        """Normalize zoom in memory and return self, preserving native bundles.
+
+        ``sdu`` matches stored normal bit-31 SDU; ``pfb`` is raw PFB power.
+        Repeated calls in the same convention are no-ops. A different
+        convention is recomputed from native values, never scaled twice.
+        With no zoom data this is a no-op. Normal spectra, notch response,
+        gain calibration, and source files are unaffected.
+        """
+        if convention not in ("sdu", "pfb"):
+            raise ValueError("zoom convention must be 'sdu' or 'pfb'")
+        if self.zoom_spectra is not None and self._zoom_convention != convention:
+            self.zoom_spectra = normalize_zoom_array(
+                self.bundle.zoom_spectra, convention=convention,
+            )
+            self._zoom_convention = convention
+        return self
 
     # -------------------- Indexing --------------------
 
@@ -5488,6 +5528,7 @@ def load(
     mission_epoch=None,
     assume_scale=None,
     clock_reference_set: ClockReferenceSet | None = None,
+    normalize_zoom: bool = False,
 ) -> IngestData:
     """Build an :class:`IngestData` from one or more files / directories.
 
@@ -5500,6 +5541,7 @@ def load(
         mission_epoch=mission_epoch,
         assume_scale=assume_scale,
         clock_reference_set=clock_reference_set,
+        normalize_zoom=normalize_zoom,
     )
 
 

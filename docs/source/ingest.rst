@@ -285,6 +285,62 @@ element-valid, or product-presence flag array is added at this stage.
 
 The full on-disk contract is documented in :doc:`ingest_layout_v4`.
 
+Explicit zoom normalization
+---------------------------
+
+Ingestion stores zoom as native ``float32`` with components ``AA, BB, ABR,
+ABI``. The existing ``native_float32`` representation means no zoom-power
+normalization has been applied. Normal spectra retain their established
+bit-31 SDU restoration; there is no change to either file format.
+
+Normalization is opt-in at the analysis boundary:
+
+.. code-block:: python
+
+   from lusee.ingest import load
+
+   native = load("session.h5")
+   data = load("session.h5", normalize_zoom=True)
+   assert data.zoom_representation == "bit31_sdu"
+   data.normalize_zoom()  # Repeated calls do not divide again
+
+``IngestData`` accepts the same keyword. Conversion replaces only
+``data.zoom_spectra`` with a ``float64`` array; the source files,
+``data.bundle``, and individual ``data.bundles`` remain native. With no zoom
+data the method is a no-op. ``load_bundle()`` always retains native zoom.
+Existing legacy auxiliary-data warnings and quality flags still apply.
+
+The default conversion divides zoom by ``2**37``: the 64-point FFT power
+factor times the ``2**31`` reference of normal SDU. No bitslice metadata or
+additional zoom-averaging factor is needed. ``data.normalize_zoom(convention=
+"pfb")`` instead divides native zoom by ``64``; multiply stored normal SDU
+by ``2**31`` to compare in that convention. Switching conventions recomputes
+from the native bundle. ``zoom_representation`` is ``native_float32``,
+``bit31_sdu``, or ``pfb_power`` as appropriate.
+
+``lusee.ingest.normalize_zoom(array, convention="sdu")`` is the nonmutating
+array helper for native ``(..., 4, 64)`` input. File analysis needs only NumPy
+for this arithmetic and does not require a newer packet decoder. The matching
+uncrater packet/collection accessors implement the same numerical contract.
+
+This is relative normalization, not conversion to physical units. Zoom sees
+the stream before notch subtraction. Under the independent white-noise model,
+normal power can separately be corrected with:
+
+.. code-block:: python
+
+   from lusee.ingest import white_noise_notch_correction
+
+   correction = white_noise_notch_correction(data.metadata["notch"])
+   normal_white_noise = data.spectra * correction[:, None, None]
+
+The helper reads the metadata byte, including subtraction-disable bit 4;
+options 4 and 6 give ``16/15`` and ``64/63`` when subtraction is enabled.
+This statistical correction is not a general inverse notch filter and is
+never applied by ``normalize_zoom()``. Compare the arithmetic mean of the
+64 normalized fine bins with the corresponding normal parent bin, using
+independently established channel routing and frequency-window membership.
+
 Waveform clocks in layout v4
 ----------------------------
 

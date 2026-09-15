@@ -154,6 +154,10 @@ _LAZY_EXPORTS = {
     "plot_spectra_mean": ("viz", "plot_spectra_mean"),
     "plot_spectra_waterfall": ("viz", "plot_spectra_waterfall"),
     # Reader/factory
+    "normalize_zoom": ("normalization", "normalize_zoom"),
+    "white_noise_notch_correction": (
+        "normalization", "white_noise_notch_correction"
+    ),
     "IngestData": ("obs_factory", "IngestData"),
     "LegacyIngestWarning": ("obs_factory", "LegacyIngestWarning"),
     "MixedFrequencyGridError": ("obs_factory", "MixedFrequencyGridError"),
