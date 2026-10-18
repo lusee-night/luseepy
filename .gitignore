@@ -12,6 +12,7 @@
 !tests/ingest/*.py
 !docs/*.tex
 !notebooks/*.ipynb
+!notebooks/*.py
 !notebooks/old/*.ipynb
 !notebooks/_regen/*.py
 !**.md 

@@ -78,6 +78,9 @@ Smooth interpolation of beam alm products across a parameter space (e.g., rotati
 **`lusee.BeamCouplings`** (`lusee/BeamCouplings.py`)
 Models cross-coupling between antennas (two-port impedance). Used by simulators for off-diagonal beam combinations.
 
+**`lusee.CachedBeam`** (`lusee/CachedBeam.py`)
+JAX pytree base class for parameterized beam caches. Subclasses define free parameters and a `transform_beam` method; the base exposes a `.efbeams` property that simulators consume. Used by autodiff calibration / map-making flows where the beam is differentiable.
+
 **`lusee.LabeledArray`** (`lusee/LabeledArray.py`)
 Thin wrapper decorating one array with informational `units` and `frame` string labels (see the `FRAME_*` constants). Purely informational — no unit algebra, no checks; labels are dropped inside jit and by numpy/jnp functions. Attach labels at Python boundaries via `label()`/`relabel()`; hot jitted kernels stay bare-array.
 
@@ -120,12 +123,25 @@ Simulates the orbiting calibrator observations.
 
 Wiener filter sky reconstruction via CG with autodiff adjoints (Camacho et al. 2026). Key functions:
 
-- `build_instrument(beam_file, obs_range, freq, lmax)` — set up CroSimulator with rotated/tapered beams and Tground=0
+- `build_instrument(beam_file, obs_range, freq, lmax)` — dispatches on the file: a response FITS v3 gives a `FullStokesCroSimulator` (T_moon=T_ant=0), a legacy beam FITS gives a `CroSimulator` with rotated/tapered beams and Tground=0
 - `solve(sim, data, sky_template, sigma, signal_prior, method='cg')` — Wiener filter solve in a real parameterization θ = [Re(alm); Im(alm, m>0)]. Supports `method='cg'` (default, with diagonal C_l preconditioner) and `method='direct'` (dense Cholesky, same as the paper). The sky is real but beams are complex; JAX traces through the complex beam math and returns real gradients. No Wirtinger conjugation needed (θ is real).
 - `compute_cl_prior(sky_model, lmax)` — S^{-1} = 1/C_l from a sky model
-- `compute_radiometric_noise(data, combinations, delta_f_hz, delta_t_sec)` — per-sample σ from the radiometer equation (Eq. 9 of the paper): σ²_ij = (T_ii T_jj + |V_ij|²)/(2ΔfΔt)
+- `compute_radiometric_noise(data, combinations|products, delta_f_hz, delta_t_sec)` — per-sample σ from the radiometer equation (Eq. 9 of the paper): σ²_ij = (T_ii T_jj + |V_ij|²)/(2ΔfΔt)
+- `channel_metadata(sim)` / `channel_names(sim)` — describe a simulator's packed output channels for either engine (four-port simulators carry `product_labels`, not `combinations`); splat `channel_metadata(sim)` into `compute_radiometric_noise`
 
 See `docs/wirtinger_cg.md` for the math (real vs complex parameterization, null-space analysis).
+
+### Composable fitting (`lusee/Fitting.py`, `lusee.fitting`)
+
+Variable-projection (profile-likelihood) fitting for models with a mix of linear and non-linear parameters. `Param`/`ParamSet` is the registry, `RealAlmBlock` the real reparameterization of a band-limited sky, `linear_solve_cg`/`linear_solve_dense` the inner Wiener step, `profile_optimize` the outer L-BFGS-B loop (envelope-theorem gradient — the inner solve is `stop_gradient`ed, never differentiated through). `linear_fisher` gives the conditional Gaussian posterior; `sample_posterior` runs BlackJAX NUTS/HMC over the joint block. `Experiment` wires sky/beam/instrument modules and a simulator into one `predict`.
+
+Concrete models: `lusee.SpectralHealpixSky` (`T = flux(θ)·(f/f_fid)^β(θ)`) and `lusee.SeparableHealpixSky` (`T = Σ_i flux_i(θ)·shape_i(f)`). Both work against the four-port `FullStokesCroSimulator` and the legacy `CroSimulator`; drivers are `notebooks/spectral_fit_demo.py` and `notebooks/separable_fit_demo.py` (`--beam-file` selects the instrument, default is the four-port response v3).
+
+Two rules any new sky module must follow (both were real bugs):
+- Keep `self.freq` as **numpy**. It is static pytree *aux*, but `jnp.asarray` on a host array *inside a trace* yields a tracer, and the four-port sky dispatch reads `sky.freq` with `np.asarray`.
+- Implement `get_alm_at_freq(target_freq)` so the simulators evaluate the sky exactly on their target grid instead of building a `FrequencyMap` onto `sky.freq`.
+
+Docs: `docs/spectral_fitting.md` (architecture, the four-port section, CLI).
 
 ### Output: `lusee.Data` (`lusee/Data.py`)
 
