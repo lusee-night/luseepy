@@ -5,6 +5,12 @@ import jax.numpy as jnp
 import numpy as np
 
 from .frequencies import FrequencyMap
+from .preamp_fits import (
+    FLIGHT_CHANNEL_TO_PREAMP,
+    FLIGHT_PREAMP_FITS,
+    SPARE_PREAMP_FITS,
+    FLATSAT_CHANNEL_TO_PREAMP,
+)
 
 
 def _four_vector(value, name):
@@ -16,11 +22,26 @@ def _four_vector(value, name):
     return array
 
 
-# Measured fit parameters for the four spare flight-model preamps
-# (fmpre0/2/5/7), from the JFET impedance Bode-sweep analysis reproduced in
-# resources/HFSS/ReceiveMatrix.ipynb. Model:
-#   Re Z = 1/(w^2 Rp C^2) + Rs + a w^n,   Im Z = w L - 1/(w C)
-SPARE_PREAMP_FITS = {
+# Preamp fits live in ``preamp_fits.py``, which mirrors
+# ``lusee-night/impedance_measurements/fits/preamp_fits.py`` (keep the two
+# in sync). Every preamp id, spare or flight, maps to one parameter dict.
+PREAMP_FITS = {**SPARE_PREAMP_FITS, **FLIGHT_PREAMP_FITS}
+
+# Named JFETReceiver channel maps, ordered by ADC channel CH0..CH3.
+CHANNEL_MAPS = {
+    "flight": tuple(FLIGHT_CHANNEL_TO_PREAMP[ch] for ch in range(4)),
+    "spare": tuple(FLATSAT_CHANNEL_TO_PREAMP[ch] for ch in range(4)),
+}
+
+_JFET_PARAMETERS = ("C_pf", "L_nh", "Rs_ohm", "n", "a", "Rp_ohm")
+
+# Frozen copy of the spare-preamp fits exactly as typed into
+# resources/HFSS/ReceiveMatrix.ipynb, which built the ZL baked into the
+# legacy ``Receive_Matrix_Fields_*`` exports. It carries the fmpre7
+# L = 8.5 nH typo (the measurement is 38.5 nH, see ``SPARE_PREAMP_FITS``)
+# on purpose: unloading those exports needs the ZL the notebook actually
+# applied. Do not update these from new fits.
+HFSS_NOTEBOOK_PREAMP_FITS = {
     "fmpre0": {"C_pf": 33.79, "L_nh": 35.0, "Rs_ohm": 0.21, "n": 1.39,
                "a": 5.2e-12, "Rp_ohm": 1101e3},
     "fmpre2": {"C_pf": 35.32, "L_nh": 36.4, "Rs_ohm": 2.16, "n": 2.26,
@@ -32,6 +53,22 @@ SPARE_PREAMP_FITS = {
 }
 
 
+def resolve_channel_map(channel_map):
+    """Return the four preamp ids for ``"flight"``, ``"spare"`` or a tuple."""
+    if isinstance(channel_map, str):
+        key = channel_map.lower()
+        if key not in CHANNEL_MAPS:
+            raise ValueError(
+                f"Unknown channel_map {channel_map!r}; use one of "
+                f"{sorted(CHANNEL_MAPS)} or a tuple of four preamp ids."
+            )
+        return CHANNEL_MAPS[key]
+    names = tuple(str(value) for value in channel_map)
+    if len(names) != 4:
+        raise ValueError("channel_map must contain four entries.")
+    return names
+
+
 def spare_preamp_average_zload(freq_mhz):
     """Averaged spare-preamp load matrix used by the HFSS receive exports.
 
@@ -39,13 +76,15 @@ def spare_preamp_average_zload(freq_mhz):
     measured spare preamp, averages the real and imaginary parts across the
     four devices, and returns the scalar-diagonal ``(frequency, 4, 4)``
     matrix that the notebook applied as ``ZL (ZA + ZL)^-1``. This is the
-    ZLoad payload required to unload the ``Receive_Matrix_Fields_*`` CSVs.
+    ZLoad payload required to unload the ``Receive_Matrix_Fields_*`` CSVs,
+    so it uses the notebook's own values (``HFSS_NOTEBOOK_PREAMP_FITS``),
+    not the corrected ``SPARE_PREAMP_FITS``.
     """
     freq = np.atleast_1d(np.asarray(freq_mhz, dtype=np.float64))
     omega = 2 * np.pi * freq * 1e6
     real = np.zeros_like(omega)
     imag = np.zeros_like(omega)
-    for fit in SPARE_PREAMP_FITS.values():
+    for fit in HFSS_NOTEBOOK_PREAMP_FITS.values():
         C = fit["C_pf"] * 1e-12
         L = fit["L_nh"] * 1e-9
         real += (
@@ -54,7 +93,7 @@ def spare_preamp_average_zload(freq_mhz):
             + fit["a"] * omega ** fit["n"]
         )
         imag += omega * L - 1.0 / (omega * C)
-    scalar = (real + 1j * imag) / len(SPARE_PREAMP_FITS)
+    scalar = (real + 1j * imag) / len(HFSS_NOTEBOOK_PREAMP_FITS)
     result = np.zeros((freq.size, 4, 4), dtype=np.complex128)
     indices = np.arange(4)
     result[:, indices, indices] = scalar[:, None]
@@ -65,31 +104,53 @@ def spare_preamp_average_zload(freq_mhz):
 class JFETReceiver:
     """Diagonal JFET load model with differentiable per-channel parameters.
 
-    Defaults are the measured Bode-sweep fits for the spare preamps
-    fmpre0/2/5/7 (see ``SPARE_PREAMP_FITS``), evaluated with the
-    parallel-RC form ``Rs + a w^n + jwL + Rp/(1 + jw Rp C)``, whose in-band
-    difference from the notebook's four-term expansion is below 1e-4.
+    ``channel_map`` names the preamp on each port/ADC channel CH0..CH3:
+    ``"flight"`` (default, fmpre6/3/4/1 as wired at SDL), ``"spare"``
+    (the BNL flatsat fmpre0/2/5/7), or a tuple of four preamp ids from
+    ``PREAMP_FITS``. Any parameter left as ``None`` is taken per channel
+    from ``preamp_fits.py``; an explicit scalar or ``(4,)`` value overrides
+    it (and then the channel ids need not be known preamps). The model is
+    evaluated in the parallel-RC form ``Rs + a w^n + jwL + Rp/(1 + jw Rp C)``.
+    The four-term fit expression in ``preamp_fits.py`` is its large-``w Rp C``
+    expansion; the two differ by ``1/(w Rp C)^2`` relative, i.e. < 3e-4 above
+    1 MHz, ~1e-3 at 0.5 MHz and ~2e-2 at 100 kHz for the measured preamps.
     """
 
     def __init__(
         self,
-        C_pf=(33.79, 35.32, 34.89, 36.85),
-        L_nh=(35.0, 36.4, 34.7, 8.5),
-        Rs_ohm=(0.21, 2.16, 3.71, 1.65),
-        n=(1.39, 2.26, 4.35, 1.88),
-        a=(5.2e-12, 6.9e-20, 2.2e-38, 1.9e-16),
-        Rp_ohm=(1101e3, 331e3, 288e3, 375e3),
-        channel_map=("fmpre0", "fmpre2", "fmpre5", "fmpre7"),
+        C_pf=None,
+        L_nh=None,
+        Rs_ohm=None,
+        n=None,
+        a=None,
+        Rp_ohm=None,
+        channel_map="flight",
     ):
-        self.C_pf = _four_vector(C_pf, "C_pf")
-        self.L_nh = _four_vector(L_nh, "L_nh")
-        self.Rs_ohm = _four_vector(Rs_ohm, "Rs_ohm")
-        self.n = _four_vector(n, "n")
-        self.a = _four_vector(a, "a")
-        self.Rp_ohm = _four_vector(Rp_ohm, "Rp_ohm")
-        self.channel_map = tuple(str(value) for value in channel_map)
-        if len(self.channel_map) != 4:
-            raise ValueError("channel_map must contain four entries.")
+        self.channel_map = resolve_channel_map(channel_map)
+        explicit = {
+            "C_pf": C_pf,
+            "L_nh": L_nh,
+            "Rs_ohm": Rs_ohm,
+            "n": n,
+            "a": a,
+            "Rp_ohm": Rp_ohm,
+        }
+        for name in _JFET_PARAMETERS:
+            value = explicit[name]
+            if value is None:
+                value = [self._fit(preamp)[name] for preamp in self.channel_map]
+            setattr(self, name, _four_vector(value, name))
+
+    @staticmethod
+    def _fit(preamp):
+        try:
+            return PREAMP_FITS[preamp]
+        except KeyError:
+            raise ValueError(
+                f"No impedance fit for preamp {preamp!r}; known preamps are "
+                f"{sorted(PREAMP_FITS)}. Pass all parameters explicitly to "
+                "use other channel labels."
+            ) from None
 
     def Z(self, freq_mhz):
         """Evaluate the complex load matrix at arbitrary MHz frequencies."""
