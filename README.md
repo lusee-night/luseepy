@@ -7,6 +7,8 @@ A set of python utilities for performing various LuSEE-Night related calculation
 ## Documentation
 
 This software is documented on the ["Read the Docs" pages](https://luseepy.readthedocs.io/en/latest/)
+The downlink pipeline's incremental contracts are listed in the
+[ingestion documentation](docs/source/ingest.rst).
 
 ## Cached Data
 
