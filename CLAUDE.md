@@ -148,8 +148,14 @@ until the public cutover. Key pieces:
   verify provenance + the `CONTENT` hash; `verify_physics=True` also
   re-derives `Rsky` from the fields (minutes on the real artifact).
 - **`lusee.ReceiverImpedance`** — differentiable receiver models;
-  `JFETReceiver` defaults are the measured fmpre0/2/5/7 Bode fits;
-  `spare_preamp_average_zload()` reproduces the HFSS export's load matrix.
+  `JFETReceiver(channel_map=...)` takes `"flight"` (default, fmpre6/3/4/1
+  on CH0..CH3), `"spare"` (fmpre0/2/5/7) or a tuple of four preamp ids,
+  with parameters from `lusee/preamp_fits.py`, which mirrors
+  `impedance_measurements/fits/preamp_fits.py` (keep the two in sync).
+  `spare_preamp_average_zload()` reproduces the HFSS export's load matrix
+  from a frozen copy of the notebook's values (`HFSS_NOTEBOOK_PREAMP_FITS`,
+  including the fmpre7 L = 8.5 nH typo), deliberately not from
+  `preamp_fits.py`.
 - **`lusee.FullStokesSimulator`** — `FullStokesCroSimulator` (MEPA
   z-phases) and `FullStokesTopoJaxSimulator` (per-time Wigner), both full
   IQUV; covariance assembly in `lusee.Covariance`
