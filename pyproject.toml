@@ -18,8 +18,8 @@ dependencies = [
     "fitsio",
     "pyshtools",
     "healpy",
-    "lunarsky",
-    "spiceypy",
+    # <0.2.7: MoonLocation.__copy__ is broken on Python 3.14
+    "lunarsky>=0.2.7",
     "jax",
     "hydra-core>=1.3.2",
     "s2fft @ git+https://github.com/slosar/s2fft.git@cefdf468ec2540818bafb37ed60d7b1fbba2f21f",

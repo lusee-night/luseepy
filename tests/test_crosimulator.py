@@ -5,24 +5,26 @@ import lusee
 from lusee.frequencies import canonical_frequencies, frequency_indices_from_values
 
 
-def test_crosimulator_simulation_ensures_spice_frames(monkeypatch):
-    import importlib
+def test_croissant_furnishes_moon_me_frame():
+    """The MEPA path needs the MOON_ME frame in spiceypy's process-global
+    kernel pool.  croissant furnishes it itself (croissant#127), so luseepy
+    does not have to -- and must not go looking for the kernels in
+    lunarsky's data directory, which lunarsky >= 1.0 no longer uses.
+    """
+    pytest.importorskip("croissant")
+    import croissant as cro
+    import spiceypy as spice
+    from lunarsky import LunarTopo, MoonLocation, Time
 
-    cro_module = importlib.import_module("lusee.CroSimulator")
-
-    class SpiceSetupCalled(Exception):
-        pass
-
-    def mark_spice_setup():
-        raise SpiceSetupCalled
-
-    monkeypatch.setattr(
-        cro_module, "ensure_lunarsky_moon_frame", mark_spice_setup
+    loc = MoonLocation.from_selenodetic(lon=0.0, lat=0.0, height=0.0)
+    obstime = Time("2026-01-01T00:00:00")
+    cro.rotations.generate_euler_dl(
+        8,
+        LunarTopo(obstime=obstime, location=loc),
+        "mepa",
+        et=cro.rotations.jd_to_et(obstime.tdb.jd),
     )
-    with pytest.raises(SpiceSetupCalled):
-        cro_module.CroSimulator._simulate_croissant_mepa(
-            object(), times=[], ntimes=0, delta_t=0.0
-        )
+    assert spice.namfrm("MOON_ME") != 0
 
 
 def test_crosimulator_runs_and_returns_expected_shape():

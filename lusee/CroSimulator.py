@@ -5,7 +5,6 @@ from .Observation import Observation
 from .Beam import Beam
 from .BeamCouplings import BeamCouplings
 from .SimulatorBase import SimulatorBase, default_plot_sky_beam_dir, get_topo_z_rotation_angles
-from .spice_utils import ensure_lunarsky_moon_frame
 import numpy as np
 import fitsio
 import sys
@@ -78,7 +77,6 @@ class CroSimulator(SimulatorBase):
             obs, beams, sky_model, Tground, combinations, freq,
             frequency_policy=frequency_policy,
         )
-        ensure_lunarsky_moon_frame()
         self.lmax = lmax
         self.extra_opts = extra_opts
         self.cross_power = cross_power if (cross_power is not None) else BeamCouplings()
@@ -167,7 +165,6 @@ class CroSimulator(SimulatorBase):
                                     sky_model=None, efbeams=None):
         """MEPA pipeline: sky gal→MEPA once (epoch-aware), beam topo(t0)→MEPA once,
         rot_alm_z(dt) for time evolution, then convolve."""
-        ensure_lunarsky_moon_frame()
         if sky_model is None:
             sky_model = self.sky_model
         if efbeams is None:
