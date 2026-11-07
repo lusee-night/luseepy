@@ -3,6 +3,7 @@ import healpy as hp
 import numpy as np
 import jax
 import jax.numpy as jnp
+from scipy.special import sph_harm_y
 
 from .MonoSkyModels import T_C, T_DarkAges, T_DarkAges_Scaled
 from .frequencies import ALL_FREQUENCIES_MHZ_NP
@@ -461,13 +462,18 @@ class HarmonicPointSourceSky:
             phi = jnp.radians(l_deg) % (2 * jnp.pi)
 
         # Build healpy-format alm: a_lm = Y*_lm(θ, φ)
+        # Positions are constructor metadata rather than differentiated
+        # leaves. Evaluate the complete basis once on the host: the JAX
+        # recurrence becomes prohibitively expensive at production lmax,
+        # whereas SciPy returns the identical Y_lm convention directly.
         nalm = hp.Alm.getsize(lmax)
-        alm = jnp.zeros(nalm, dtype=complex)
-        m,l = jnp.triu_indices(lmax + 1)
-        idx = jnp.asarray([hp.Alm.getidx(lmax, int(l_), int(m_)) for m_, l_ in zip(np.asarray(m), np.asarray(l))])
-        theta_ = jnp.full_like(l, theta, dtype=jnp.asarray(theta).dtype)
-        phi_ = jnp.full_like(l, phi, dtype=jnp.asarray(phi).dtype)
-        alm = alm.at[idx].set(jnp.conj(jax.scipy.special.sph_harm_y(l, m, theta_, phi_, n_max=lmax)))
+        alm_np = np.zeros(nalm, dtype=np.complex128)
+        m, l = np.triu_indices(lmax + 1)
+        idx = hp.Alm.getidx(lmax, l, m)
+        theta_np = np.full(l.shape, float(theta), dtype=np.float64)
+        phi_np = np.full(l.shape, float(phi), dtype=np.float64)
+        alm_np[idx] = np.conj(sph_harm_y(l, m, theta_np, phi_np))
+        alm = jnp.asarray(alm_np)
 
         self._alm = alm
         self._T = T
